@@ -5,6 +5,7 @@ on:
     paths:
       - paper.md
       - .github/workflows/joss.yml
+      - scalebaron_clean2.py
   pull_request:
 
 jobs:
@@ -12,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -24,4 +26,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build paper
-        uses: openjournals/openjournals-joss-action@v1
+        uses: openjournals/openjournals-joss-action@v1.2.0
