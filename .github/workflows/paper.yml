@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'paper.md'
+      - 'paper.bib'
       - '.github/workflows/paper.yml'
   pull_request:
     paths:
       - 'paper.md'
+      - 'paper.bib'
       - '.github/workflows/paper.yml'
 
 jobs:
@@ -17,4 +19,5 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: openjournals/openjournals.github.io/actions@main
+      - name: Compile paper
+        uses: openjournals/joss-action@v1.2.0
