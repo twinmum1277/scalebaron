@@ -1,0 +1,21 @@
+name: JOSS paper build
+
+on:
+  push:
+    paths:
+      - .github/workflows/joss.yml
+      - paper.md
+      - paper.bib
+      - figures/**
+  pull_request:
+
+jobs:
+  build:
+    name: Build JOSS PDF
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Build paper
+        uses: openjournals/openjournals-joss-action@v1.2.0
