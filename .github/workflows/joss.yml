@@ -1,0 +1,32 @@
+name: paper
+
+on:
+  push:
+    paths:
+      - 'paper.md'
+      - '.github/workflows/joss.yml'
+  pull_request:
+    paths:
+      - 'paper.md'
+      - '.github/workflows/joss.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-latex-extra
+
+      - name: Build JOSS paper
+        uses: openjournals/openjournals-joss-action@v1
