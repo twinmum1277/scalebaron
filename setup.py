@@ -7,7 +7,7 @@ setup(
     author='Tracy Punshon',
     author_email='tracy.punshon@dartmouth.edu',
     license='MIT',
-    py_modules=['scalebaron'],  # or use packages=find_packages() if it's a directory
+    py_modules=['scalebaron'],
     install_requires=[
         'numpy',
         'pandas',
@@ -19,7 +19,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scalebaron = scalebaron:main',
-        ]
+        ],
     },
     classifiers=[
         'Programming Language :: Python :: 3',
