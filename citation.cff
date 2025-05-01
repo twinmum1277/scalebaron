@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use ScaleBarOn in your research, please cite it as below."
+title: "ScaleBarOn: A Python Tool for Scaling Multiple Elemental Maps"
+authors:
+  - family-names: Punshon
+    given-names: Tracy
+    affiliation: Dartmouth College
+    orcid: https://orcid.org/0000-0003-0782-446X  
+license: MIT
+version: 1.0.0
+repository-code: https://github.com/your-username/scalebaron
+date-released: 2025-05-01
+doi: 10.5281/zenodo.XXXXXXX  # Replace with actual DOI after Zenodo release
