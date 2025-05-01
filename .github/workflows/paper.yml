@@ -1,0 +1,20 @@
+name: Compile JOSS paper
+
+on:
+  push:
+    paths:
+      - 'paper.md'
+      - '.github/workflows/paper.yml'
+  pull_request:
+    paths:
+      - 'paper.md'
+      - '.github/workflows/paper.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build paper.pdf
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: openjournals/openjournals.github.io/actions@main
