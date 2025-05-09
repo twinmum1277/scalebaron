@@ -14,6 +14,9 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import math
 import glob
 import re
+import tempfile
+from PIL import Image, ImageTk
+import shutil
 
 class CompositeApp:
     def __init__(self, master):
@@ -34,6 +37,7 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
+        self.preview_file = None
 
         self.setup_widgets()
 
@@ -77,15 +81,14 @@ class CompositeApp:
         self.log = tk.Text(control_frame, height=20, width=40)
         self.log.pack(pady=10)
 
-        # Matplotlib figure with a frame to maintain aspect ratio
+        # Preview frame
         self.preview_container = ttk.Frame(preview_frame)
         self.preview_container.pack(fill=tk.BOTH, expand=True)
         
-        self.fig, self.ax = plt.subplots()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.preview_container)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.preview_label = ttk.Label(self.preview_container)
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
         
-        # Bind resize event to update the figure's aspect ratio
+        # Bind resize event to update the preview image's aspect ratio
         self.preview_container.bind("<Configure>", self.on_resize)
 
     def select_input_folder(self):
@@ -95,26 +98,8 @@ class CompositeApp:
             self.log_print(f"Input folder updated to: {self.input_dir}")
 
     def on_resize(self, event):
-        # Only update if we have a figure with data
-        if hasattr(self, 'current_fig_ratio') and self.current_fig_ratio is not None:
-            # Get container dimensions
-            width = event.width
-            height = event.height
-            
-            # Calculate the available space while maintaining aspect ratio
-            container_ratio = width / height
-            
-            if container_ratio > self.current_fig_ratio:
-                # Container is wider than figure
-                new_width = height * self.current_fig_ratio
-                new_height = height
-            else:
-                # Container is taller than figure
-                new_width = width
-                new_height = width / self.current_fig_ratio
-            
-            # Update canvas size
-            self.canvas.get_tk_widget().config(width=int(new_width), height=int(new_height))
+        if hasattr(self, 'preview_image'):
+            self.update_preview_image()
 
     def log_print(self, message):
         self.log.insert(tk.END, message + "\n")
@@ -153,7 +138,14 @@ class CompositeApp:
         self.generate_composite(preview=True)
 
     def save_composite(self):
-        self.generate_composite(preview=False)
+        if self.preview_file:
+            out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            shutil.move(self.preview_file, out_path)
+            self.log_print(f"✅ Saved composite to {out_path}")
+            self.preview_file = None
+        else:
+            self.generate_composite(preview=False)
 
     def generate_composite(self, preview=False):
         if not self.matrices:
@@ -162,7 +154,7 @@ class CompositeApp:
 
         rows = self.num_rows.get()
         cols = math.ceil(len(self.matrices) / rows)
-        fig, axs = plt.subplots(rows, cols + 1, figsize=(4 * (cols + 1), 4 * rows))
+        fig, axs = plt.subplots(rows, cols + 1, figsize=(4 * cols + 1, 4 * rows), gridspec_kw={'width_ratios': [1] * cols + [0.2]})
         cmap = cm.get_cmap(self.color_scheme.get())
 
         flat_all = np.concatenate([m.flatten() for m in self.matrices])
@@ -177,66 +169,71 @@ class CompositeApp:
         fig.patch.set_facecolor(bg_color)
         text_color = 'white' if np.mean(bg_color[:3]) < 0.5 else 'black'
 
+        # Find the maximum dimensions of all matrices
+        max_height = max(matrix.shape[0] for matrix in self.matrices)
+        max_width = max(matrix.shape[1] for matrix in self.matrices)
+
         for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
             r, c = i // cols, i % cols
             ax = axs[r, c] if rows > 1 else axs[c]
-            im = ax.imshow(matrix, cmap=cmap, norm=norm)
+
+            # Calculate padding to center the matrix
+            pad_height = (max_height - matrix.shape[0]) // 2
+            pad_width = (max_width - matrix.shape[1]) // 2
+
+            # Pad the matrix to match the maximum dimensions and center it
+            padded_matrix = np.pad(matrix, 
+                                   ((pad_height, max_height - matrix.shape[0] - pad_height), 
+                                    (pad_width, max_width - matrix.shape[1] - pad_width)), 
+                                   mode='constant', constant_values=np.nan)
+            
+            im = ax.imshow(padded_matrix, cmap=cmap, norm=norm, aspect='equal')
             ax.set_title(label, color=text_color)
             ax.axis('off')
             ax.set_facecolor(bg_color)
 
-        # Set all subplots in the rightmost column to have axis off and bg_color
+        # Set color to bg_color and drop axes for the final column of subplots
         for r in range(rows):
             ax = axs[r, -1] if rows > 1 else axs[-1]
             ax.set_facecolor(bg_color)
             ax.axis('off')
 
-        # Add colorbar in the middle row of the last column
-        middle_row = rows // 2
-        outer_ax = axs[middle_row, -1] if rows > 1 else axs[-1]
-        outer_ax.set_facecolor(bg_color)
-        outer_ax.axis('off')
+        # Add color bar and scale bar to the last column
+        last_ax = axs[-1, -1] if rows > 1 else axs[-1]
+        last_ax.axis('off')
+        last_ax.set_facecolor(bg_color)
 
-        cax = inset_axes(outer_ax, width="30%", height="100%", loc='center',
-                         bbox_to_anchor=(0, 0, 1, 1), bbox_transform=outer_ax.transAxes, borderpad=0)
+        # Create two inset axes for color bar and scale bar
+        color_ax = inset_axes(last_ax, width="50%", height="60%", loc='upper left',
+                              bbox_to_anchor=(0, 1, 1, 0.6), bbox_transform=last_ax.transAxes)
+        scale_ax = inset_axes(last_ax, width="100%", height="40%", loc='lower left',
+                              bbox_to_anchor=(0, 0, 1, 0.4), bbox_transform=last_ax.transAxes)
 
-        cbar = plt.colorbar(im, cax=cax, orientation='vertical')
+        # Add color bar
+        cbar = plt.colorbar(im, cax=color_ax, orientation='vertical')
         cbar.ax.yaxis.set_tick_params(color=text_color)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
 
-        # Add scale bar in the last subplot of the rightmost column
-        scale_bar_ax = axs[-1, -1] if rows > 1 else axs[-1]
+        # Add scale bar
         scale_bar_length_pixels = self.scale_bar_length_um.get() / self.pixel_size.get()
-        scale_bar_ax.set_xlim(0, 1)
-        scale_bar_ax.set_ylim(0, 1)
-        scale_bar_ax.add_line(plt.Line2D([0.1, 0.1 + scale_bar_length_pixels/100], [0.1, 0.1], 
-                                        color=text_color, linewidth=2))
-        scale_bar_ax.text(0.1, 0.15, f"{int(self.scale_bar_length_um.get())} µm", 
-                         color=text_color, ha='left', va='bottom')
-        scale_bar_ax.axis('off')
-        scale_bar_ax.set_facecolor(bg_color)
+        scale_bar_width = scale_bar_length_pixels / max_width
+        scale_ax.add_line(plt.Line2D([0.1, 0.1 + scale_bar_width], [0.5, 0.5], color=text_color, linewidth=2, transform=scale_ax.transAxes))
+        scale_ax.text(0.1, 0.7, f"{int(self.scale_bar_length_um.get())} µm", color=text_color, ha='left', va='bottom', transform=scale_ax.transAxes)
+        scale_ax.axis('off')
 
         plt.tight_layout()
         
-        # Store the figure's aspect ratio for resizing
-        figsize = fig.get_size_inches()
-        self.current_fig_ratio = figsize[0] / figsize[1]
-        
         if preview:
-            # Clear the existing figure
-            self.fig.clf()
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            plt.close(fig)
             
-            # Create a new figure with the same properties as the one that would be saved
-            self.fig = fig
+            self.preview_image = Image.open(tmp_file.name)
+            self.update_preview_image()
             
-            # Update the canvas with the new figure
-            self.canvas.figure = fig
-            self.canvas.draw()
-            
-            # Trigger a resize to maintain aspect ratio
-            self.on_resize(type('event', (), {'width': self.preview_container.winfo_width(), 
-                                             'height': self.preview_container.winfo_height()})())
+            self.preview_file = tmp_file.name
+            self.log_print("Preview generated. Click 'Save' to keep this image.")
         else:
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -244,6 +241,26 @@ class CompositeApp:
             plt.close(fig)
             self.log_print(f"✅ Saved composite to {out_path}")
 
+    def update_preview_image(self):
+        if hasattr(self, 'preview_image'):
+            container_width = self.preview_container.winfo_width()
+            container_height = self.preview_container.winfo_height()
+            
+            img_width, img_height = self.preview_image.size
+            aspect_ratio = img_width / img_height
+            
+            if container_width / container_height > aspect_ratio:
+                new_height = container_height
+                new_width = int(new_height * aspect_ratio)
+            else:
+                new_width = container_width
+                new_height = int(new_width / aspect_ratio)
+            
+            resized_image = self.preview_image.resize((new_width, new_height), Image.LANCZOS)
+            tk_image = ImageTk.PhotoImage(resized_image)
+            
+            self.preview_label.config(image=tk_image)
+            self.preview_label.image = tk_image  # Keep a reference to prevent garbage collection
 
 if __name__ == '__main__':
     root = tk.Tk()
