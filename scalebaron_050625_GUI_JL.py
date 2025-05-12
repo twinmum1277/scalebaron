@@ -30,6 +30,7 @@ class CompositeApp:
         self.color_scheme = tk.StringVar(value="jet")
         self.rotate = tk.BooleanVar(value=False)
         self.element = tk.StringVar()
+        self.sample_name_font_size = tk.StringVar(value="n/a")  # Default to "n/a"
 
         self.input_dir = None
         self.output_dir = "./OUTPUT"
@@ -71,15 +72,20 @@ class CompositeApp:
         self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps())
         self.color_scheme_dropdown.grid(row=4, column=1, padx=5, pady=2)
 
-        ttk.Checkbutton(grid_frame, text="Use Pseudo-log", variable=self.use_log).grid(row=5, column=0, columnspan=2, pady=2)
-        ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=6, column=0, columnspan=2, pady=2)
+        ttk.Label(grid_frame, text="Sample Name Font Size:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        self.sample_name_font_size_dropdown = ttk.Combobox(grid_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"])
+        self.sample_name_font_size_dropdown.grid(row=5, column=1, padx=5, pady=2)
+
+        ttk.Checkbutton(grid_frame, text="Use Pseudo-log", variable=self.use_log).grid(row=6, column=0, columnspan=2, pady=2)
+        ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=7, column=0, columnspan=2, pady=2)
 
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
 
         ttk.Button(button_frame, text="Load Data", command=self.load_data).grid(row=0, column=0, padx=5, pady=5)
         ttk.Button(button_frame, text="Preview", command=self.preview_composite).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Button(button_frame, text="Save", command=self.save_composite).grid(row=1, column=0, columnspan=2, padx=5, pady=5)
+        ttk.Button(button_frame, text="Select Output Folder", command=self.select_output_folder).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Button(button_frame, text="Save", command=self.save_composite).grid(row=1, column=1, padx=5, pady=5)
 
         self.log = tk.Text(control_frame, height=20, width=40)
         self.log.pack(pady=10)
@@ -100,6 +106,12 @@ class CompositeApp:
             self.input_dir = folder_selected
             self.log_print(f"Input folder updated to: {self.input_dir}")
             self.update_element_dropdown()
+
+    def select_output_folder(self):
+        folder_selected = filedialog.askdirectory()
+        if folder_selected:
+            self.output_dir = folder_selected
+            self.log_print(f"Output folder updated to: {self.output_dir}")
 
     def update_element_dropdown(self):
         elements = set()
@@ -209,8 +221,17 @@ class CompositeApp:
                                     (pad_width, max_width - matrix.shape[1] - pad_width)), 
                                    mode='constant', constant_values=np.nan)
             
+            # Determine font size based on selection
+            font_size = None
+            if self.sample_name_font_size.get() == "Small":
+                font_size = 8
+            elif self.sample_name_font_size.get() == "Medium":
+                font_size = 12
+            elif self.sample_name_font_size.get() == "Large":
+                font_size = 16
+
             im = ax.imshow(padded_matrix, cmap=cmap, norm=norm, aspect='equal')
-            ax.set_title(label, color=text_color)
+            ax.set_title(label, color=text_color, fontsize=font_size)
             ax.axis('off')
             ax.set_facecolor(bg_color)
 
