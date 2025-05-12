@@ -176,3 +176,5 @@ cython_debug/
 OUTPUT/Cu63/Cu63_composite.png
 OUTPUT/summary_99th_percentiles.csv
 OUTPUT/summary_variance.csv
+out_v2/
+out_v2/*
