@@ -25,13 +25,13 @@ class CompositeApp:
 
         self.pixel_size = tk.DoubleVar(value=6.0)
         self.scale_bar_length_um = tk.DoubleVar(value=500.0)
-        self.num_rows = tk.IntVar(value=2)
+        self.num_rows = tk.IntVar(value=5)
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
         self.rotate = tk.BooleanVar(value=False)
-        self.element = tk.StringVar(value="Cu63")
+        self.element = tk.StringVar()
 
-        self.input_dir = "./testdata"
+        self.input_dir = None
         self.output_dir = "./OUTPUT"
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -49,11 +49,14 @@ class CompositeApp:
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         # Controls
+        ttk.Button(control_frame, text="Select Input Folder", command=self.select_input_folder).pack(pady=5)
+
         grid_frame = ttk.Frame(control_frame)
         grid_frame.pack(pady=10)
 
         ttk.Label(grid_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.element).grid(row=0, column=1, padx=5, pady=2)
+        self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, state="disabled")
+        self.element_dropdown.grid(row=0, column=1, padx=5, pady=2)
 
         ttk.Label(grid_frame, text="Pixel size (µm):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.pixel_size).grid(row=1, column=1, padx=5, pady=2)
@@ -65,7 +68,8 @@ class CompositeApp:
         ttk.Entry(grid_frame, textvariable=self.num_rows).grid(row=3, column=1, padx=5, pady=2)
 
         ttk.Label(grid_frame, text="Color Scheme:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.color_scheme).grid(row=4, column=1, padx=5, pady=2)
+        self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps())
+        self.color_scheme_dropdown.grid(row=4, column=1, padx=5, pady=2)
 
         ttk.Checkbutton(grid_frame, text="Use Pseudo-log", variable=self.use_log).grid(row=5, column=0, columnspan=2, pady=2)
         ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=6, column=0, columnspan=2, pady=2)
@@ -73,10 +77,9 @@ class CompositeApp:
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
 
-        ttk.Button(button_frame, text="Select Input Folder", command=self.select_input_folder).grid(row=0, column=0, padx=5, pady=5)
-        ttk.Button(button_frame, text="Load Data", command=self.load_data).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Button(button_frame, text="Preview", command=self.preview_composite).grid(row=1, column=0, padx=5, pady=5)
-        ttk.Button(button_frame, text="Save", command=self.save_composite).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="Load Data", command=self.load_data).grid(row=0, column=0, padx=5, pady=5)
+        ttk.Button(button_frame, text="Preview", command=self.preview_composite).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="Save", command=self.save_composite).grid(row=1, column=0, columnspan=2, padx=5, pady=5)
 
         self.log = tk.Text(control_frame, height=20, width=40)
         self.log.pack(pady=10)
@@ -96,6 +99,21 @@ class CompositeApp:
         if folder_selected:
             self.input_dir = folder_selected
             self.log_print(f"Input folder updated to: {self.input_dir}")
+            self.update_element_dropdown()
+
+    def update_element_dropdown(self):
+        elements = set()
+        for file in glob.glob(os.path.join(self.input_dir, "*.xlsx")):
+            match = re.search(r"([A-Za-z]{1,2}\d{2,3})_ppm matrix\.xlsx", file)
+            if match:
+                elements.add(match.group(1))
+        
+        if elements:
+            self.element_dropdown['values'] = sorted(list(elements))
+            self.element_dropdown['state'] = 'readonly'
+            self.element.set(next(iter(elements)))  # Set the first element as default
+        else:
+            self.log_print("No valid element files found in the selected directory.")
 
     def on_resize(self, event):
         if hasattr(self, 'preview_image'):
@@ -112,6 +130,10 @@ class CompositeApp:
         return np.array([[cell if isinstance(cell, (int, float)) else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
 
     def load_data(self):
+        if not self.input_dir:
+            messagebox.showerror("Error", "Please select an input folder first.")
+            return
+
         self.log_print("\n🔍 Scanning INPUT folder...")
         element = self.element.get()
         pattern = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
