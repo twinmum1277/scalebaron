@@ -392,7 +392,7 @@ class CompositeApp:
         # Create two inset axes for color bar and scale bar
         color_ax = inset_axes(last_ax, width="50%", height="60%", loc='upper left',
                               bbox_to_anchor=(0, 1, 1, 0.6), bbox_transform=last_ax.transAxes)
-        scale_ax = inset_axes(last_ax, width="100%", height="40%", loc='lower left',
+        scale_ax = inset_axes(last_ax, width="50%", height="40%", loc='lower left',
                               bbox_to_anchor=(0, 0, 1, 0.4), bbox_transform=last_ax.transAxes)
 
         # Add color bar
@@ -402,8 +402,9 @@ class CompositeApp:
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
 
         # Add scale bar
-        min_pixel_size = min(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
-        scale_bar_length_pixels = self.scale_bar_length_um.get() / min_pixel_size
+        max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
+        # above is um/px and captures the subplot with image at full resolution
+        scale_bar_length_pixels = self.scale_bar_length_um.get() / max_pixel_size
         scale_bar_width = scale_bar_length_pixels / max_width
         scale_ax.add_line(plt.Line2D([0.1, 0.1 + scale_bar_width], [0.5, 0.5], color=text_color, linewidth=2, transform=scale_ax.transAxes))
         scale_ax.text(0.1, 0.7, f"{int(self.scale_bar_length_um.get())} µm", color=text_color, ha='left', va='bottom', transform=scale_ax.transAxes)
