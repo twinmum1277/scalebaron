@@ -33,6 +33,7 @@ class CompositeApp:
         self.element = tk.StringVar()
         self.sample_name_font_size = tk.StringVar(value="n/a")  # Default to "n/a"
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max
+        self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
 
         self.input_dir = None
         self.output_dir = "./OUTPUT"
@@ -41,6 +42,8 @@ class CompositeApp:
         self.matrices = []
         self.labels = []
         self.preview_file = None
+        self.custom_pixel_sizes = {}  # Dictionary to store custom pixel sizes
+        self.adjusted_dimensions = []  # List to store pixel size adjusted dimensions
 
         self.setup_widgets()
 
@@ -63,6 +66,9 @@ class CompositeApp:
 
         ttk.Label(grid_frame, text="Pixel size (µm):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.pixel_size).grid(row=1, column=1, padx=5, pady=2)
+        ttk.Button(grid_frame, text="Import Custom Sizes", command=self.import_custom_pixel_sizes).grid(row=1, column=2, padx=5, pady=2)
+        ttk.Checkbutton(grid_frame, text="Use Custom", variable=self.use_custom_pixel_sizes).grid(row=1, column=3, padx=5, pady=2)
+        ttk.Button(grid_frame, text="Generate Template", command=self.generate_pixel_size_template).grid(row=1, column=4, padx=5, pady=2)
 
         ttk.Label(grid_frame, text="Scale bar length (µm):").grid(row=2, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um).grid(row=2, column=1, padx=5, pady=2)
@@ -144,7 +150,40 @@ class CompositeApp:
     def load_matrix_2d(self, path):
         wb = load_workbook(filename=path, read_only=True, data_only=True)
         ws = wb.active
-        return np.array([[cell if isinstance(cell, (int, float)) else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
+        return np.array([[cell if isinstance(cell, (int, float)) and cell >= 0 else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
+
+    def import_custom_pixel_sizes(self):
+        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if file_path:
+            try:
+                df = pd.read_csv(file_path)
+                self.custom_pixel_sizes = dict(zip(df['Sample'], df['Pixel Size']))
+                self.log_print(f"Imported custom pixel sizes for {len(self.custom_pixel_sizes)} samples.")
+            except Exception as e:
+                self.log_print(f"Error importing custom pixel sizes: {str(e)}")
+
+    def generate_pixel_size_template(self):
+        if not self.input_dir:
+            messagebox.showerror("Error", "Please select an input folder first.")
+            return
+
+        samples = set()
+        for file in glob.glob(os.path.join(self.input_dir, "*.xlsx")):
+            match = re.match(r"(.+)[ _]([A-Za-z]{1,2}\d{2,3})_(ppm|CPS) matrix\.xlsx", os.path.basename(file))
+            if match:
+                sample = match.group(1)
+                samples.add(sample)
+
+        if not samples:
+            messagebox.showerror("Error", "No valid sample files found in the input directory.")
+            return
+
+        df = pd.DataFrame({'Sample': list(samples), 'Pixel Size': self.pixel_size.get()})
+        
+        save_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if save_path:
+            df.to_csv(save_path, index=False)
+            self.log_print(f"✅ Saved pixel size template to {save_path}")
 
     def load_data(self):
         if not self.input_dir:
@@ -162,45 +201,73 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
+        self.adjusted_dimensions = []
         percentiles = []
         iqrs = []
+        means = []
+
+        # If using custom pixel sizes, only load data for samples present in the custom file
+        samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
+
+        # Find the largest pixel size
+        if self.use_custom_pixel_sizes.get():
+            max_pixel_size = max(self.custom_pixel_sizes.values())
+        else:
+            max_pixel_size = self.pixel_size.get()
 
         for f in files:
             match = re.match(r"(.+)[ _]([A-Za-z]{1,2}\d{2,3})_(ppm|CPS) matrix\.xlsx", os.path.basename(f))
             if match:
                 sample, _, _ = match.groups()
-                self.labels.append(sample)
-                matrix = self.load_matrix_2d(f)
-                self.matrices.append(matrix)
-                
-                # Calculate percentiles and IQR
-                p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
-                iqr = p75 - p25
-                percentiles.append((sample, p25, p50, p75, p99))
-                iqrs.append((sample, iqr))
-                
-                self.log_print(f"Loaded: {sample}")
-                self.log_print(f"  99th percentile: {p99:.2f}")
-                self.log_print(f"  IQR: {iqr:.2f}")
-                
-                # Generate and save histogram
-                plt.figure(figsize=(10, 6))
-                plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
-                plt.title(f"Histogram for {sample}")
-                plt.xlabel("Value")
-                plt.ylabel("Frequency")
-                hist_path = os.path.join(self.output_dir, self.element.get(), 'histograms', f"{sample}_histogram.png")
-                os.makedirs(os.path.dirname(hist_path), exist_ok=True)
-                plt.savefig(hist_path)
-                plt.close()
+                if samples_to_load is None or sample in samples_to_load:
+                    self.labels.append(sample)
+                    matrix = self.load_matrix_2d(f)
+                    self.matrices.append(matrix)
+                    
+                    # Get the pixel size for this sample
+                    if self.use_custom_pixel_sizes.get() and sample in self.custom_pixel_sizes:
+                        pixel_size = self.custom_pixel_sizes[sample]
+                    else:
+                        pixel_size = self.pixel_size.get()
+
+                    # Calculate adjusted dimensions
+                    scale_factor =  max_pixel_size / pixel_size
+                    adjusted_height = int(matrix.shape[0] * scale_factor)
+                    adjusted_width = int(matrix.shape[1] * scale_factor)
+                    self.adjusted_dimensions.append((adjusted_height, adjusted_width))
+                    
+                    # Calculate percentiles, IQR, and mean
+                    p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
+                    iqr = p75 - p25
+                    mean = np.nanmean(matrix)
+                    percentiles.append((sample, p25, p50, p75, p99))
+                    iqrs.append((sample, iqr))
+                    means.append((sample, mean))
+                    
+                    self.log_print(f"Loaded: {sample}")
+                    self.log_print(f"  99th percentile: {p99:.2f}")
+                    self.log_print(f"  IQR: {iqr:.2f}")
+                    self.log_print(f"  Mean: {mean:.2f}")
+                    
+                    # Generate and save histogram
+                    plt.figure(figsize=(10, 6))
+                    plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
+                    plt.title(f"Histogram for {sample}")
+                    plt.xlabel("Value")
+                    plt.ylabel("Frequency")
+                    hist_path = os.path.join(self.output_dir, self.element.get(), 'histograms', f"{sample}_histogram.png")
+                    os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+                    plt.savefig(hist_path)
+                    plt.close()
 
         self.log_print(f"✅ Loaded {len(self.matrices)} matrix files.")
         self.log_print(f"Histograms saved in: {os.path.join(self.output_dir, self.element.get(), 'histograms')}")
 
-        # Save percentiles and IQR table
+        # Save percentiles, IQR, and mean table
         percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
         iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
-        stats_df = percentiles_df.merge(iqr_df, on='Sample')
+        mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
+        stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
         stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
         stats_df.to_csv(stats_path, index=False)
         self.log_print(f"✅ Saved statistics table to {stats_path}")
@@ -244,27 +311,37 @@ class CompositeApp:
         fig.patch.set_facecolor(bg_color)
         text_color = 'white' if np.mean(bg_color[:3]) < 0.5 else 'black'
 
-        # Find the maximum dimensions of all matrices
-        max_height = max(matrix.shape[0] for matrix in self.matrices)
-        max_width = max(matrix.shape[1] for matrix in self.matrices)
+        # Find the maximum dimensions of all adjusted matrices
+        max_height = max(dim[0] for dim in self.adjusted_dimensions)
+        max_width = max(dim[1] for dim in self.adjusted_dimensions)
 
         percentiles = []
         iqrs = []
+        means = []
 
-        for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
+        for i, (matrix, label, (adjusted_height, adjusted_width)) in enumerate(zip(self.matrices, self.labels, self.adjusted_dimensions)):
             r, c = i // cols, i % cols
             ax = axs[r, c] if rows > 1 else axs[c]
 
-            # Calculate padding to center the matrix
-            pad_height = (max_height - matrix.shape[0]) // 2
-            pad_width = (max_width - matrix.shape[1]) // 2
+            # Get the pixel size for this sample
+            if self.use_custom_pixel_sizes.get() and label in self.custom_pixel_sizes:
+                pixel_size = self.custom_pixel_sizes[label]
+            else:
+                pixel_size = self.pixel_size.get()
 
-            # Pad the matrix to match the maximum dimensions and center it
-            padded_matrix = np.pad(matrix, 
-                                   ((pad_height, max_height - matrix.shape[0] - pad_height), 
-                                    (pad_width, max_width - matrix.shape[1] - pad_width)), 
-                                   mode='constant', constant_values=np.nan)
-            
+            # Calculate the scaling factor
+            max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
+            scale_factor = max_pixel_size / pixel_size
+
+            # Calculate the size of the inset axes
+            inset_width = min(1.0, scale_factor * adjusted_width / max_width)
+            inset_height = min(1.0, scale_factor * adjusted_height / max_height)
+
+            # Create inset axes
+            inset_ax = inset_axes(ax, width="100%", height="100%", loc='center',
+                                  bbox_to_anchor=((1-inset_width)/2, (1-inset_height)/2, inset_width, inset_height),
+                                  bbox_transform=ax.transAxes)
+
             # Determine font size based on selection
             font_size = None
             if self.sample_name_font_size.get() == "Small":
@@ -274,23 +351,32 @@ class CompositeApp:
             elif self.sample_name_font_size.get() == "Large":
                 font_size = 16
 
-            im = ax.imshow(padded_matrix, cmap=cmap, norm=norm, aspect='equal')
-            ax.set_title(label, color=text_color, fontsize=font_size)
+            im = inset_ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
+            ax.set_title(f"{label}\n({pixel_size:.2f} µm/pixel)", color=text_color, fontsize=font_size)
             ax.axis('off')
+            inset_ax.axis('off')
             ax.set_facecolor(bg_color)
+            inset_ax.set_facecolor(bg_color)
 
             # Save individual subplot
-            if not preview:
-                subplot_path = os.path.join(self.output_dir, self.element.get(), 'subplots', f"{label}.png")
-                os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
-                extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
-                fig.savefig(subplot_path, bbox_inches=extent.expanded(1.1, 1.2), dpi=300)
+            subplot_path = os.path.join(self.output_dir, self.element.get(), 'subplots', f"{label}.png")
+            os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
+            
+            # Create a new figure for the individual subplot
+            subplot_fig, subplot_ax = plt.subplots()
+            subplot_ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
+            subplot_ax.set_title(f"{label}\n({pixel_size:.2f} µm/pixel)", color=text_color, fontsize=font_size)
+            subplot_ax.axis('off')
+            subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight')
+            plt.close(subplot_fig)
 
-            # Calculate percentiles and IQR
+            # Calculate percentiles, IQR, and mean
             p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
             iqr = p75 - p25
+            mean = np.nanmean(matrix)
             percentiles.append((label, p25, p50, p75, p99))
             iqrs.append((label, iqr))
+            means.append((label, mean))
 
         # Set color to bg_color and drop axes for the final column of subplots
         for r in range(rows):
@@ -316,7 +402,8 @@ class CompositeApp:
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
 
         # Add scale bar
-        scale_bar_length_pixels = self.scale_bar_length_um.get() / self.pixel_size.get()
+        min_pixel_size = min(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
+        scale_bar_length_pixels = self.scale_bar_length_um.get() / min_pixel_size
         scale_bar_width = scale_bar_length_pixels / max_width
         scale_ax.add_line(plt.Line2D([0.1, 0.1 + scale_bar_width], [0.5, 0.5], color=text_color, linewidth=2, transform=scale_ax.transAxes))
         scale_ax.text(0.1, 0.7, f"{int(self.scale_bar_length_um.get())} µm", color=text_color, ha='left', va='bottom', transform=scale_ax.transAxes)
@@ -341,10 +428,11 @@ class CompositeApp:
             plt.close(fig)
             self.log_print(f"✅ Saved composite to {out_path}")
 
-            # Save percentiles and IQR table
+            # Save percentiles, IQR, and mean table
             percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
-            stats_df = percentiles_df.merge(iqr_df, on='Sample')
+            mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
+            stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
             stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
             stats_df.to_csv(stats_path, index=False)
             self.log_print(f"✅ Saved statistics table to {stats_path}")
