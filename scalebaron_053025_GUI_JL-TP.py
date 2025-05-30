@@ -224,8 +224,9 @@ class CompositeApp:
 
         self.log_print("\n🔍 Scanning INPUT folder...")
         element = self.element.get()
-        pattern = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
-        files = sorted(glob.glob(pattern))
+        pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
+        pattern_CPS = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
+        files = sorted(glob.glob(pattern_ppm) + glob.glob(pattern_CPS))
 
         if not files:
             messagebox.showerror("Error", f"No files found for element {element}")
@@ -287,7 +288,7 @@ class CompositeApp:
                     plt.title(f"Histogram for {sample}")
                     plt.xlabel("Value")
                     plt.ylabel("Frequency")
-                    hist_path = os.path.join(self.output_dir, self.element.get(), 'histograms', f"{sample}_histogram.png")
+                    hist_path = os.path.join(self.output_dir, self.element.get(), 'Histograms', f"{sample}_histogram.png")
                     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                     plt.savefig(hist_path)
                     plt.close()
@@ -300,12 +301,10 @@ class CompositeApp:
         iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
         mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
         stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
+        stats_df = stats_df.applymap(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x) # Round Summary Statistics to 5 significant figures
         stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
         stats_df.to_csv(stats_path, index=False)
         self.log_print(f"✅ Saved statistics table to {stats_path}")
-
-        # Round Summary Statistics to 5 significant figures
-        stats_df = stats_df.applymap(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
 
         # Set scale_max based on 99th percentile of all data
         overall_99th = np.nanpercentile(np.hstack([m.flatten() for m in self.matrices]), 99)
