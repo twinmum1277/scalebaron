@@ -5,7 +5,7 @@
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, font
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -128,10 +128,13 @@ class CompositeApp:
         ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
         ttk.Button(button_frame, text="Save Composite", command=self.save_composite).grid(row=5, column=0, padx=5, pady=(0, 10), sticky="ew")
 
-        self.log = tk.Text(control_frame, height=20, width=40)
+        ttk.Label(control_frame, text="Progress:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
+
+        custom_font = font.Font(family="Arial", size=13, slant="roman")
+        self.log = tk.Text(control_frame, height=20, width=40, wrap="word", font=custom_font)
         self.log.pack(pady=10)
 
-        # Preview frame
+        # Window into ScaleBarOn's soul:     
         self.preview_container = ttk.Frame(preview_frame)
         self.preview_container.pack(fill=tk.BOTH, expand=True)
         
