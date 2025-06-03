@@ -66,29 +66,29 @@ class CompositeApp:
 
         ttk.Label(grid_frame, text="Pixel size (µm):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.pixel_size).grid(row=1, column=1, padx=5, pady=2)
-        ttk.Button(grid_frame, text="Import Custom Sizes", command=self.import_custom_pixel_sizes).grid(row=1, column=2, padx=5, pady=2)
-        ttk.Checkbutton(grid_frame, text="Use Custom", variable=self.use_custom_pixel_sizes).grid(row=1, column=3, padx=5, pady=2)
-        ttk.Button(grid_frame, text="Generate Template", command=self.generate_pixel_size_template).grid(row=1, column=4, padx=5, pady=2)
+        ttk.Button(grid_frame, text="Import Custom Sizes", command=self.import_custom_pixel_sizes).grid(row=2, column=1, padx=5, pady=2)
+        ttk.Checkbutton(grid_frame, text="Use Custom", variable=self.use_custom_pixel_sizes).grid(row=3, column=1, padx=5, pady=2)
+        ttk.Button(grid_frame, text="Generate Template", command=self.generate_pixel_size_template).grid(row=4, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Scale bar length (µm):").grid(row=2, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um).grid(row=2, column=1, padx=5, pady=2)
+        ttk.Label(grid_frame, text="Scale bar length (µm):").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um).grid(row=5, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Rows:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.num_rows).grid(row=3, column=1, padx=5, pady=2)
+        ttk.Label(grid_frame, text="Rows:").grid(row=6, column=0, sticky="e", padx=5, pady=2)
+        ttk.Entry(grid_frame, textvariable=self.num_rows).grid(row=6, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Color Scheme:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(grid_frame, text="Color Scheme:").grid(row=7, column=0, sticky="e", padx=5, pady=2)
         self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps())
-        self.color_scheme_dropdown.grid(row=4, column=1, padx=5, pady=2)
+        self.color_scheme_dropdown.grid(row=7, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Sample Name Font Size:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(grid_frame, text="Sample Name Font Size:").grid(row=8, column=0, sticky="e", padx=5, pady=2)
         self.sample_name_font_size_dropdown = ttk.Combobox(grid_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"])
-        self.sample_name_font_size_dropdown.grid(row=5, column=1, padx=5, pady=2)
+        self.sample_name_font_size_dropdown.grid(row=8, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Scale Max:").grid(row=6, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.scale_max).grid(row=6, column=1, padx=5, pady=2)
+        ttk.Label(grid_frame, text="Scale Max:").grid(row=9, column=0, sticky="e", padx=5, pady=2)
+        ttk.Entry(grid_frame, textvariable=self.scale_max).grid(row=9, column=1, padx=5, pady=2)
 
-        ttk.Checkbutton(grid_frame, text="Use Pseudo-log", variable=self.use_log).grid(row=7, column=0, columnspan=2, pady=2)
-        ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=8, column=0, columnspan=2, pady=2)
+        ttk.Checkbutton(grid_frame, text="Use Pseudo-log", variable=self.use_log).grid(row=10, column=0, columnspan=2, pady=2)
+        ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=11, column=0, columnspan=2, pady=2)
 
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
