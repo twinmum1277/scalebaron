@@ -2,7 +2,6 @@
 # Core features: Load data, choose element, layout options, preview, and save composite
 # TP: THIS VERSION CLONED from Josh's most recent upload, with user-friendly GUI layout changes, 3 sig fig constraint, ppm or CPS input
 
-
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font
@@ -10,7 +9,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LogNorm
 from matplotlib import cm
 from openpyxl import load_workbook
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -39,7 +38,6 @@ class CompositeApp:
         self.num_rows = tk.IntVar(value=5)
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
-        self.rotate = tk.BooleanVar(value=False)
         self.element = tk.StringVar()
         self.sample_name_font_size = tk.StringVar(value="n/a")  # Default to "n/a"
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max, constrained to 2 decimal places
@@ -55,6 +53,7 @@ class CompositeApp:
         self.custom_pixel_sizes = {}  # Dictionary to store custom pixel sizes
         self.adjusted_dimensions = []  # List to store pixel size adjusted dimensions
         self.pixel_sizes_by_sample = {}
+        self.scale_factors = {}  # New dictionary to store scale factors for each matrix
         style = ttk.Style()
         style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         self.setup_widgets()
@@ -118,9 +117,8 @@ class CompositeApp:
         ttk.Label(grid_frame, text="Scale Max:").grid(row=7, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.scale_max).grid(row=7, column=1, padx=5, pady=2)
 
-        # Log and Rotate options
+        # Pseudolog Scale option
         ttk.Checkbutton(grid_frame, text="Log Scale", variable=self.use_log).grid(row=8, column=0, columnspan=2, pady=2)
-        ttk.Checkbutton(grid_frame, text="Rotate Images", variable=self.rotate).grid(row=9, column=0, columnspan=2, pady=2)
 
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
@@ -200,6 +198,8 @@ class CompositeApp:
         return np.array([[cell if isinstance(cell, (int, float)) and cell >= 0 else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
 
     def import_custom_pixel_sizes(self):
+        messagebox.showinfo("Load Custom Physical Pixel Size", "Select CSV file with custom pixel sizes (Cancel to generate template)")
+
         file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Select Custom Pixel Sizes CSV (Cancel to generate template)")
         if file_path:
             try:
@@ -273,11 +273,8 @@ class CompositeApp:
         # If using custom pixel sizes, only load data for samples present in the custom file
         samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
 
-        # Find the largest pixel size
-        if self.use_custom_pixel_sizes.get():
-            max_pixel_size = max(self.custom_pixel_sizes.values())
-        else:
-            max_pixel_size = self.pixel_size.get()
+        max_physical_width = 0
+        max_physical_height = 0
 
         for f in files:
             match = re.match(r"(.+)[ _]([A-Za-z]{1,2}\d{2,3})_(ppm|CPS) matrix\.xlsx", os.path.basename(f))
@@ -294,11 +291,10 @@ class CompositeApp:
                     else:
                         pixel_size = self.pixel_size.get()
 
-                    # Calculate adjusted dimensions
-                    scale_factor =  max_pixel_size / pixel_size
-                    adjusted_height = int(matrix.shape[0] * scale_factor)
-                    adjusted_width = int(matrix.shape[1] * scale_factor)
-                    self.adjusted_dimensions.append((adjusted_height, adjusted_width))
+                    # Calculate physical dimensions
+                    physical_height, physical_width = matrix.shape[0] * pixel_size, matrix.shape[1] * pixel_size
+                    max_physical_height = max(max_physical_height, physical_height)
+                    max_physical_width = max(max_physical_width, physical_width)
                     
                     # Calculate percentiles, IQR, and mean
                     p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
@@ -318,6 +314,25 @@ class CompositeApp:
                     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                     plt.savefig(hist_path)
                     plt.close()
+
+        # Calculate scale factors and adjusted dimensions
+        # max_physical_dim = max(max_physical_height, max_physical_width)
+        max_dimension = "height" if max_physical_height > max_physical_width else "width"
+        self.reference_pixel_size = None
+        for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
+            pixel_size = self.custom_pixel_sizes.get(label, self.pixel_size.get())
+            physical_height, physical_width = matrix.shape[0] * pixel_size, matrix.shape[1] * pixel_size
+            if max_dimension == "height":
+                scale_factor = physical_height / max_physical_height
+            else:
+                scale_factor = physical_width / max_physical_width
+            self.scale_factors[label] = scale_factor
+            if scale_factor == 1.0:
+                self.reference_pixel_size = pixel_size
+            adjusted_height = int(matrix.shape[0] * scale_factor)
+            adjusted_width = int(matrix.shape[1] * scale_factor)
+            self.adjusted_dimensions.append((adjusted_height, adjusted_width))
+        assert self.reference_pixel_size is not None, "No reference pixel size found"
 
         self.log_print(f"✅ Loaded {len(self.matrices)} matrix files.")
         self.log_print(f"Histograms saved in: {os.path.join(self.output_dir, self.element.get(), 'histograms')}")
@@ -355,7 +370,7 @@ class CompositeApp:
             self.log_print("⚠️ No data loaded.")
             return
 
-        rows = self.num_rows.get()
+        rows = min(self.num_rows.get(), len(self.matrices))  # Ensure rows don't exceed number of samples
         cols = math.ceil(len(self.matrices) / rows)
         fig, axs = plt.subplots(rows, cols + 1, figsize=(4 * cols + 1, 4 * rows), gridspec_kw={'width_ratios': [1] * cols + [0.2]})
         cmap = matplotlib.colormaps.get_cmap(self.color_scheme.get())
@@ -363,7 +378,7 @@ class CompositeApp:
         scale_max = self.scale_max.get()
 
         if self.use_log.get():
-            norm = Normalize(vmin=0, vmax=scale_max)
+            norm = self.pseudolog_norm(vmin=1, vmax=scale_max)
         else:
             norm = Normalize(vmin=0, vmax=scale_max)
 
@@ -379,7 +394,7 @@ class CompositeApp:
         iqrs = []
         means = []
 
-        for i, (matrix, label, (adjusted_height, adjusted_width)) in enumerate(zip(self.matrices, self.labels, self.adjusted_dimensions)):
+        for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
             r, c = i // cols, i % cols
             ax = axs[r, c] if rows > 1 else axs[c]
 
@@ -389,17 +404,16 @@ class CompositeApp:
             else:
                 pixel_size = self.pixel_size.get()
 
-            # Calculate the scaling factor
-            max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
-            scale_factor = max_pixel_size / pixel_size
+            # Use the pre-calculated scale factor
+            scale_factor = self.scale_factors[label]
 
             # Calculate the size of the inset axes
-            inset_width = min(1.0, scale_factor * adjusted_width / max_width)
-            inset_height = min(1.0, scale_factor * adjusted_height / max_height)
+            inset_width = min(1.0, matrix.shape[1] * scale_factor / max_width)
+            inset_height = min(1.0, matrix.shape[0] * scale_factor / max_height)
 
             # Create inset axes
-            inset_ax = inset_axes(ax, width="100%", height="100%", loc='center',
-                                  bbox_to_anchor=((1-inset_width)/2, (1-inset_height)/2, inset_width, inset_height),
+            inset_ax = inset_axes(ax, width=f"{scale_factor*100}%", height=f"{scale_factor*100}%", loc='center',
+                                #   bbox_to_anchor=((1-inset_width)/2, (1-inset_height)/2, inset_width, inset_height),
                                   bbox_transform=ax.transAxes)
 
             # Determine font size based on selection
@@ -412,7 +426,8 @@ class CompositeApp:
                 font_size = 16
 
             im = inset_ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
-            ax.set_title(f"{label}\n({pixel_size:.2f} µm/pixel)", color=text_color, fontsize=font_size)
+            report_custom_pixel_sizes=False
+            ax.set_title(f"{label}"+(f"\n({pixel_size:.2f} µm/pixel)" if report_custom_pixel_sizes else ""), color=text_color, fontsize=font_size)
             ax.axis('off')
             inset_ax.axis('off')
             ax.set_facecolor(bg_color)
@@ -438,22 +453,23 @@ class CompositeApp:
             iqrs.append((label, iqr))
             means.append((label, mean))
 
-        # Set color to bg_color and drop axes for the final column of subplots
-        for r in range(rows):
-            ax = axs[r, -1] if rows > 1 else axs[-1]
-            ax.set_facecolor(bg_color)
-            ax.axis('off')
-
-        # Add color bar and scale bar to the last column
         last_ax = axs[-1, -1] if rows > 1 else axs[-1]
         last_ax.axis('off')
         last_ax.set_facecolor(bg_color)
 
         # Create two inset axes for color bar and scale bar
-        color_ax = inset_axes(last_ax, width="50%", height="60%", loc='upper left',
-                              bbox_to_anchor=(0, 1, 1, 0.6), bbox_transform=last_ax.transAxes)
-        scale_ax = inset_axes(last_ax, width="50%", height="40%", loc='lower left',
-                              bbox_to_anchor=(0, 0, 1, 0.4), bbox_transform=last_ax.transAxes)
+        color_ax = inset_axes(last_ax, width="100%", height="100%", loc='upper left',
+                              bbox_to_anchor=(0, 0.5, 0.5, 0.5), 
+                              bbox_transform=last_ax.transAxes)
+        color_ax.set_facecolor(bg_color)
+        # Shrink inset height to leave less space under colorbar
+        scale_ax = inset_axes(
+            last_ax, width="100%", height="100%", loc='lower left',
+            bbox_to_anchor=(0, 0, 0.5, 0.35),  # reduced height
+            bbox_transform=last_ax.transAxes
+        )
+
+        scale_ax.set_facecolor(bg_color)
 
         # Add color bar
         cbar = plt.colorbar(im, cax=color_ax, orientation='vertical')
@@ -470,13 +486,15 @@ class CompositeApp:
 
         # --- Draw scale bar in data coordinates ---
         #Avoid crashing when a label isn't found
-        pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
+        # pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
 
 
-        # Get pixel size for this sample
-        pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
+        # # Get pixel size for this sample
+        # pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
+        pixel_size_um = self.reference_pixel_size 
         scale_bar_um = self.scale_bar_length_um.get()  # e.g., 500
 
+        
         # Convert to pixels
         scale_bar_px = int(scale_bar_um / pixel_size_um)
 
@@ -488,16 +506,59 @@ class CompositeApp:
         pad_x = 10
         pad_y = 10
 
-        x_start = pad_x
+        
+
+        # Keep scale_ax data limits compact
+        scale_ax.set_xlim(0, scale_bar_px + 20)
+        scale_ax.set_ylim(0, 25)  # lower max = tighter spacing
+        scale_ax.axis('off')
+
+        # Redefine layout
+        x_start = 10
         x_end = x_start + scale_bar_px
-        y_pos = bar_height - pad_y
+        y_pos = 8  # lower bar
 
-        # Draw the scale bar line (white, 3px thick)
-        ax.hlines(y=y_pos, xmin=x_start, xmax=x_end, colors='white', linewidth=3)
+        # Draw bar
+        scale_ax.hlines(y=y_pos, xmin=x_start, xmax=x_end, colors='white', linewidth=3)
 
-        # Label just above the bar
-        ax.text(x_start, y_pos + 5, f"{scale_bar_um:.0f} µm", color='white',
-            fontsize=8, ha='left', va='bottom')
+        # Centered label just above
+        scale_ax.text(
+            (x_start + x_end) / 2,
+            y_pos + 4,  # tighter vertical gap
+            f"{scale_bar_um:.0f} µm",
+            color='white',
+            fontsize=8,
+            ha='center',
+            va='bottom'
+        )
+        
+        # Set background color for all axes
+        for ax in axs.flat:
+            ax.set_facecolor(bg_color)
+            ax.axis('off')
+            # Set background color for any inset axes
+            for child in ax.get_children():
+                if isinstance(child, plt.Axes):
+                    child.set_facecolor(bg_color)
+        
+        # Create standalone colorbar figure
+        colorbar_fig, colorbar_ax = plt.subplots(figsize=(1, 4))
+        colorbar_fig.patch.set_alpha(0.0)
+        colorbar_ax.set_facecolor('none')
+
+        # Re-create colorbar and apply styles again
+        export_cbar = plt.colorbar(im, cax=colorbar_ax, orientation='vertical')
+
+        # Reapply tick and outline styling
+        export_cbar.ax.yaxis.set_tick_params(color=text_color)
+        export_cbar.outline.set_edgecolor(text_color)
+        plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
+
+        # Save
+        colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
+        colorbar_fig.savefig(colorbar_path, dpi=300, bbox_inches='tight', transparent=True)
+        plt.close(colorbar_fig)
+        self.log_print(f"✅ Saved separate colorbar to {colorbar_path}")
         
         if preview:
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
