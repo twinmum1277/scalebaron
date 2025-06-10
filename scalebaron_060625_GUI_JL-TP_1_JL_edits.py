@@ -439,10 +439,17 @@ class CompositeApp:
             
             # Create a new figure for the individual subplot
             subplot_fig, subplot_ax = plt.subplots()
-            subplot_ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
+            subplot_fig.patch.set_facecolor(bg_color)
+            subplot_ax.set_facecolor(bg_color)
+            
+            # Create a masked array for NaN values
+            masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
+            
+            # Plot with transparency for NaN values
+            subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal')
             subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
             subplot_ax.axis('off')
-            subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight')
+            subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight', transparent=True)
             plt.close(subplot_fig)
 
             # Calculate percentiles, IQR, and mean
