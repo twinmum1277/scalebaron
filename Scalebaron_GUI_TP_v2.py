@@ -1,5 +1,6 @@
 # ScaleBarOn v0.8.6 GUI — Revised Layout with Dropdowns
 # Change: Added dropdown element picker and color scheme selector with available options
+# Change: Implemented pixel size adjustment for image scaling
 
 import os
 import tkinter as tk
@@ -37,6 +38,7 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
+        self.pixel_sizes = []
         self.element_choices = []
         self.preview_file = None
 
@@ -59,7 +61,7 @@ class CompositeApp:
         self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, values=self.element_choices, state='readonly')
         self.element_dropdown.grid(row=0, column=1, padx=5, pady=2)
 
-        ttk.Label(grid_frame, text="Pixel size (\u00b5m):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(grid_frame, text="Default Pixel size (\u00b5m):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         ttk.Entry(grid_frame, textvariable=self.pixel_size).grid(row=1, column=1, padx=5, pady=2)
 
         ttk.Label(grid_frame, text="Scale bar length (\u00b5m):").grid(row=2, column=0, sticky="e", padx=5, pady=2)
@@ -155,13 +157,16 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
+        self.pixel_sizes = []
 
         for f in files:
             match = re.match(r"(.+)[ _]([A-Za-z]{1,2}\d{2,3})_(ppm|CPS) matrix\.xlsx", os.path.basename(f))
             if match:
                 sample, _, _ = match.groups()
                 self.labels.append(sample)
-                self.matrices.append(self.load_matrix_2d(f))
+                matrix = self.load_matrix_2d(f)
+                self.matrices.append(matrix)
+                self.pixel_sizes.append(self.pixel_size.get())  # Use default pixel size for now
                 self.log_print(f"Loaded: {sample}")
 
         self.log_print(f"✅ Loaded {len(self.matrices)} matrix files.")
@@ -199,20 +204,37 @@ class CompositeApp:
         fig.patch.set_facecolor(bg_color)
         text_color = 'white' if np.mean(bg_color[:3]) < 0.5 else 'black'
 
-        max_height = max(matrix.shape[0] for matrix in self.matrices)
-        max_width = max(matrix.shape[1] for matrix in self.matrices)
+        # Calculate the reference size based on the image with the most pixels
+        pixel_counts = [matrix.shape[0] * matrix.shape[1] / (pixel_size ** 2) for matrix, pixel_size in zip(self.matrices, self.pixel_sizes)]
+        reference_index = pixel_counts.index(max(pixel_counts))
+        reference_matrix = self.matrices[reference_index]
+        reference_pixel_size = self.pixel_sizes[reference_index]
 
-        for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
+        reference_height = reference_matrix.shape[0] / reference_pixel_size
+        reference_width = reference_matrix.shape[1] / reference_pixel_size
+
+        for i, (matrix, label, pixel_size) in enumerate(zip(self.matrices, self.labels, self.pixel_sizes)):
             r, c = i // cols, i % cols
             ax = axs[r, c] if rows > 1 else axs[c]
-            pad_height = (max_height - matrix.shape[0]) // 2
-            pad_width = (max_width - matrix.shape[1]) // 2
-            padded_matrix = np.pad(matrix,
-                                   ((pad_height, max_height - matrix.shape[0] - pad_height),
-                                    (pad_width, max_width - matrix.shape[1] - pad_width)),
+
+            # Calculate the adjusted dimensions
+            adjusted_height = int(matrix.shape[0] * reference_pixel_size / pixel_size)
+            adjusted_width = int(matrix.shape[1] * reference_pixel_size / pixel_size)
+
+            # Resize the matrix
+            resized_matrix = np.repeat(np.repeat(matrix, adjusted_height // matrix.shape[0], axis=0),
+                                       adjusted_width // matrix.shape[1], axis=1)
+
+            # Pad the matrix to match the reference dimensions
+            pad_height = int(reference_height - adjusted_height)
+            pad_width = int(reference_width - adjusted_width)
+            padded_matrix = np.pad(resized_matrix,
+                                   ((pad_height // 2, pad_height - pad_height // 2),
+                                    (pad_width // 2, pad_width - pad_width // 2)),
                                    mode='constant', constant_values=np.nan)
+
             im = ax.imshow(padded_matrix, cmap=cmap, norm=norm, aspect='equal')
-            ax.set_title(label, color=text_color)
+            ax.set_title(f"{label}\n({pixel_size:.2f} µm/pixel)", color=text_color)
             ax.axis('off')
             ax.set_facecolor(bg_color)
 
@@ -235,8 +257,8 @@ class CompositeApp:
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
 
-        scale_bar_length_pixels = self.scale_bar_length_um.get() / self.pixel_size.get()
-        scale_bar_width = scale_bar_length_pixels / max_width
+        scale_bar_length_pixels = self.scale_bar_length_um.get() / reference_pixel_size
+        scale_bar_width = scale_bar_length_pixels / reference_width
         scale_ax.add_line(plt.Line2D([0.1, 0.1 + scale_bar_width], [0.5, 0.5], color=text_color, linewidth=2, transform=scale_ax.transAxes))
         scale_ax.text(0.1, 0.7, f"{int(self.scale_bar_length_um.get())} \u00b5m", color=text_color, ha='left', va='bottom', transform=scale_ax.transAxes)
         scale_ax.axis('off')
