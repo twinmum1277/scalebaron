@@ -10,9 +10,14 @@ authors:
   - name: Tracy Punshon
     orcid: 0000-0003-0782-446X
     affiliation: 1
+  - name: Joshua Levy
+    orcid: 0000-0001-8050-1291
+    affiliation: 2
 affiliations:
-  - name: Biomedical National Elemental Imaging Resource, Dartmouth College, USA
+  - name: Biomedical National Elemental Imaging Resource, Dartmouth College, Hanover, NH, USA
     index: 1
+  - name: Cedars Sinai Medical Center, Los Angeles, CA, USA
+    index: 2
 date: 2025-05-01
 Bibliography: paper.bib
 ---
@@ -51,3 +56,10 @@ To install ScaleBarOn:
 
 ```bash
 pip install scalebaron
+```
+
+To install the latest version:
+
+```bash
+pip install git+https://github.com/twinmum1277/scalebaron
+```

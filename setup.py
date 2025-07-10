@@ -1,21 +1,22 @@
 from setuptools import setup
 
+with open('requirements.txt') as f:
+    requirements = f.read().splitlines()
+
+with open('README.md', 'r') as f:
+    long_description = f.read()
+
 setup(
     name='scalebaron',
     version='1.0.0',
     description='ScaleBarOn: A Python Tool for Scaling Multiple Elemental Maps',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     author='Tracy Punshon',
     author_email='tracy.punshon@dartmouth.edu',
     license='MIT',
     py_modules=['scalebaron'],
-    install_requires=[
-        'numpy',
-        'pandas',
-        'matplotlib',
-        'Pillow',
-        'openpyxl',
-        'scipy'
-    ],
+    install_requires=requirements,
     entry_points={
         'console_scripts': [
             'scalebaron = scalebaron:main',
