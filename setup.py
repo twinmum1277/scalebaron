@@ -15,11 +15,11 @@ setup(
     author='Tracy Punshon',
     author_email='tracy.punshon@dartmouth.edu',
     license='MIT',
-    py_modules=['scalebaron'],
+    packages=['scalebaron'],
     install_requires=requirements,
     entry_points={
         'console_scripts': [
-            'scalebaron = scalebaron:main',
+            'scalebaron = scalebaron.scalebaron:main',
         ],
     },
     classifiers=[

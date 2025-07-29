@@ -614,7 +614,10 @@ class CompositeApp:
             self.preview_label.config(image=tk_image)
             self.preview_label.image = tk_image  # Keep a reference to prevent garbage collection
 
-if __name__ == '__main__':
+def main():
     root = tk.Tk()
     app = CompositeApp(root)
     root.mainloop()
+
+if __name__ == '__main__':
+    main()
