@@ -63,3 +63,11 @@ To install the latest version:
 ```bash
 pip install git+https://github.com/twinmum1277/scalebaron
 ```
+
+# Running the GUI
+
+To run ScaleBaron, call:
+
+```bash
+scalebaron
+```
