@@ -29,6 +29,27 @@ class CompositeApp:
         brightness = 0.299 * r + 0.587 * g + 0.114 * b
         return 'black' if brightness > 0.5 else 'white'
     
+    def pseudolog_norm(self, vmin=1, vmax=100):
+        """
+        Returns a Normalize-like object for pseudolog scaling.
+        This is a simple implementation: log(x+1) scaling, so that 0 maps to 0.
+        """
+        class PseudoLogNorm(Normalize):
+            def __init__(self, vmin=None, vmax=None, clip=False):
+                super().__init__(vmin, vmax, clip)
+            def __call__(self, value, clip=None):
+                vmin, vmax = self.vmin, self.vmax
+                value = np.asarray(value)
+                # Avoid negative/NaN
+                value = np.where(value < 0, 0, value)
+                # log1p for pseudo-log
+                normed = (np.log1p(value) - np.log1p(vmin)) / (np.log1p(vmax) - np.log1p(vmin))
+                return np.clip(normed, 0, 1)
+            def inverse(self, value):
+                vmin, vmax = self.vmin, self.vmax
+                return np.expm1(value * (np.log1p(vmax) - np.log1p(vmin)) + np.log1p(vmin))
+        return PseudoLogNorm(vmin=vmin, vmax=vmax)
+
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
