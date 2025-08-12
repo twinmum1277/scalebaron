@@ -19,7 +19,7 @@ affiliations:
   - name: Cedars Sinai Medical Center, Los Angeles, CA, USA
     index: 2
 date: 2025-05-01
-Bibliography: paper.bib
+bibliography: paper/paper.bib
 ---
 
 # Summary
