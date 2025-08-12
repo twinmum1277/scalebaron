@@ -22,7 +22,7 @@ date: 2025-05-01
 bibliography: paper.bib
 ---
 
-# Summary 
+# Summary  
 
 Elemental imaging techniques (e.g., laser ablation inductively coupled plasma time of flight mass spectrometry (LA-ICP-TOF-MS) or synchrotron X-ray fluorescence (SXRF)) collect spatially resolved elemental data in the form of maps. These techniques are becoming more common in biological sciences, where experiments use replicated, between-sample comparisons. The Biomedical National Elemental Imaging Resource (BNEIR) operates as a shared resource for users in the biomedical sciences to gain rapid access to elemental imaging, offering LA-ICP-TOF-MS analysis to almost 40 users nationwide. Users generally are new to elemental imaging, and most, if not all, are unfamiliar with software designed to generate or manipulate elemental images. Giving users a meaningful first look at their results therefore requires preparing a data summary that shows maps on the same quantitative (parts per million, ppm) and spatial scale. 
 
