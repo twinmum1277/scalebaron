@@ -11,7 +11,7 @@ Or from PyPI:
 pip install scalebaron
 ```
 
-To run:
+To run: 
 ```{bash}
 scalebaron
 ```
