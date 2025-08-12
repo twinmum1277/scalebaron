@@ -26,7 +26,7 @@ Bibliography: paper.bib
 
 Elemental imaging techniques (e.g., laser ablation inductively coupled plasma time of flight mass spectrometry (LA-ICP-TOF-MS) or synchrotron X-ray fluorescence (SXRF)) collect spatially resolved elemental data in the form of maps. These techniques are becoming more common in biological sciences, where experiments use replicated, between-sample comparisons. The Biomedical National Elemental Imaging Resource (BNEIR) operates as a shared resource for users in the biomedical sciences to gain rapid access to elemental imaging, offering LA-ICP-TOF-MS analysis to almost 40 users nationwide. Users generally are new to elemental imaging, and most, if not all, are unfamiliar with software designed to generate or manipulate elemental images. Giving users a meaningful first look at their results therefore requires preparing a data summary that shows maps on the same quantitative (parts per million, ppm) and spatial scale. 
 
-# Statement of Need 
+# Statement of Need
 
 There are many software applications for manipulating and visualizing LA-ICP-MS, SXRF, and XRF data (Weiskirchen et al., 2019) [@Weiskirchen2019]. To our knowledge, only one (The MicroAnalysis Toolkit)(Webb, 2011) [@Webb2011] has the capability to load multiple datasets for comparison. Encouraging users unfamiliar with elemental imaging to use X-ray software to visualize their LA-ICP-MS data has so far been resoundingly unsuccessful. Users need a simple, *technique-independent* tool to visually compare multiple maps on the same abundance and spatial scale so they can make preliminary observations. 
 
