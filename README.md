@@ -11,7 +11,12 @@ Or from PyPI:
 pip install scalebaron
 ```
 
-To run: 
+To run ScaleBaron: 
 ```{bash}
 scalebaron
+```
+
+To run Muad'Data: 
+```{bash}
+muaddata
 ```

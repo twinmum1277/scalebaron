@@ -178,8 +178,10 @@ OUTPUT/summary_99th_percentiles.csv
 OUTPUT/summary_variance.csv
 out_v2/
 out_v2/*
-*.png
 *.csv
 OUTPUT/Fe56/.DS_Store
 OUTPUT/Cu63/.DS_Store
 OUTPUT/.DS_Store
+
+test/testdata/old/
+test/testdata/trim_bottom.ipynb
