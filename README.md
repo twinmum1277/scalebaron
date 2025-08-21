@@ -20,3 +20,8 @@ To run Muad'Data:
 ```{bash}
 muaddata
 ```
+
+To download test data for this package:
+```{bash}
+download_test_elemental_images
+```

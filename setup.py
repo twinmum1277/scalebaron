@@ -20,7 +20,8 @@ setup(
     entry_points={
         'console_scripts': [
             'scalebaron = scalebaron.scalebaron:main',
-            'muaddata = scalebaron.muaddata:main'
+            'muaddata = scalebaron.muaddata:main',
+            'download_test_elemental_images = scalebaron.download:main'
         ],
     },
     classifiers=[
