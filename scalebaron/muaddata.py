@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 
-class MuadDataViewer:
+class MuadDataViewer:  
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
