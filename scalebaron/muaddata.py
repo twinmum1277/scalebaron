@@ -25,6 +25,12 @@ class MuadDataViewer:
         self.single_file_name = None   # Store loaded file name
         self._single_colorbar = None   # Store the colorbar object for removal
 
+        # Add a variable for the user-settable max slider value
+        self.max_slider_limit = tk.DoubleVar()
+
+        # Histogram state
+        self.histogram_canvas = None
+
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
         self.rgb_sliders = {}
@@ -69,16 +75,38 @@ class MuadDataViewer:
         tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack()
         self.min_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("Arial", 13))
         self.min_slider.pack(fill=tk.X)
-        # Update plot when min slider is changed
-        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map())
-        self.min_slider.bind("<B1-Motion>", lambda e: self.view_single_map())
+        # Update plot and histogram when min slider is changed
+        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.update_histogram_and_view())
+        self.min_slider.bind("<B1-Motion>", lambda e: self.update_histogram_and_view())
 
+        # Add histogram frame above Max Value
+        histogram_frame = tk.Frame(control_frame)
+        histogram_frame.pack(fill=tk.X, pady=(5, 0))
+        tk.Label(histogram_frame, text="Data Distribution", font=("Arial", 11)).pack()
+        self.histogram_canvas = tk.Canvas(histogram_frame, height=60, width=200, bg='white', relief='sunken', bd=1)
+        self.histogram_canvas.pack(fill=tk.X, pady=(2, 5))
+
+        # --- Max Value controls ---
         tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
-        self.max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("Arial", 13))
-        self.max_slider.pack(fill=tk.X)
-        # Update plot when max slider is changed
-        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map())
-        self.max_slider.bind("<B1-Motion>", lambda e: self.view_single_map())
+
+        # Frame for max slider
+        max_slider_frame = tk.Frame(control_frame)
+        max_slider_frame.pack(fill=tk.X)
+
+        self.max_slider = tk.Scale(max_slider_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("Arial", 13))
+        self.max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Update plot and histogram when max slider is changed
+        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.update_histogram_and_view())
+        self.max_slider.bind("<B1-Motion>", lambda e: self.update_histogram_and_view())
+
+        # Entry for setting the max value of the slider (now below the slider)
+        slider_max_frame = tk.Frame(control_frame)
+        slider_max_frame.pack(fill=tk.X, pady=(2, 0))
+        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 10)).pack(side=tk.LEFT)
+        self.max_slider_limit_entry = tk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8, font=("Arial", 11))
+        self.max_slider_limit_entry.pack(side=tk.LEFT)
+        self.max_slider_limit_entry.bind("<Return>", lambda e: self.set_max_slider_limit())
+        self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
 
         tk.Checkbutton(control_frame, text="Show Color Bar", variable=self.show_colorbar, font=("Arial", 13)).pack(anchor='w')
         tk.Checkbutton(control_frame, text="Show Scale Bar", variable=self.show_scalebar, font=("Arial", 13)).pack(anchor='w')
@@ -100,6 +128,102 @@ class MuadDataViewer:
         self.single_ax.axis('off')
         self.single_canvas = FigureCanvasTkAgg(self.single_figure, master=display_frame)
         self.single_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def set_max_slider_limit(self):
+        """Set the maximum value of the max slider from the entry box."""
+        try:
+            val = float(self.max_slider_limit.get())
+            min_val = self.max_slider.cget('from')
+            if val > min_val:
+                self.max_slider.config(to=val)
+                # If the current slider value is above the new max, set it to the new max
+                if self.single_max.get() > val:
+                    self.single_max.set(val)
+            else:
+                # If entered value is not valid, reset to current slider max
+                self.max_slider_limit.set(self.max_slider.cget('to'))
+        except Exception:
+            # If invalid input, reset to current slider max
+            self.max_slider_limit.set(self.max_slider.cget('to'))
+
+    def update_histogram_and_view(self):
+        self.update_histogram()
+        self.view_single_map()
+
+    def update_histogram(self):
+        """Update the data distribution histogram based on current min/max slider values."""
+        if self.single_matrix is None or self.histogram_canvas is None:
+            return
+
+        self.histogram_canvas.delete("all")
+
+        # Get data and create histogram (only in current slider range)
+        data = self.single_matrix.flatten()
+        data = data[~np.isnan(data)]  # Remove NaN values
+        current_min = self.single_min.get()
+        current_max = self.single_max.get()
+        data = data[(data >= current_min) & (data <= current_max)]
+
+        if len(data) == 0:
+            return
+
+        # Create histogram
+        hist, bin_edges = np.histogram(data, bins=50)
+
+        # Get canvas dimensions
+        canvas_width = self.histogram_canvas.winfo_width()
+        canvas_height = self.histogram_canvas.winfo_height()
+
+        if canvas_width <= 1:  # Canvas not yet drawn
+            canvas_width = 200
+            canvas_height = 60
+
+        # Normalize histogram to fit canvas
+        max_hist = np.max(hist)
+        if max_hist == 0:
+            return
+
+        # Draw smooth curve like photo editors
+        x_coords = []
+        y_coords = []
+        for i, count in enumerate(hist):
+            if count > 0:
+                x = (i / len(hist)) * canvas_width
+                y = canvas_height - 5 - (count / max_hist) * (canvas_height - 10)
+                x_coords.append(x)
+                y_coords.append(y)
+
+        # Create smooth curve with more points for better smoothing
+        if len(x_coords) >= 2:
+            # Create filled area under the curve (like photo editors)
+            fill_points = []
+
+            # Start at bottom-left
+            fill_points.extend([0, canvas_height - 5])
+
+            # Add curve points
+            for i in range(len(x_coords)):
+                fill_points.extend([x_coords[i], y_coords[i]])
+
+            # End at bottom-right
+            fill_points.extend([canvas_width, canvas_height - 5])
+
+            # Draw filled area with light gray
+            if len(fill_points) >= 6:
+                self.histogram_canvas.create_polygon(fill_points, fill='lightgray', outline='', smooth=True)
+
+            # Draw the curve line on top
+            curve_points = []
+            for i in range(len(x_coords)):
+                curve_points.extend([x_coords[i], y_coords[i]])
+
+            # Draw the smooth curve with anti-aliasing
+            if len(curve_points) >= 4:
+                self.histogram_canvas.create_line(curve_points, fill='darkgray', width=2, smooth=True, capstyle='round')
+
+        # Add min/max indicators (always at left/right of canvas now)
+        self.histogram_canvas.create_line(0, 0, 0, canvas_height, fill='red', width=2)
+        self.histogram_canvas.create_line(canvas_width, 0, canvas_width, canvas_height, fill='blue', width=2)
 
     def build_rgb_tab(self):
         control_frame = tk.Frame(self.rgb_tab, padx=10, pady=10)
@@ -211,9 +335,12 @@ class MuadDataViewer:
             self.max_slider.config(from_=min_val, to=max_val)
             self.min_slider.set(min_val)
             self.max_slider.set(max_val)
+            # Set the max_slider_limit variable and entry to the default max
+            self.max_slider_limit.set(max_val)
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
+            self.update_histogram()
             self.view_single_map()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load matrix file:\n{e}")
