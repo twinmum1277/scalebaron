@@ -1,5 +1,5 @@
 ---
-title: 'ScaleBarOn and Muad'Data: Simple Python tools for Elemental Imaging Data Visualization and Comparative Scaling.'
+title: "ScaleBarOn and Muad'Data: Simple Python tools for Elemental Imaging Data Visualization and Comparative Scaling."
 tags:
   - elemental imaging
   - LA-ICP-TOF-MS
