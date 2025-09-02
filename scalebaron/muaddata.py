@@ -175,7 +175,7 @@ class MuadDataViewer:
         tk.Button(control_frame, text="Load Matrix File", command=self.load_single_file, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
 
         tk.Label(control_frame, text="Colormap", font=("Arial", 13)).pack()
-        cmap_menu = ttk.Combobox(control_frame, textvariable=self.single_colormap, values=plt.colormaps(), font=("Arial", 12))
+        cmap_menu = ttk.Combobox(control_frame, textvariable=self.single_colormap, values=plt.colormaps(), font=("Arial", 13))
         cmap_menu.pack(fill=tk.X)
 
         tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack()
@@ -188,7 +188,7 @@ class MuadDataViewer:
         # Add histogram frame above Max Value
         histogram_frame = tk.Frame(control_frame)
         histogram_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Label(histogram_frame, text="Data Distribution", font=("Arial", 11)).pack()
+        tk.Label(histogram_frame, text="Data Distribution", font=("Arial", 13)).pack()
         self.histogram_canvas = tk.Canvas(histogram_frame, height=60, width=200, bg='white', relief='sunken', bd=1)
         self.histogram_canvas.pack(fill=tk.X, pady=(2, 5))
 
@@ -208,8 +208,8 @@ class MuadDataViewer:
         # Entry for setting the max value of the slider (now below the slider)
         slider_max_frame = tk.Frame(control_frame)
         slider_max_frame.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 12)).pack(side=tk.LEFT)
-        self.max_slider_limit_entry = tk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8, font=("Arial", 11))
+        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 13)).pack(side=tk.LEFT)
+        self.max_slider_limit_entry = tk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8, font=("Arial", 13))
         self.max_slider_limit_entry.pack(side=tk.LEFT)
         self.max_slider_limit_entry.bind("<Return>", lambda e: self.set_max_slider_limit())
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
@@ -220,7 +220,7 @@ class MuadDataViewer:
         # Scale bar color picker
         scalebar_color_frame = tk.Frame(control_frame)
         scalebar_color_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Label(scalebar_color_frame, text="Scale Bar Color:", font=("Arial", 11)).pack(side=tk.LEFT)
+        tk.Label(scalebar_color_frame, text="Scale Bar Color:", font=("Arial", 13)).pack(side=tk.LEFT)
         self.scalebar_color_btn = tk.Button(scalebar_color_frame, text="Pick Color", bg=self.scalebar_color, fg='black', 
                                           font=("Arial", 10, "bold"), command=self.pick_scalebar_color)
         self.scalebar_color_btn.pack(side=tk.LEFT, padx=(5, 0))
@@ -398,8 +398,8 @@ class MuadDataViewer:
                 self.min_slider.set(min_val)
                 self.max_slider.set(max_val)
                 
-                # Set the max_slider_limit variable and entry to the new max
-                self.max_slider_limit.set(max_val)
+                # Set the max_slider_limit variable and entry to the new max (rounded to integer)
+                self.max_slider_limit.set(round(max_val))
                 
                 # Update histogram and view
                 self.update_histogram()
@@ -591,8 +591,8 @@ class MuadDataViewer:
             self.max_slider.config(from_=min_val, to=max_val)
             self.min_slider.set(min_val)
             self.max_slider.set(max_val)
-            # Set the max_slider_limit variable and entry to the default max
-            self.max_slider_limit.set(max_val)
+            # Set the max_slider_limit variable and entry to the default max (rounded to integer)
+            self.max_slider_limit.set(round(max_val))
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
