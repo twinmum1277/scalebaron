@@ -208,7 +208,7 @@ class MuadDataViewer:
         # Entry for setting the max value of the slider (now below the slider)
         slider_max_frame = tk.Frame(control_frame)
         slider_max_frame.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 10)).pack(side=tk.LEFT)
+        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 12)).pack(side=tk.LEFT)
         self.max_slider_limit_entry = tk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8, font=("Arial", 11))
         self.max_slider_limit_entry.pack(side=tk.LEFT)
         self.max_slider_limit_entry.bind("<Return>", lambda e: self.set_max_slider_limit())
@@ -238,7 +238,7 @@ class MuadDataViewer:
         tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="black").pack(fill=tk.X, pady=(10, 2))
 
         # Add a label at the bottom left to display loaded file info
-        self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 11, "italic"), anchor="w", justify="left", wraplength=200)
+        self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 13, "italic"), anchor="w", justify="left", wraplength=200)
         self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         self.single_figure, self.single_ax = plt.subplots()
@@ -250,12 +250,16 @@ class MuadDataViewer:
         """Set the maximum value of the max slider from the entry box."""
         try:
             val = float(self.max_slider_limit.get())
+            # Round to nearest integer
+            val = round(val)
             min_val = self.max_slider.cget('from')
             if val > min_val:
                 self.max_slider.config(to=val)
                 # If the current slider value is above the new max, set it to the new max
                 if self.single_max.get() > val:
                     self.single_max.set(val)
+                # Update the entry to show the rounded integer value
+                self.max_slider_limit.set(val)
             else:
                 # If entered value is not valid, reset to current slider max
                 self.max_slider_limit.set(self.max_slider.cget('to'))
@@ -265,7 +269,7 @@ class MuadDataViewer:
 
     def update_histogram_and_view(self):
         self.update_histogram()
-        self.view_single_map()
+        self.view_single_map(update_layout=False)
 
     def update_histogram(self):
         """Update the data distribution histogram based on current min/max slider values."""
@@ -599,7 +603,7 @@ class MuadDataViewer:
             self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
 
-    def view_single_map(self):
+    def view_single_map(self, update_layout=True):
         if self.single_matrix is None:
             return
         mat = np.array(self.single_matrix, dtype=float)
@@ -625,7 +629,8 @@ class MuadDataViewer:
             y = mat.shape[0] - 15
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
             self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left')
-        self.single_figure.tight_layout()
+        if update_layout:
+            self.single_figure.tight_layout()
         self.single_canvas.draw()
 
     def save_single_image(self):
