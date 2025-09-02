@@ -260,8 +260,8 @@ class MuadDataViewer:
                     self.single_max.set(val)
                 # Update the entry to show the rounded integer value
                 self.max_slider_limit.set(val)
-                # Update the map without layout changes to prevent shrinking
-                self.view_single_map(update_layout=False)
+                # Update the map (layout will be updated only if colorbar changes)
+                self.view_single_map()
             else:
                 # If entered value is not valid, reset to current slider max
                 self.max_slider_limit.set(self.max_slider.cget('to'))
@@ -616,7 +616,8 @@ class MuadDataViewer:
         self.single_ax.clear()
         im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax)
         self.single_ax.axis('off')
-        # Only recreate colorbar if it doesn't exist or if colorbar visibility changed
+        
+        # Handle colorbar creation/removal
         colorbar_needed = self.show_colorbar.get()
         colorbar_exists = hasattr(self, '_single_colorbar') and self._single_colorbar is not None
         
@@ -627,6 +628,8 @@ class MuadDataViewer:
             except Exception:
                 pass
             self._single_colorbar = None
+            # Layout needs to be updated when colorbar is removed
+            update_layout = True
         elif not colorbar_exists and colorbar_needed:
             # Create colorbar if it doesn't exist but should
             self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="PPM")
@@ -635,16 +638,20 @@ class MuadDataViewer:
             self._single_colorbar.ax.tick_params(labelsize=10)
             for label in self._single_colorbar.ax.get_yticklabels():
                 label.set_fontfamily('Arial')
+            # Layout needs to be updated when colorbar is created
+            update_layout = True
         elif colorbar_exists and colorbar_needed:
             # Update existing colorbar without recreating it
             self._single_colorbar.update_normal(im)
-            self._single_colorbar.draw_all()
+            self._single_colorbar.draw()
+        
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
             y = mat.shape[0] - 15
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
             self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+        
         if update_layout:
             self.single_figure.tight_layout()
         self.single_canvas.draw()
