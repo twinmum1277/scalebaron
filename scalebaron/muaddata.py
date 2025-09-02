@@ -498,7 +498,7 @@ class MuadDataViewer:
             # Color picker and gradient
             color_picker_frame = tk.Frame(control_frame)
             color_picker_frame.pack(fill=tk.X, padx=5, pady=2)
-            color_btn = tk.Button(color_picker_frame, text="Pick Color", bg=self.rgb_colors[ch], fg='white', font=("Arial", 10, "bold"),
+            color_btn = tk.Button(color_picker_frame, text="Pick Color", bg=self.rgb_colors[ch], fg='black', font=("Arial", 13, "bold"),
                                   command=lambda c=ch: self.pick_channel_color(c))
             color_btn.pack(side=tk.LEFT, padx=(0, 5))
             gradient_canvas = tk.Canvas(color_picker_frame, height=10, width=256)
