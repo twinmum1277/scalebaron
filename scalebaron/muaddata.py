@@ -123,6 +123,7 @@ class MuadDataViewer:
         self.show_scalebar = tk.IntVar()
         self.pixel_size = tk.DoubleVar(value=1.0)
         self.scale_length = tk.DoubleVar(value=50)
+        self.scalebar_color = '#ffffff'  # Default to white for good contrast
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
         self._single_colorbar = None   # Store the colorbar object for removal
@@ -215,6 +216,14 @@ class MuadDataViewer:
 
         tk.Checkbutton(control_frame, text="Show Color Bar", variable=self.show_colorbar, font=("Arial", 13)).pack(anchor='w')
         tk.Checkbutton(control_frame, text="Show Scale Bar", variable=self.show_scalebar, font=("Arial", 13)).pack(anchor='w')
+        
+        # Scale bar color picker
+        scalebar_color_frame = tk.Frame(control_frame)
+        scalebar_color_frame.pack(fill=tk.X, pady=(5, 0))
+        tk.Label(scalebar_color_frame, text="Scale Bar Color:", font=("Arial", 11)).pack(side=tk.LEFT)
+        self.scalebar_color_btn = tk.Button(scalebar_color_frame, text="Pick Color", bg=self.scalebar_color, fg='black', 
+                                          font=("Arial", 10, "bold"), command=self.pick_scalebar_color)
+        self.scalebar_color_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         tk.Label(control_frame, text="Pixel size (µm)", font=("Arial", 13)).pack(pady=(10, 0))
         tk.Entry(control_frame, textvariable=self.pixel_size, font=("Arial", 13)).pack(fill=tk.X)
@@ -526,6 +535,18 @@ class MuadDataViewer:
             # Update overlay if visible
             self.view_rgb_overlay()
 
+    def pick_scalebar_color(self):
+        """Open color chooser for scale bar color and update the scale bar."""
+        initial_color = self.scalebar_color
+        color_code = colorchooser.askcolor(title="Pick Scale Bar Color", color=initial_color)
+        if color_code and color_code[1]:
+            self.scalebar_color = color_code[1]
+            # Update button color
+            self.scalebar_color_btn.configure(bg=color_code[1])
+            # Update scale bar if visible
+            if self.show_scalebar.get():
+                self.view_single_map()
+
     def draw_gradient(self, canvas, color):
         # Accepts either a color name ('red', 'green', 'blue') or a hex color
         canvas.delete("all")
@@ -602,8 +623,8 @@ class MuadDataViewer:
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
             y = mat.shape[0] - 15
-            self.single_ax.plot([x, x + bar_length], [y, y], color='black', lw=3)
-            self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color='black', fontsize=10, ha='left')
+            self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
+            self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left')
         self.single_figure.tight_layout()
         self.single_canvas.draw()
 
