@@ -787,7 +787,7 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [1-v1[1]/120, 1-v2[1]/120], color='k', lw=1)
             self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [1-v2[1]/120, 1-v0[1]/120], color='k', lw=1)
             # Place labels at vertices
-            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.02, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.15, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.text(v1[0]/240+0.04, 1-v1[1]/120, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.text(v2[0]/240-0.04, 1-v2[1]/120, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_xlim(0, 1)
