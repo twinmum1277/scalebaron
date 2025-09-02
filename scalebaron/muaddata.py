@@ -75,7 +75,7 @@ class MathExpressionDialog:
         
         # Apply button
         apply_btn = tk.Button(button_frame, text="Apply Expression", command=self.apply_expression, 
-                             font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", padx=20)
+                             font=("Arial", 12, "bold"), bg="#4CAF50", fg="black", padx=20)
         apply_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
         # Cancel button
@@ -226,7 +226,7 @@ class MuadDataViewer:
         tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
 
         # --- Math Expression Button ---
-        tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="white").pack(fill=tk.X, pady=(10, 2))
+        tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="black").pack(fill=tk.X, pady=(10, 2))
 
         # Add a label at the bottom left to display loaded file info
         self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 11, "italic"), anchor="w", justify="left", wraplength=200)
