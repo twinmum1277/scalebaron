@@ -624,6 +624,10 @@ class MuadDataViewer:
         if self.show_colorbar.get():
             self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="PPM")
             self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=12)
+            # Set tick labels to use Arial font
+            self._single_colorbar.ax.tick_params(labelsize=10)
+            for label in self._single_colorbar.ax.get_yticklabels():
+                label.set_fontfamily('Arial')
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
