@@ -623,12 +623,13 @@ class MuadDataViewer:
             self._single_colorbar = None
         if self.show_colorbar.get():
             self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="PPM")
+            self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=12)
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
             y = mat.shape[0] - 15
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
-            self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left')
+            self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
         if update_layout:
             self.single_figure.tight_layout()
         self.single_canvas.draw()
@@ -759,9 +760,9 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [1-v1[1]/120, 1-v2[1]/120], color='k', lw=1)
             self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [1-v2[1]/120, 1-v0[1]/120], color='k', lw=1)
             # Place labels at vertices
-            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.05, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold')
-            self.rgb_colorbar_ax.text(v1[0]/240+0.04, 1-v1[1]/120, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold')
-            self.rgb_colorbar_ax.text(v2[0]/240-0.04, 1-v2[1]/120, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold')
+            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.05, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(v1[0]/240+0.04, 1-v1[1]/120, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(v2[0]/240-0.04, 1-v2[1]/120, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_xlim(0, 1)
             self.rgb_colorbar_ax.set_ylim(0, 1)
         elif len(loaded) == 2:
@@ -782,8 +783,8 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
             # Place labels at ends
-            self.rgb_colorbar_ax.text(0, 1.05, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold')
-            self.rgb_colorbar_ax.text(1, 1.05, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold')
+            self.rgb_colorbar_ax.text(0, 1.05, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(1, 1.05, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_xlim(0, 1)
             self.rgb_colorbar_ax.set_ylim(0, 1)
         elif len(loaded) == 1:
@@ -801,7 +802,7 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
-            self.rgb_colorbar_ax.text(1, 1.05, labels[0], color=colors[0], fontsize=10, ha='right', va='bottom', fontweight='bold')
+            self.rgb_colorbar_ax.text(1, 1.05, labels[0], color=colors[0], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_xlim(0, 1)
             self.rgb_colorbar_ax.set_ylim(0, 1)
         else:
