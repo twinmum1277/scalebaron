@@ -260,6 +260,8 @@ class MuadDataViewer:
                     self.single_max.set(val)
                 # Update the entry to show the rounded integer value
                 self.max_slider_limit.set(val)
+                # Update the map with proper layout since slider range changed
+                self.view_single_map(update_layout=True)
             else:
                 # If entered value is not valid, reset to current slider max
                 self.max_slider_limit.set(self.max_slider.cget('to'))
