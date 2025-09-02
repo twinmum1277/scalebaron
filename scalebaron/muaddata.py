@@ -226,10 +226,16 @@ class MuadDataViewer:
         self.scalebar_color_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         tk.Label(control_frame, text="Pixel size (µm)", font=("Arial", 13)).pack(pady=(10, 0))
-        tk.Entry(control_frame, textvariable=self.pixel_size, font=("Arial", 13)).pack(fill=tk.X)
+        self.pixel_size_entry = tk.Entry(control_frame, textvariable=self.pixel_size, font=("Arial", 13))
+        self.pixel_size_entry.pack(fill=tk.X)
+        self.pixel_size_entry.bind("<Return>", lambda e: self.view_single_map())
+        self.pixel_size_entry.bind("<FocusOut>", lambda e: self.view_single_map())
 
         tk.Label(control_frame, text="Scale bar length (µm)", font=("Arial", 13)).pack(pady=(10, 0))
-        tk.Entry(control_frame, textvariable=self.scale_length, font=("Arial", 13)).pack(fill=tk.X)
+        self.scale_length_entry = tk.Entry(control_frame, textvariable=self.scale_length, font=("Arial", 13))
+        self.scale_length_entry.pack(fill=tk.X)
+        self.scale_length_entry.bind("<Return>", lambda e: self.view_single_map())
+        self.scale_length_entry.bind("<FocusOut>", lambda e: self.view_single_map())
 
         tk.Button(control_frame, text="View Map", command=self.view_single_map, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
