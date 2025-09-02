@@ -7,6 +7,108 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 
+# --- Math Expression Dialog (lifted from prior version) ---
+class MathExpressionDialog:
+    def __init__(self, parent, title="Enter Mathematical Expression"):
+        self.result = None
+        
+        # Create dialog window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x300")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center the dialog
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        
+        # Build the dialog interface immediately
+        self.build_dialog()
+        
+        # Make dialog modal
+        self.dialog.focus_set()
+        self.dialog.wait_window()
+    
+    def build_dialog(self):
+        # Main frame
+        main_frame = tk.Frame(self.dialog, padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = tk.Label(main_frame, text="Map Math - Mathematical Expression", font=("Arial", 14, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # Instructions
+        instructions = tk.Label(main_frame, text="Enter a mathematical expression using 'x' as the variable.\nExample: x * 0.001 (to convert CPS to ppm)", 
+                              font=("Arial", 11), justify=tk.LEFT)
+        instructions.pack(pady=(0, 15))
+        
+        # Expression entry
+        tk.Label(main_frame, text="Expression:", font=("Arial", 12)).pack(anchor='w')
+        self.expression_entry = tk.Entry(main_frame, font=("Arial", 12), width=50)
+        self.expression_entry.pack(fill=tk.X, pady=(5, 15))
+        self.expression_entry.insert(0, "x * 0.001")
+        self.expression_entry.focus()
+        
+        # Common expressions frame
+        common_frame = tk.Frame(main_frame)
+        common_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        tk.Label(common_frame, text="Common expressions:", font=("Arial", 11, "bold")).pack(anchor='w')
+        
+        # Common expression buttons
+        common_expressions = [
+            ("Square root", "np.sqrt(x)"),
+            ("Log base 10", "np.log10(x)"),
+            ("Natural log", "np.log(x)"),
+            ("Square", "x ** 2")
+        ]
+        
+        for label, expr in common_expressions:
+            btn = tk.Button(common_frame, text=label, command=lambda e=expr: self.expression_entry.delete(0, tk.END) or self.expression_entry.insert(0, e),
+                           font=("Arial", 10))
+            btn.pack(side=tk.LEFT, padx=(0, 5), pady=2)
+        
+        # Buttons frame
+        button_frame = tk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+        
+        # Apply button
+        apply_btn = tk.Button(button_frame, text="Apply Expression", command=self.apply_expression, 
+                             font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", padx=20)
+        apply_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Cancel button
+        cancel_btn = tk.Button(button_frame, text="Cancel", command=self.cancel, 
+                              font=("Arial", 12), padx=20)
+        cancel_btn.pack(side=tk.RIGHT)
+        
+        # Bind Enter key to apply
+        self.expression_entry.bind("<Return>", lambda e: self.apply_expression())
+        self.expression_entry.bind("<Escape>", lambda e: self.cancel())
+        
+        # Bind window close button
+        self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
+    
+    def apply_expression(self):
+        expression = self.expression_entry.get().strip()
+        if not expression:
+            messagebox.showerror("Error", "Please enter a mathematical expression.")
+            return
+        
+        # Validate expression
+        try:
+            # Test with a sample value
+            x = 1.0
+            eval(expression, {"__builtins__": {}}, {"x": x, "np": np})
+            self.result = expression
+            self.dialog.destroy()
+        except Exception as e:
+            messagebox.showerror("Invalid Expression", f"The expression contains an error:\n{str(e)}\n\nPlease check your syntax.")
+    
+    def cancel(self):
+        self.dialog.destroy()
+
 class MuadDataViewer:  
     def __init__(self, root):
         self.root = root
@@ -30,6 +132,9 @@ class MuadDataViewer:
 
         # Histogram state
         self.histogram_canvas = None
+
+        # Math expression state
+        self.original_matrix = None  # For storing the original matrix before math ops
 
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
@@ -119,6 +224,9 @@ class MuadDataViewer:
 
         tk.Button(control_frame, text="View Map", command=self.view_single_map, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
+
+        # --- Math Expression Button ---
+        tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="white").pack(fill=tk.X, pady=(10, 2))
 
         # Add a label at the bottom left to display loaded file info
         self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 11, "italic"), anchor="w", justify="left", wraplength=200)
@@ -224,6 +332,129 @@ class MuadDataViewer:
         # Add min/max indicators (always at left/right of canvas now)
         self.histogram_canvas.create_line(0, 0, 0, canvas_height, fill='red', width=2)
         self.histogram_canvas.create_line(canvas_width, 0, canvas_width, canvas_height, fill='blue', width=2)
+
+    # --- Math Expression Functionality ---
+    def open_map_math(self):
+        """Open the map math dialog and apply mathematical expressions to the loaded matrix."""
+        if self.single_matrix is None:
+            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            return
+        
+        # Create and show the math expression dialog
+        dialog = MathExpressionDialog(self.root)
+        
+        if dialog.result:
+            try:
+                # Store original matrix if not already stored
+                if self.original_matrix is None:
+                    self.original_matrix = np.array(self.single_matrix, copy=True)
+                
+                # Create a copy of the current matrix for processing
+                mat = np.array(self.single_matrix, dtype=float)
+                
+                # Create a mask for non-empty cells (where there are actual values)
+                # We'll consider cells with values > 0 as non-empty
+                non_empty_mask = (mat > 0) & ~np.isnan(mat)
+                
+                # Apply the expression only to non-empty cells
+                result_mat = np.array(mat, copy=True)
+                
+                # For each non-empty cell, apply the expression
+                for i in range(mat.shape[0]):
+                    for j in range(mat.shape[1]):
+                        if non_empty_mask[i, j]:
+                            x = mat[i, j]
+                            try:
+                                # Safely evaluate the expression for this cell
+                                result = eval(dialog.result, {"__builtins__": {}}, {"x": x, "np": np})
+                                result_mat[i, j] = result
+                            except Exception as e:
+                                messagebox.showerror("Evaluation Error", f"Error evaluating expression for cell [{i},{j}]:\n{str(e)}")
+                                return
+                
+                # Update the current matrix with the result
+                self.single_matrix = result_mat
+                
+                # Update min/max values and sliders
+                min_val = np.nanmin(result_mat)
+                max_val = np.nanmax(result_mat)
+                self.single_min.set(min_val)
+                self.single_max.set(max_val)
+                self.min_slider.config(from_=min_val, to=max_val)
+                self.max_slider.config(from_=min_val, to=max_val)
+                self.min_slider.set(min_val)
+                self.max_slider.set(max_val)
+                
+                # Set the max_slider_limit variable and entry to the new max
+                self.max_slider_limit.set(max_val)
+                
+                # Update histogram and view
+                self.update_histogram()
+                self.view_single_map()
+                
+                # Update file label to show modification status
+                self.update_file_label()
+                
+                # Ask user if they want to save the result
+                save_result = messagebox.askyesno("Save Result", 
+                                                "Expression applied successfully!\n\nWould you like to save the result to a file?")
+                
+                if save_result:
+                    self.save_math_result(result_mat, dialog.result)
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply expression:\n{str(e)}")
+
+    def save_math_result(self, result_matrix, expression):
+        """Save the math result to a file with automatic naming."""
+        if self.single_file_name is None:
+            # Fallback if no original filename
+            default_name = "math_result.xlsx"
+        else:
+            # Create filename with _math suffix
+            name_without_ext = os.path.splitext(self.single_file_name)[0]
+            default_name = f"{name_without_ext}_math.xlsx"
+        
+        # Ask user for save location with pre-filled name
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv")
+            ],
+            initialfile=default_name
+        )
+        
+        if save_path:
+            try:
+                if save_path.endswith('.xlsx'):
+                    # Save as Excel
+                    df = pd.DataFrame(result_matrix)
+                    df.to_excel(save_path, header=False, index=False)
+                elif save_path.endswith('.csv'):
+                    # Save as CSV
+                    df = pd.DataFrame(result_matrix)
+                    df.to_csv(save_path, header=False, index=False)
+                
+                messagebox.showinfo("Saved", 
+                                  f"Math result saved successfully!\n\n"
+                                  f"File: {os.path.basename(save_path)}\n"
+                                  f"Expression: {expression}\n"
+                                  f"Matrix shape: {result_matrix.shape}")
+                
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save the result:\n{str(e)}")
+
+    def update_file_label(self):
+        """Update the file label to show loaded file and math status."""
+        if self.single_file_name is not None:
+            self.single_file_label.config(text=f"Loaded file: {self.single_file_name} (modified)")
+        else:
+            self.single_file_label.config(text="Loaded file: None")
+
+    # --- End Math Expression Functionality ---
+
+    # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
     def build_rgb_tab(self):
         control_frame = tk.Frame(self.rgb_tab, padx=10, pady=10)
