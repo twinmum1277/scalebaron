@@ -649,7 +649,6 @@ class MuadDataViewer:
         elif colorbar_exists and colorbar_needed:
             # Update existing colorbar without recreating it
             self._single_colorbar.update_normal(im)
-            self._single_colorbar.draw()
         
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
