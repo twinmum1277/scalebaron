@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Muad'Data v17 - Fully Functional Element Viewer + RGB Overlay Tabs
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox, colorchooser
