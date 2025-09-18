@@ -17,6 +17,7 @@ import math
 import glob
 import re
 import tempfile
+import time
 from PIL import Image, ImageTk
 import shutil
 import pandas as pd
@@ -53,6 +54,10 @@ class CompositeApp:
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
+        
+        # Set a reasonable window size for the two-panel layout
+        master.geometry("1200x800")
+        master.minsize(800, 600)
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -206,6 +211,15 @@ class CompositeApp:
 
     def on_resize(self, event):
         if hasattr(self, 'preview_image'):
+            # Only update if the resize is significant enough to avoid excessive updates
+            if hasattr(self, '_last_resize_time'):
+                current_time = time.time()
+                if current_time - self._last_resize_time < 0.1:  # Throttle to max 10 updates per second
+                    return
+                self._last_resize_time = current_time
+            else:
+                self._last_resize_time = time.time()
+            
             self.update_preview_image()
 
     def log_print(self, message):
@@ -593,7 +607,13 @@ class CompositeApp:
                 plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             plt.close(fig)
             
+            self.log_print(f"Preview image saved to temporary file: {tmp_file.name}")
             self.preview_image = Image.open(tmp_file.name)
+            self.log_print(f"Preview image loaded: {self.preview_image.size}")
+            
+            # Force GUI update and layout before trying to display preview
+            self.master.update_idletasks()
+            self.preview_container.update_idletasks()
             self.update_preview_image()
             
             self.preview_file = tmp_file.name
@@ -619,7 +639,24 @@ class CompositeApp:
             container_width = self.preview_container.winfo_width()
             container_height = self.preview_container.winfo_height()
             
+            # Check if container has valid dimensions
+            if container_width <= 0 or container_height <= 0:
+                # If container isn't ready, use a size that matches the window layout
+                self.log_print("Preview container not ready, using default size...")
+                container_width = 900  # Most of the right side of 1200px window
+                container_height = 700  # Most of the 800px window height
+                # Schedule a retry after the GUI has had time to render
+                self.master.after(100, self.update_preview_image)
+                # Also try again after a longer delay to ensure container is fully ready
+                self.master.after(500, self.update_preview_image)
+            
             img_width, img_height = self.preview_image.size
+            
+            # Check if image has valid dimensions
+            if img_width <= 0 or img_height <= 0:
+                self.log_print("Warning: Invalid image dimensions")
+                return
+            
             aspect_ratio = img_width / img_height
             
             if container_width / container_height > aspect_ratio:
@@ -629,11 +666,40 @@ class CompositeApp:
                 new_width = container_width
                 new_height = int(new_width / aspect_ratio)
             
-            resized_image = self.preview_image.resize((new_width, new_height), Image.LANCZOS)
-            tk_image = ImageTk.PhotoImage(resized_image)
+            # Ensure dimensions are positive and reasonable
+            if new_width <= 0 or new_height <= 0:
+                self.log_print("Warning: Calculated dimensions are invalid")
+                return
             
-            self.preview_label.config(image=tk_image)
-            self.preview_label.image = tk_image  # Keep a reference to prevent garbage collection
+            # Limit maximum dimensions to prevent memory issues, but allow larger previews
+            max_dimension = 3000
+            if new_width > max_dimension or new_height > max_dimension:
+                if new_width > new_height:
+                    new_width = max_dimension
+                    new_height = int(new_width / aspect_ratio)
+                else:
+                    new_height = max_dimension
+                    new_width = int(new_height * aspect_ratio)
+            
+            # Ensure minimum size for visibility
+            min_dimension = 200
+            if new_width < min_dimension:
+                new_width = min_dimension
+                new_height = int(new_width / aspect_ratio)
+            if new_height < min_dimension:
+                new_height = min_dimension
+                new_width = int(new_height * aspect_ratio)
+            
+            try:
+                resized_image = self.preview_image.resize((new_width, new_height), Image.LANCZOS)
+                tk_image = ImageTk.PhotoImage(resized_image)
+                
+                self.preview_label.config(image=tk_image)
+                self.preview_label.image = tk_image  # Keep a reference to prevent garbage collection
+                self.log_print(f"Preview image displayed ({new_width}x{new_height})")
+            except Exception as e:
+                # Log the error but don't crash the application
+                self.log_print(f"Warning: Failed to resize preview image: {e}")
 
 def main():
     root = tk.Tk()
