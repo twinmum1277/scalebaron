@@ -635,34 +635,31 @@ class CompositeApp:
             container_width = self.preview_container.winfo_width()
             container_height = self.preview_container.winfo_height()
             
-            # Check if container has valid dimensions
+            # Only handle zero dimensions (the crash case), otherwise use original simple logic
             if container_width <= 0 or container_height <= 0:
-                # If container isn't ready, get the actual window size and use that
-                self.log_print("Preview container not ready, getting window dimensions...")
+                # Get window dimensions as fallback - but be more aggressive about using them
                 window_width = self.master.winfo_width()
                 window_height = self.master.winfo_height()
                 
-                # Use the actual window dimensions, accounting for the control panel on the left
                 if window_width > 0 and window_height > 0:
-                    container_width = max(400, window_width - 300)  # Leave space for control panel
-                    container_height = max(300, window_height - 100)  # Leave space for window chrome
+                    # Use most of the window space, like the original would have
+                    container_width = window_width - 200  # Minimal space for control panel
+                    container_height = window_height - 50  # Minimal space for window chrome
                 else:
-                    # Fallback to reasonable defaults if window isn't ready either
-                    container_width = 600
-                    container_height = 500
+                    # Only use fallback if window isn't ready either
+                    container_width = 800
+                    container_height = 600
                 
-                # Schedule a retry after the GUI has had time to render
-                self.master.after(100, self.update_preview_image)
-                # Also try again after a longer delay to ensure container is fully ready
-                self.master.after(500, self.update_preview_image)
+                # Schedule one retry to get proper container dimensions
+                self.master.after(200, self.update_preview_image)
             
             img_width, img_height = self.preview_image.size
             
-            # Check if image has valid dimensions
+            # Basic safety check for image dimensions
             if img_width <= 0 or img_height <= 0:
-                self.log_print("Warning: Invalid image dimensions")
                 return
             
+            # Original simple aspect ratio logic
             aspect_ratio = img_width / img_height
             
             if container_width / container_height > aspect_ratio:
@@ -672,29 +669,9 @@ class CompositeApp:
                 new_width = container_width
                 new_height = int(new_width / aspect_ratio)
             
-            # Ensure dimensions are positive and reasonable
+            # Basic safety checks
             if new_width <= 0 or new_height <= 0:
-                self.log_print("Warning: Calculated dimensions are invalid")
                 return
-            
-            # Limit maximum dimensions to prevent memory issues, but allow larger previews
-            max_dimension = 3000
-            if new_width > max_dimension or new_height > max_dimension:
-                if new_width > new_height:
-                    new_width = max_dimension
-                    new_height = int(new_width / aspect_ratio)
-                else:
-                    new_height = max_dimension
-                    new_width = int(new_height * aspect_ratio)
-            
-            # Ensure minimum size for visibility
-            min_dimension = 200
-            if new_width < min_dimension:
-                new_width = min_dimension
-                new_height = int(new_width / aspect_ratio)
-            if new_height < min_dimension:
-                new_height = min_dimension
-                new_width = int(new_height * aspect_ratio)
             
             try:
                 resized_image = self.preview_image.resize((new_width, new_height), Image.LANCZOS)
@@ -702,7 +679,6 @@ class CompositeApp:
                 
                 self.preview_label.config(image=tk_image)
                 self.preview_label.image = tk_image  # Keep a reference to prevent garbage collection
-                self.log_print(f"Preview image displayed ({new_width}x{new_height})")
             except Exception as e:
                 # Log the error but don't crash the application
                 self.log_print(f"Warning: Failed to resize preview image: {e}")
