@@ -54,10 +54,6 @@ class CompositeApp:
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
-        
-        # Set a reasonable window size for the two-panel layout
-        master.geometry("1200x800")
-        master.minsize(800, 600)
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -641,10 +637,20 @@ class CompositeApp:
             
             # Check if container has valid dimensions
             if container_width <= 0 or container_height <= 0:
-                # If container isn't ready, use a size that matches the window layout
-                self.log_print("Preview container not ready, using default size...")
-                container_width = 900  # Most of the right side of 1200px window
-                container_height = 700  # Most of the 800px window height
+                # If container isn't ready, get the actual window size and use that
+                self.log_print("Preview container not ready, getting window dimensions...")
+                window_width = self.master.winfo_width()
+                window_height = self.master.winfo_height()
+                
+                # Use the actual window dimensions, accounting for the control panel on the left
+                if window_width > 0 and window_height > 0:
+                    container_width = max(400, window_width - 300)  # Leave space for control panel
+                    container_height = max(300, window_height - 100)  # Leave space for window chrome
+                else:
+                    # Fallback to reasonable defaults if window isn't ready either
+                    container_width = 600
+                    container_height = 500
+                
                 # Schedule a retry after the GUI has had time to render
                 self.master.after(100, self.update_preview_image)
                 # Also try again after a longer delay to ensure container is fully ready
