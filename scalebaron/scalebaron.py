@@ -385,9 +385,20 @@ class CompositeApp:
 
     def preview_composite(self):
         self.generate_composite(preview=True)
+        # Track which element was last previewed for safety validation
+        self._last_previewed_element = self.element.get()
 
     def save_composite(self):
         if self.preview_file:
+            # Additional safety: Warn user if they're saving a preview that might be from a different element
+            if not hasattr(self, '_last_previewed_element') or self._last_previewed_element != self.element.get():
+                result = messagebox.askyesno("Potential Misidentification Warning", 
+                    f"Warning: The preview image may be from a different element than the currently selected '{self.element.get()}'. "
+                    f"Do you want to proceed with saving? (It's recommended to generate a new preview first.)")
+                if not result:
+                    self.log_print("Save cancelled by user due to potential misidentification.")
+                    return
+            
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             shutil.move(self.preview_file, out_path)
@@ -514,6 +525,23 @@ class CompositeApp:
         cbar.ax.yaxis.set_tick_params(color=text_color)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
+        
+        # Add element label above the colorbar to prevent misidentification
+        element_name = self.element.get()
+        # Determine units from the loaded files
+        units = "ppm"  # Default
+        for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
+            if "_ppm_" in file:
+                units = "ppm"
+                break
+            elif "_CPS_" in file:
+                units = "CPS"
+                break
+        
+        # Add element label with contrasting color
+        element_text = f"{element_name} ({units})"
+        cbar.ax.text(0.5, 1.15, element_text, transform=cbar.ax.transAxes, 
+                    ha='center', va='bottom', color=text_color, fontsize=12, fontweight='bold')
 
         # Add scale bar (fixed calculation)
         max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
@@ -591,6 +619,22 @@ class CompositeApp:
         export_cbar.ax.yaxis.set_tick_params(color=text_color)
         export_cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
+        
+        # Add element label to standalone colorbar as well
+        element_name = self.element.get()
+        # Determine units from the loaded files
+        units = "ppm"  # Default
+        for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
+            if "_ppm_" in file:
+                units = "ppm"
+                break
+            elif "_CPS_" in file:
+                units = "CPS"
+                break
+        
+        element_text = f"{element_name} ({units})"
+        export_cbar.ax.text(0.5, 1.15, element_text, transform=export_cbar.ax.transAxes, 
+                           ha='center', va='bottom', color=text_color, fontsize=12, fontweight='bold')
 
         # Save
         colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
