@@ -151,11 +151,12 @@ class CompositeApp:
 
         # Step 2: Preview
         ttk.Label(button_frame, text="Step 2:", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
-        ttk.Button(button_frame, text="Preview Composite", command=self.preview_composite).grid(row=3, column=0, padx=5, pady=(0, 10), sticky="ew")
+        ttk.Button(button_frame, text="Preview Composite", command=self.preview_composite).grid(row=3, column=0, padx=5, pady=(0, 5), sticky="ew")
+        ttk.Button(button_frame, text="Add Element Label", command=self.add_element_label).grid(row=4, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         # Step 3: Export
-        ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
-        ttk.Button(button_frame, text="Save Composite", command=self.save_composite).grid(row=5, column=0, padx=5, pady=(0, 10), sticky="ew")
+        ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=5, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Button(button_frame, text="Save Composite", command=self.save_composite).grid(row=6, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         ttk.Label(control_frame, text="Progress:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
 
@@ -525,23 +526,6 @@ class CompositeApp:
         cbar.ax.yaxis.set_tick_params(color=text_color)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
-        
-        # Add element label above the colorbar to prevent misidentification
-        element_name = self.element.get()
-        # Determine units from the loaded files
-        units = "ppm"  # Default
-        for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
-            if "_ppm_" in file:
-                units = "ppm"
-                break
-            elif "_CPS_" in file:
-                units = "CPS"
-                break
-        
-        # Add element label with contrasting color
-        element_text = f"{element_name} ({units})"
-        cbar.ax.text(0.5, 1.15, element_text, transform=cbar.ax.transAxes, 
-                    ha='center', va='bottom', color=text_color, fontsize=12, fontweight='bold')
 
         # Add scale bar (fixed calculation)
         max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
@@ -619,22 +603,6 @@ class CompositeApp:
         export_cbar.ax.yaxis.set_tick_params(color=text_color)
         export_cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
-        
-        # Add element label to standalone colorbar as well
-        element_name = self.element.get()
-        # Determine units from the loaded files
-        units = "ppm"  # Default
-        for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
-            if "_ppm_" in file:
-                units = "ppm"
-                break
-            elif "_CPS_" in file:
-                units = "CPS"
-                break
-        
-        element_text = f"{element_name} ({units})"
-        export_cbar.ax.text(0.5, 1.15, element_text, transform=export_cbar.ax.transAxes, 
-                           ha='center', va='bottom', color=text_color, fontsize=12, fontweight='bold')
 
         # Save
         colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
@@ -679,8 +647,8 @@ class CompositeApp:
             container_width = self.preview_container.winfo_width()
             container_height = self.preview_container.winfo_height()
             
-            # Only handle zero dimensions (the crash case), otherwise use original simple logic
-            if container_width <= 0 or container_height <= 0:
+            # Handle zero or very small dimensions (the crash case)
+            if container_width <= 10 or container_height <= 10:
                 # Get window dimensions as fallback - but be more aggressive about using them
                 window_width = self.master.winfo_width()
                 window_height = self.master.winfo_height()
@@ -726,6 +694,80 @@ class CompositeApp:
             except Exception as e:
                 # Log the error but don't crash the application
                 self.log_print(f"Warning: Failed to resize preview image: {e}")
+
+    def add_element_label(self):
+        """Add element label to the current preview image using PIL."""
+        if not hasattr(self, 'preview_image'):
+            messagebox.showwarning("No Preview", "Please generate a preview first.")
+            return
+        
+        try:
+            self.log_print("Adding element label...")
+            
+            # Get element name and units
+            element_name = self.element.get()
+            units = "ppm"  # Default
+            for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
+                if "_ppm_" in file:
+                    units = "ppm"
+                    break
+                elif "_CPS_" in file:
+                    units = "CPS"
+                    break
+            
+            self.log_print("Creating image copy...")
+            # Create a copy of the preview image to work with
+            labeled_image = self.preview_image.copy()
+            
+            # Get image dimensions
+            img_width, img_height = labeled_image.size
+            self.log_print(f"Processing image: {img_width}x{img_height}")
+            
+            # Create a drawing context
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(labeled_image)
+            self.log_print("Setting up font...")
+            
+            # Try to use a nice font, fallback to default if not available
+            try:
+                # Larger font size for element label - make it prominent
+                font_size = max(32, img_width // 30)  # Larger than matrix labels
+                font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
+            except:
+                try:
+                    font = ImageFont.truetype("arialbd.ttf", font_size)  # Arial Bold
+                except:
+                    try:
+                        font = ImageFont.truetype("arial.ttf", font_size)
+                    except:
+                        font = ImageFont.load_default()
+            
+            # Prepare the text
+            element_text = f"{element_name} ({units})"
+            
+            # Get text dimensions
+            bbox = draw.textbbox((0, 0), element_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # Position text at bottom left corner with more padding
+            x = 50  # 50 pixels from left edge (increased from 20)
+            y = img_height - text_height - 50  # 50 pixels from bottom edge (increased from 20)
+            
+            self.log_print("Drawing label...")
+            # Draw the text in white (no background)
+            draw.text((x, y), element_text, fill=(255, 255, 255), font=font)
+            
+            self.log_print("Updating preview...")
+            # Update the preview image
+            self.preview_image = labeled_image
+            self.update_preview_image()
+            
+            self.log_print(f"✅ Added element label: {element_text}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add element label: {str(e)}")
+            self.log_print(f"Error adding element label: {str(e)}")
 
 def main():
     root = tk.Tk()
