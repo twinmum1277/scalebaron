@@ -87,18 +87,20 @@ class CompositeApp:
         preview_frame = ttk.Frame(self.master)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # Step 1. Select folders (stacked buttons + path labels)
-        ttk.Label(control_frame, text="Step 1. Select folders", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(5, 0))
+        # Step 1. Select folders (stacked buttons + path labels), centered
+        folders_group = ttk.Frame(control_frame)
+        folders_group.pack(pady=5)
+        ttk.Label(folders_group, text="Step 1. Select folders", style="Hint.TLabel").pack(pady=(5, 0))
 
-        # Input folder
-        ttk.Button(control_frame, text="Input", command=self.select_input_folder).pack(anchor="w", padx=5, pady=(4, 0))
-        self.input_folder_label = ttk.Label(control_frame, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
-        self.input_folder_label.pack(anchor="w", padx=5, pady=(2, 6))
+        # Input folder (centered)
+        ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(4, 0))
+        self.input_folder_label = ttk.Label(folders_group, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
+        self.input_folder_label.pack(pady=(2, 6))
 
-        # Output folder
-        ttk.Button(control_frame, text="Output", command=self.select_output_folder).pack(anchor="w", padx=5, pady=(0, 0))
-        self.output_folder_label = ttk.Label(control_frame, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
-        self.output_folder_label.pack(anchor="w", padx=5, pady=(2, 6))
+        # Output folder (centered)
+        ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 0))
+        self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
+        self.output_folder_label.pack(pady=(2, 6))
 
         # Control panel inside grid_frame
         grid_frame = ttk.Frame(control_frame)
@@ -156,16 +158,16 @@ class CompositeApp:
         button_frame.pack(pady=10)
 
         # Step 1: Summarize
-        ttk.Label(button_frame, text="Step 1: Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
+        ttk.Label(button_frame, text="Step 2: Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
         ttk.Button(button_frame, text="Summarize Data", command=self.load_data).grid(row=1, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         # Step 2: Preview
-        ttk.Label(button_frame, text="Step 2:", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
         ttk.Button(button_frame, text="Preview Composite", command=self.preview_composite).grid(row=3, column=0, padx=5, pady=(0, 5), sticky="ew")
         ttk.Button(button_frame, text="Add Element Label", command=self.add_element_label).grid(row=4, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         # Step 3: Export
-        ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=5, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="Step 4:", style="Hint.TLabel").grid(row=5, column=0, padx=5, pady=(0, 0), sticky="w")
         ttk.Button(button_frame, text="Save Composite", command=self.save_composite).grid(row=6, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         ttk.Label(control_frame, text="Progress:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
