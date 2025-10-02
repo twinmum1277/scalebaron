@@ -87,8 +87,18 @@ class CompositeApp:
         preview_frame = ttk.Frame(self.master)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-         # Select Input Folder at the top
-        ttk.Button(control_frame, text="Select Input Folder", command=self.select_input_folder).pack(pady=5)
+        # Step 1. Select folders (stacked buttons + path labels)
+        ttk.Label(control_frame, text="Step 1. Select folders", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(5, 0))
+
+        # Input folder
+        ttk.Button(control_frame, text="Input", command=self.select_input_folder).pack(anchor="w", padx=5, pady=(4, 0))
+        self.input_folder_label = ttk.Label(control_frame, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
+        self.input_folder_label.pack(anchor="w", padx=5, pady=(2, 6))
+
+        # Output folder
+        ttk.Button(control_frame, text="Output", command=self.select_output_folder).pack(anchor="w", padx=5, pady=(0, 0))
+        self.output_folder_label = ttk.Label(control_frame, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
+        self.output_folder_label.pack(anchor="w", padx=5, pady=(2, 6))
 
         # Control panel inside grid_frame
         grid_frame = ttk.Frame(control_frame)
@@ -175,22 +185,21 @@ class CompositeApp:
         self.preview_container.bind("<Configure>", self.on_resize)
 
     def select_input_folder(self):
-        folder_selected = filedialog.askdirectory()
+        folder_selected = filedialog.askdirectory(initialdir=self.input_dir or ".", title="Select Input Directory")
         if folder_selected:
             self.input_dir = folder_selected
             self.log_print(f"Input folder updated to: {self.input_dir}")
             self.update_element_dropdown()
+            if hasattr(self, 'input_folder_label'):
+                self.input_folder_label.config(text=f"Input: {self.input_dir}")
 
     def select_output_folder(self):
-        messagebox.showinfo("Directory Selection", "Select Output Directory for Histograms, Statistics, and Plots (Cancel to set default to ./OUTPUT)")
-
-        folder_selected = filedialog.askdirectory(initialdir=".", title="Select Output Directory (Cancel to set default to ./OUTPUT)")
+        folder_selected = filedialog.askdirectory(initialdir=self.output_dir, title="Select Output Directory")
         if folder_selected:
             self.output_dir = folder_selected
+            self.output_folder_label.config(text=f"Output: {self.output_dir}")
             self.log_print(f"Output folder updated to: {self.output_dir}")
-        else:
-            self.output_dir = "./OUTPUT"
-            self.log_print("Using default output folder: ./OUTPUT")
+        # If user cancels, keep the current output directory (no change)
 
     def update_element_dropdown(self):
         elements = set()
@@ -282,8 +291,9 @@ class CompositeApp:
         if not self.input_dir:
             messagebox.showerror("Error", "Please select an input folder first.")
             return
-
-        self.select_output_folder()
+        # Only prompt for output folder if not already selected
+        if not self.output_dir or not os.path.isdir(self.output_dir):
+            self.select_output_folder()
 
         self.log_print("\n🔍 Scanning INPUT folder...")
         element = self.element.get()
@@ -402,8 +412,19 @@ class CompositeApp:
             
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            shutil.move(self.preview_file, out_path)
-            self.log_print(f"✅ Saved composite to {out_path}")
+            
+            # Save the modified preview image (which includes element labels if added)
+            if hasattr(self, 'preview_image'):
+                self.preview_image.save(out_path, dpi=(300, 300))
+                self.log_print(f"✅ Saved composite with element labels to {out_path}")
+            else:
+                # Fallback to moving the original file if preview_image is not available
+                shutil.move(self.preview_file, out_path)
+                self.log_print(f"✅ Saved composite to {out_path}")
+            
+            # Clean up the temporary file
+            if os.path.exists(self.preview_file):
+                os.remove(self.preview_file)
             self.preview_file = None
         else:
             self.generate_composite(preview=False)
@@ -730,8 +751,8 @@ class CompositeApp:
             
             # Try to use a nice font, fallback to default if not available
             try:
-                # Larger font size for element label - make it prominent
-                font_size = max(32, img_width // 30)  # Larger than matrix labels
+                # Smaller font size for element label - less prominent
+                font_size = max(16, img_width // 50)  # Smaller than before
                 font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
             except:
                 try:
