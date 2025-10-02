@@ -157,17 +157,17 @@ class CompositeApp:
         button_frame = ttk.Frame(control_frame)
         button_frame.pack(pady=10)
 
-        # Step 1: Summarize
-        ttk.Label(button_frame, text="Step 2: Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
+        # Step 2. Calculate statistics
+        ttk.Label(button_frame, text="Step 2. Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
         ttk.Button(button_frame, text="Summarize Data", command=self.load_data).grid(row=1, column=0, padx=5, pady=(0, 10), sticky="ew")
 
-        # Step 2: Preview
-        ttk.Label(button_frame, text="Step 3:", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
+        # Step 3. Preview composite
+        ttk.Label(button_frame, text="Step 3. Preview composite", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
         ttk.Button(button_frame, text="Preview Composite", command=self.preview_composite).grid(row=3, column=0, padx=5, pady=(0, 5), sticky="ew")
         ttk.Button(button_frame, text="Add Element Label", command=self.add_element_label).grid(row=4, column=0, padx=5, pady=(0, 10), sticky="ew")
 
-        # Step 3: Export
-        ttk.Label(button_frame, text="Step 4:", style="Hint.TLabel").grid(row=5, column=0, padx=5, pady=(0, 0), sticky="w")
+        # Step 4. Save composite
+        ttk.Label(button_frame, text="Step 4. Save composite", style="Hint.TLabel").grid(row=5, column=0, padx=5, pady=(0, 0), sticky="w")
         ttk.Button(button_frame, text="Save Composite", command=self.save_composite).grid(row=6, column=0, padx=5, pady=(0, 10), sticky="ew")
 
         ttk.Label(control_frame, text="Progress:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
