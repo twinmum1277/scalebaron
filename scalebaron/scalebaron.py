@@ -94,13 +94,13 @@ class CompositeApp:
 
         # Input folder (centered)
         ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(4, 0))
-        self.input_folder_label = ttk.Label(folders_group, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
-        self.input_folder_label.pack(pady=(2, 6))
+        # self.input_folder_label = ttk.Label(folders_group, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
+        # self.input_folder_label.pack(pady=(2, 6))
 
         # Output folder (centered)
         ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 0))
-        self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
-        self.output_folder_label.pack(pady=(2, 6))
+        # self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
+        # self.output_folder_label.pack(pady=(2, 6))
 
         # Control panel inside grid_frame
         grid_frame = ttk.Frame(control_frame)
@@ -192,14 +192,14 @@ class CompositeApp:
             self.input_dir = folder_selected
             self.log_print(f"Input folder updated to: {self.input_dir}")
             self.update_element_dropdown()
-            if hasattr(self, 'input_folder_label'):
-                self.input_folder_label.config(text=f"Input: {self.input_dir}")
+            # if hasattr(self, 'input_folder_label'):
+                #self.input_folder_label.config(text=f"Input: {self.input_dir}")
 
     def select_output_folder(self):
         folder_selected = filedialog.askdirectory(initialdir=self.output_dir, title="Select Output Directory")
         if folder_selected:
             self.output_dir = folder_selected
-            self.output_folder_label.config(text=f"Output: {self.output_dir}")
+            # self.output_folder_label.config(text=f"Output: {self.output_dir}")
             self.log_print(f"Output folder updated to: {self.output_dir}")
         # If user cancels, keep the current output directory (no change)
 
@@ -358,6 +358,8 @@ class CompositeApp:
                     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                     plt.savefig(hist_path)
                     plt.close()
+                    # Log histogram save
+                    self.log_print(f"✅ Saved histogram for {sample} to {hist_path}")
 
         # Calculate scale factors and adjusted dimensions
         # max_physical_dim = max(max_physical_height, max_physical_width)
