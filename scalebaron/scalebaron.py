@@ -76,6 +76,7 @@ class CompositeApp:
         self.adjusted_dimensions = []  # List to store pixel size adjusted dimensions
         self.pixel_sizes_by_sample = {}
         self.scale_factors = {}  # New dictionary to store scale factors for each matrix
+        self.active_element = None  # New variable to store the active element
         style = ttk.Style()
         style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         self.setup_widgets()
@@ -238,7 +239,11 @@ class CompositeApp:
     def load_matrix_2d(self, path):
         wb = load_workbook(filename=path, read_only=True, data_only=True)
         ws = wb.active
-        return np.array([[cell if isinstance(cell, (int, float)) and cell >= 0 else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
+        arr = np.array([[cell if isinstance(cell, (int, float)) and cell >= 0 else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
+        # Indicate that the matrix file has been loaded
+        self.log_print(f"✅ Loaded matrix file: {os.path.basename(path)}")
+        self.master.update_idletasks()  # Flush the log before next file
+        return arr
 
     def import_custom_pixel_sizes(self):
         messagebox.showinfo("Load Custom Physical Pixel Size", "Select CSV file with custom pixel sizes (Cancel to generate template)")
@@ -354,7 +359,7 @@ class CompositeApp:
                     plt.title(f"Histogram for {sample}")
                     plt.xlabel("Value")
                     plt.ylabel("Frequency")
-                    hist_path = os.path.join(self.output_dir, self.element.get(), 'Histograms', f"{sample}_histogram.png")
+                    hist_path = os.path.join(self.output_dir, element, 'Histograms', f"{sample}_histogram.png")
                     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                     plt.savefig(hist_path)
                     plt.close()
@@ -381,7 +386,7 @@ class CompositeApp:
         assert self.reference_pixel_size is not None, "No reference pixel size found"
 
         self.log_print(f"✅ Loaded {len(self.matrices)} matrix files.")
-        self.log_print(f"Histograms saved in: {os.path.join(self.output_dir, self.element.get(), 'histograms')}")
+        self.log_print(f"Histograms saved in: {os.path.join(self.output_dir, element, 'histograms')}")
 
         # Save percentiles, IQR, and mean table
         percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
@@ -389,7 +394,7 @@ class CompositeApp:
         mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
         stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
         stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x) # Round Summary Statistics to 5 significant figures
-        stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
+        stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
         stats_df.to_csv(stats_path, index=False)
         self.log_print(f"✅ Saved statistics table to {stats_path}")
 
@@ -398,23 +403,26 @@ class CompositeApp:
         self.scale_max.set(round(overall_99th,3))
         self.log_print(f"Scale max set to {self.scale_max.get():.2f} based on overall 99th percentile")
 
+        # Update the active element after loading data
+        self.active_element = element
+
     def preview_composite(self):
         self.generate_composite(preview=True)
         # Track which element was last previewed for safety validation
-        self._last_previewed_element = self.element.get()
+        self._last_previewed_element = self.active_element
 
     def save_composite(self):
         if self.preview_file:
             # Additional safety: Warn user if they're saving a preview that might be from a different element
-            if not hasattr(self, '_last_previewed_element') or self._last_previewed_element != self.element.get():
+            if not hasattr(self, '_last_previewed_element') or self._last_previewed_element != self.active_element:
                 result = messagebox.askyesno("Potential Misidentification Warning", 
-                    f"Warning: The preview image may be from a different element than the currently selected '{self.element.get()}'. "
+                    f"Warning: The preview image may be from a different element than the currently selected '{self.active_element}'. "
                     f"Do you want to proceed with saving? (It's recommended to generate a new preview first.)")
                 if not result:
                     self.log_print("Save cancelled by user due to potential misidentification.")
                     return
             
-            out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
+            out_path = os.path.join(self.output_dir, self.active_element, f"{self.active_element}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             
             # Save the modified preview image (which includes element labels if added)
@@ -502,7 +510,7 @@ class CompositeApp:
             inset_ax.set_facecolor(bg_color)
 
             # Save individual subplot
-            subplot_path = os.path.join(self.output_dir, self.element.get(), 'subplots', f"{label}.png")
+            subplot_path = os.path.join(self.output_dir, self.active_element, 'subplots', f"{label}.png")
             os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
             
             # Create a new figure for the individual subplot
@@ -630,7 +638,7 @@ class CompositeApp:
         plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
 
         # Save
-        colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
+        colorbar_path = os.path.join(self.output_dir, self.active_element, f"{self.active_element}_colorbar.png")
         colorbar_fig.savefig(colorbar_path, dpi=300, bbox_inches='tight', transparent=True)
         plt.close(colorbar_fig)
         self.log_print(f"✅ Saved separate colorbar to {colorbar_path}")
@@ -652,7 +660,7 @@ class CompositeApp:
             self.preview_file = tmp_file.name
             self.log_print("Preview generated. Click 'Save' to keep this image.")
         else:
-            out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
+            out_path = os.path.join(self.output_dir, self.active_element, f"{self.active_element}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             plt.savefig(out_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             plt.close(fig)
@@ -663,7 +671,7 @@ class CompositeApp:
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
             mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
-            stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
+            stats_path = os.path.join(self.output_dir, self.active_element, f"{self.active_element}_statistics.csv")
             stats_df.to_csv(stats_path, index=False)
             self.log_print(f"✅ Saved statistics table to {stats_path}")
 
@@ -730,7 +738,7 @@ class CompositeApp:
             self.log_print("Adding element label...")
             
             # Get element name and units
-            element_name = self.element.get()
+            element_name = self.active_element
             units = "ppm"  # Default
             for file in glob.glob(os.path.join(self.input_dir, f"* {element_name}_* matrix.xlsx")):
                 if "_ppm_" in file:
