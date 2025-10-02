@@ -66,8 +66,8 @@ class CompositeApp:
         self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
 
         self.input_dir = None
-        self.output_dir = "./OUTPUT"
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_dir = None
+        # os.makedirs(self.output_dir, exist_ok=True)
 
         self.matrices = []
         self.labels = []
