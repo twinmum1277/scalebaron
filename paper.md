@@ -24,11 +24,11 @@ bibliography: paper.bib
 
 # Summary  
 
-Elemental imaging techniques (e.g., laser ablation inductively coupled plasma time of flight mass spectrometry (LA-ICP-TOF-MS) or synchrotron X-ray fluorescence (SXRF)) collect spatially resolved elemental data in the form of maps (matrix format files). Originating in geochemistry, these techniques have become more common in the biological sciences, where experiments involve between-sample comparisons and replication. The Biomedical National Elemental Imaging Resource (BNEIR) operates as a shared resource that enables users in the biomedical sciences to gain rapid access to elemental imaging, offering analysis via LA-ICP-TOF-MS. In general, elemental imaging software packages tend to work with a single multi-channel data file at a time, and have technique-specific functions. In our experience of operating a shared resource, where quality control and quantification are among resource services, users need intuitive stand-alone image manipulation software modules that show multiple maps on the same quantitative (parts per million, ppm or counts per second, CPS) and spatial scale, so they can quick assess their experimental results. 
+Elemental imaging techniques, e.g., laser ablation inductively coupled plasma time of flight mass spectrometry (LA-ICP-TOF-MS) or X-ray fluorescence microscopy (XFM), collect spatially resolved elemental data, consisting of multiple channels (or elements) and the coordinates (X and Y values) for each pixel. For interoperability, elemental imaging data is therefore reducible to matrix format data files. Originating in geochemistry, elemental imaging has become an important tool in the biological sciences, where experiments require between-sample comparisons and replication. The Biomedical National Elemental Imaging Resource (BNEIR) operates as a shared resource that enables users in the biomedical sciences to gain rapid access to elemental imaging, offering analysis via LA-ICP-TOF-MS. In general, elemental imaging software tends to work with a single multi-channel data file at a time, and has technique-specific functions for peak fitting, background correction and quantification to optimize the final data output. In our experience of operating an elemental imaging shared resource, where quality control and quantification are carried out by resource staff prior to releasing data, users need intuitive stand-alone image manipulation software modules that specifically allow them to show multiple maps on the same quantitative (parts per million, ppm or counts per second, CPS) and spatial scale, so they can quick assess their experimental results. 
 
 # Statement of Need
 
-There are many software applications for manipulating and visualizing LA-ICP-MS, SXRF, and XRF data [@Weiskirchen2019]. To our knowledge, only two - The MicroAnalysis Toolkit [@Webb2011] and HDIP from Teledyne can load multiple datasets for comparison, and those that do are loading complete multi-channel dataset. With each LA-ICP-TOF-MS data file in the GB range, this rapidly becomes impractical for biological experiments, where data sets can have up to 20 or more specimens for comparison. Additionally, loading fluorescence images for coregistration can triple file sizes, making whole experiments too computationally heavy for users to work with. Experiences at the Biomedical National Elemental Imaging Resource (BNEIR), an elemental imaging shared resource, uncovered a need for simple, *technique-independent* intuitive data visualization tools to compare multiple maps on the same abundance and spatial scale and to explore single imaging data files. 
+There are many software applications for manipulating and visualizing LA-ICP-MS, SXRF, and XRF data [@Weiskirchen2019]. To our knowledge, only two - The MicroAnalysis Toolkit [@Webb2011] and HDIP from Teledyne can load multiple datasets for comparison. With each LA-ICP-TOF-MS data file in the GB range, loading the entire multi-channel dataset rapidly becomes impractical for biological experiments that can have up to 20 or more specimens for comparison. Additionally, loading fluorescence images for coregistration can triple file sizes, making whole experiments too computationally heavy for users to work with. Experiences at the Biomedical National Elemental Imaging Resource (BNEIR), an elemental imaging shared resource, uncovered a need for simple, *technique-independent* intuitive data visualization tools to compare multiple maps on the same abundance and spatial scale and to explore single imaging data files. 
 
 **ScaleBarOn and Muad'Data** are lightweight, Python general user interfaces (GUIs) that work with Microsoft Excel matrix files exported from technique-specific software that were created in direct response to BNEIR user needs. 
 
@@ -55,11 +55,20 @@ Summary of Muad'Data functions:
 
 ScaleBarOn and Muad'Dada are not intended to replace sophisticated software packages needed to fit spectra, perform background correction, normalization or quantify elemental data from detector counts per second to parts per million, but rather to be user-friendly stand-alone composite and single image generator modules that work with final quantified data sets independent of elemental imaging technique. They are meant to bridge the knowledge gap that exists between users of advance elemental imaging techniques and those that operate and develop them.
 
+# Artificial Intelligence Use and Provenance Statement
+In developing ScaleBarOn and its GUI, we occasionally used large language models (LLMs, e.g., ChatGPT) as programming assistants. Their role was limited to:
+
+  •	Syntax help and boilerplate: generating small snippets of Python/Tkinter code (e.g., GUI layout scaffolding, file dialog setup) that were   then adapted and integrated manually.
+  •	Debugging assistance: interpreting error messages and suggesting corrections, which were verified and implemented by the authors.
+  •	Documentation and formatting: producing draft explanations or docstring templates, which were edited by the authors for accuracy and clarity.
+
+All scientific logic, algorithm design, data workflows, and domain-specific features (e.g., percentile scaling of elemental maps, pixel-size metadata handling, composite image layouts, and integration with matrix file structures) were conceived, implemented, and tested by the authors. We have validated and tested all code to ensure correctness, reproducibility, and maintainability. No AI-generated code was included without human review and adaptation.
+
 # Citations
 
 # Acknowledgements
 
-The Biomedical National Elemental Imaging Resource (BNEIR) is funded by the National Institute of General Medical Sciences grant # 1R24GM141194. We acknowledge the assistance of AI tools (e.g., ChatGPT) in drafting and refining documentation for this submission. All software and editorial decisions were made by the author.
+The Biomedical National Elemental Imaging Resource (BNEIR) is funded by the National Institute of General Medical Sciences grant # 1R24GM141194. 
 
 # Installation
 
