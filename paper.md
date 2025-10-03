@@ -91,3 +91,8 @@ To run ScaleBaron, call:
 ```bash
 scalebaron
 ```
+To run Muaddata, call:
+
+```bash
+muaddata
+```
