@@ -58,9 +58,9 @@ ScaleBarOn and Muad'Dada are not intended to replace sophisticated software pack
 # Artificial Intelligence Use and Provenance Statement
 In developing ScaleBarOn and its GUI, we occasionally used large language models (LLMs, e.g., ChatGPT) as programming assistants. Their role was limited to:
 
-  •	Syntax help and boilerplate: generating small snippets of Python/Tkinter code (e.g., GUI layout scaffolding, file dialog setup) that were   then adapted and integrated manually.
-  •	Debugging assistance: interpreting error messages and suggesting corrections, which were verified and implemented by the authors.
-  •	Documentation and formatting: producing draft explanations or docstring templates, which were edited by the authors for accuracy and clarity.
+- Syntax help and boilerplate: generating small snippets of Python/Tkinter code (e.g., GUI layout scaffolding, file dialog setup) that were   then adapted and integrated manually.
+- Debugging assistance: interpreting error messages and suggesting corrections, which were verified and implemented by the authors.
+- Documentation and formatting: producing draft explanations or docstring templates, which were edited by the authors for accuracy and clarity.
 
 All scientific logic, algorithm design, data workflows, and domain-specific features (e.g., percentile scaling of elemental maps, pixel-size metadata handling, composite image layouts, and integration with matrix file structures) were conceived, implemented, and tested by the authors. We have validated and tested all code to ensure correctness, reproducibility, and maintainability. No AI-generated code was included without human review and adaptation.
 
