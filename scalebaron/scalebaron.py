@@ -55,6 +55,20 @@ class CompositeApp:
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
         
+        # Set custom ScaleBaron icon
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), 'scalebaron_icon.png')
+            if os.path.exists(icon_path):
+                icon = tk.PhotoImage(file=icon_path)
+                master.iconphoto(True, icon)
+                # Keep a reference to prevent garbage collection
+                self.icon = icon
+                print("✅ ScaleBaron icon loaded successfully")
+            else:
+                print(f"⚠️ Icon file not found at {icon_path}")
+        except Exception as e:
+            print(f"⚠️ Could not load custom icon: {e}")
+        
         # Debug: Test if app is running updated code
         print("🔍 DEBUG: ScaleBaron app initialized with updated code")
 
