@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-# Muad'Data v17 - Fully Functional Element Viewer + RGB Overlay Tabs
+# Muad'Data v18 - Element Viewer + RGB Overlay + Zoom/Crop Feature
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox, colorchooser
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.widgets import RectangleSelector
 import os
 
 # --- Math Expression Dialog (lifted from prior version) ---
@@ -138,6 +139,13 @@ class MuadDataViewer:
         # Math expression state
         self.original_matrix = None  # For storing the original matrix before math ops
 
+        # Zoom/Crop state
+        self.zoom_active = False  # Whether zoom selection mode is active
+        self.rectangle_selector = None  # RectangleSelector widget
+        self.cropped_matrix = None  # Store the cropped matrix
+        self.crop_bounds = None  # Store crop bounds (x1, x2, y1, y2)
+        self.is_zoomed = False  # Whether we're currently viewing a zoomed region
+
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
         self.rgb_sliders = {}
@@ -243,6 +251,17 @@ class MuadDataViewer:
 
         # --- Math Expression Button ---
         tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="black").pack(fill=tk.X, pady=(10, 2))
+
+        # --- Zoom/Crop Buttons ---
+        tk.Label(control_frame, text="Zoom & Crop", font=("Arial", 13, "bold")).pack(pady=(10, 5))
+        self.zoom_button = tk.Button(control_frame, text="Select Region to Zoom", command=self.toggle_zoom_mode, font=("Arial", 13), bg="#2196F3", fg="white")
+        self.zoom_button.pack(fill=tk.X, pady=(0, 2))
+        
+        self.save_crop_button = tk.Button(control_frame, text="Save Cropped Matrix", command=self.save_cropped_matrix, font=("Arial", 13), state=tk.DISABLED)
+        self.save_crop_button.pack(fill=tk.X, pady=(0, 2))
+        
+        self.reset_zoom_button = tk.Button(control_frame, text="Reset to Full View", command=self.reset_zoom, font=("Arial", 13), state=tk.DISABLED)
+        self.reset_zoom_button.pack(fill=tk.X, pady=(0, 2))
 
         # Add a label at the bottom left to display loaded file info
         self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 13, "italic"), anchor="w", justify="left", wraplength=200)
@@ -470,11 +489,220 @@ class MuadDataViewer:
     def update_file_label(self):
         """Update the file label to show loaded file and math status."""
         if self.single_file_name is not None:
-            self.single_file_label.config(text=f"Loaded file: {self.single_file_name} (modified)")
+            status = ""
+            if self.is_zoomed:
+                status = " (zoomed)"
+            elif self.original_matrix is not None:
+                status = " (modified)"
+            self.single_file_label.config(text=f"Loaded file: {self.single_file_name}{status}")
         else:
             self.single_file_label.config(text="Loaded file: None")
 
     # --- End Math Expression Functionality ---
+
+    # --- Zoom/Crop Functionality ---
+    def toggle_zoom_mode(self):
+        """Toggle zoom selection mode on/off."""
+        if self.single_matrix is None:
+            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            return
+        
+        if not self.zoom_active:
+            # Activate zoom mode
+            self.zoom_active = True
+            self.zoom_button.config(text="Cancel Selection", bg="#FF5722")
+            
+            # Create rectangle selector with white edge color for visibility
+            self.rectangle_selector = RectangleSelector(
+                self.single_ax,
+                self.on_select,
+                useblit=True,
+                button=[1],  # Left mouse button
+                minspanx=5,
+                minspany=5,
+                spancoords='pixels',
+                interactive=False,
+                props=dict(facecolor='none', edgecolor='white', linewidth=2, linestyle='--')
+            )
+            
+            messagebox.showinfo("Zoom Mode", "Draw a rectangle on the image to select the region to zoom.\nClick and drag to select.")
+        else:
+            # Deactivate zoom mode
+            self.deactivate_zoom_mode()
+    
+    def deactivate_zoom_mode(self):
+        """Deactivate zoom selection mode."""
+        self.zoom_active = False
+        self.zoom_button.config(text="Select Region to Zoom", bg="#2196F3")
+        
+        if self.rectangle_selector is not None:
+            self.rectangle_selector.set_active(False)
+            self.rectangle_selector = None
+        
+        # Redraw to remove selection rectangle
+        self.view_single_map()
+    
+    def on_select(self, eclick, erelease):
+        """Callback when a rectangle selection is made."""
+        if not self.zoom_active:
+            return
+        
+        # Get the coordinates of the selection (in data coordinates)
+        x1, y1 = int(eclick.xdata), int(eclick.ydata)
+        x2, y2 = int(erelease.xdata), int(erelease.ydata)
+        
+        # Ensure coordinates are in the right order
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        
+        # Validate bounds
+        if x1 < 0 or y1 < 0 or x2 > self.single_matrix.shape[1] or y2 > self.single_matrix.shape[0]:
+            messagebox.showerror("Invalid Selection", "Selection is out of bounds. Please try again.")
+            return
+        
+        if x2 - x1 < 5 or y2 - y1 < 5:
+            messagebox.showwarning("Selection Too Small", "Please select a larger region.")
+            return
+        
+        # Store the crop bounds
+        self.crop_bounds = (x1, x2, y1, y2)
+        
+        # Deactivate zoom mode
+        self.deactivate_zoom_mode()
+        
+        # Ask user if they want to zoom to this region
+        result = messagebox.askyesno("Confirm Zoom", 
+                                    f"Zoom to selected region?\n\n"
+                                    f"Region: ({x1}, {y1}) to ({x2}, {y2})\n"
+                                    f"Size: {x2-x1} x {y2-y1} pixels")
+        
+        if result:
+            self.crop_to_selection()
+    
+    def crop_to_selection(self):
+        """Crop the matrix to the selected region and update display."""
+        if self.crop_bounds is None or self.single_matrix is None:
+            return
+        
+        x1, x2, y1, y2 = self.crop_bounds
+        
+        # Crop the matrix (note: matrix is [rows, cols] = [y, x])
+        self.cropped_matrix = self.single_matrix[y1:y2, x1:x2].copy()
+        
+        # Temporarily store the full matrix if not already stored
+        if not self.is_zoomed:
+            self.full_matrix_backup = self.single_matrix.copy()
+        
+        # Replace the current matrix with the cropped version
+        self.single_matrix = self.cropped_matrix
+        
+        # Update state
+        self.is_zoomed = True
+        
+        # Update min/max sliders for the new data range
+        min_val = np.nanmin(self.cropped_matrix)
+        max_val = np.nanmax(self.cropped_matrix)
+        self.single_min.set(min_val)
+        self.single_max.set(max_val)
+        self.min_slider.config(from_=min_val, to=max_val)
+        self.max_slider.config(from_=min_val, to=max_val)
+        self.min_slider.set(min_val)
+        self.max_slider.set(max_val)
+        self.max_slider_limit.set(round(max_val))
+        
+        # Enable save and reset buttons
+        self.save_crop_button.config(state=tk.NORMAL)
+        self.reset_zoom_button.config(state=tk.NORMAL)
+        
+        # Update display
+        self.update_histogram()
+        self.view_single_map()
+        self.update_file_label()
+        
+        messagebox.showinfo("Zoomed", f"Zoomed to region!\nNew matrix size: {self.cropped_matrix.shape}")
+    
+    def save_cropped_matrix(self):
+        """Save the cropped matrix to a file."""
+        if self.cropped_matrix is None:
+            messagebox.showwarning("No Cropped Data", "Please select and zoom to a region first.")
+            return
+        
+        # Generate default filename
+        if self.single_file_name is not None:
+            name_without_ext = os.path.splitext(self.single_file_name)[0]
+            x1, x2, y1, y2 = self.crop_bounds
+            default_name = f"{name_without_ext}_cropped_{x1}-{x2}_{y1}-{y2}.xlsx"
+        else:
+            default_name = "cropped_matrix.xlsx"
+        
+        # Ask user for save location
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv")
+            ],
+            initialfile=default_name
+        )
+        
+        if save_path:
+            try:
+                if save_path.endswith('.xlsx'):
+                    df = pd.DataFrame(self.cropped_matrix)
+                    df.to_excel(save_path, header=False, index=False)
+                elif save_path.endswith('.csv'):
+                    df = pd.DataFrame(self.cropped_matrix)
+                    df.to_csv(save_path, header=False, index=False)
+                
+                x1, x2, y1, y2 = self.crop_bounds
+                messagebox.showinfo("Saved", 
+                                  f"Cropped matrix saved successfully!\n\n"
+                                  f"File: {os.path.basename(save_path)}\n"
+                                  f"Region: ({x1}, {y1}) to ({x2}, {y2})\n"
+                                  f"Matrix shape: {self.cropped_matrix.shape}\n\n"
+                                  f"You can now import this into ScaleBaron!")
+                
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save cropped matrix:\n{str(e)}")
+    
+    def reset_zoom(self):
+        """Reset to the full matrix view."""
+        if not self.is_zoomed:
+            return
+        
+        # Restore the full matrix
+        if hasattr(self, 'full_matrix_backup'):
+            self.single_matrix = self.full_matrix_backup
+            delattr(self, 'full_matrix_backup')
+        
+        # Reset state
+        self.is_zoomed = False
+        self.cropped_matrix = None
+        self.crop_bounds = None
+        
+        # Update min/max sliders for the full data range
+        min_val = np.nanmin(self.single_matrix)
+        max_val = np.nanmax(self.single_matrix)
+        self.single_min.set(min_val)
+        self.single_max.set(max_val)
+        self.min_slider.config(from_=min_val, to=max_val)
+        self.max_slider.config(from_=min_val, to=max_val)
+        self.min_slider.set(min_val)
+        self.max_slider.set(max_val)
+        self.max_slider_limit.set(round(max_val))
+        
+        # Disable save and reset buttons
+        self.save_crop_button.config(state=tk.DISABLED)
+        self.reset_zoom_button.config(state=tk.DISABLED)
+        
+        # Update display
+        self.update_histogram()
+        self.view_single_map()
+        self.update_file_label()
+        
+        messagebox.showinfo("Reset", "Returned to full view.")
+    
+    # --- End Zoom/Crop Functionality ---
 
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
