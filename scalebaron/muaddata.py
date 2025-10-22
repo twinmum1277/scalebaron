@@ -161,6 +161,15 @@ class MuadDataViewer:
         self.rgb_colorbar_ax = None
         self.rgb_colorbar_canvas = None
 
+        # Correlation/Ratio Analysis state
+        self.correlation_elem1 = tk.StringVar(value='R')
+        self.correlation_elem2 = tk.StringVar(value='G')
+        self.ratio_matrix = None
+        self.correlation_coefficient = None
+        self.ratio_figure = None
+        self.ratio_ax = None
+        self.ratio_canvas = None
+
         # Tabs
         self.tabs = ttk.Notebook(self.root)
         self.tabs.pack(fill=tk.BOTH, expand=True)
@@ -254,7 +263,7 @@ class MuadDataViewer:
 
         # --- Zoom/Crop Buttons ---
         tk.Label(control_frame, text="Zoom & Crop", font=("Arial", 13, "bold")).pack(pady=(10, 5))
-        self.zoom_button = tk.Button(control_frame, text="Select Region to Zoom", command=self.toggle_zoom_mode, font=("Arial", 13), bg="#2196F3", fg="white")
+        self.zoom_button = tk.Button(control_frame, text="Select Region to Zoom", command=self.toggle_zoom_mode, font=("Arial", 13), bg="#2196F3", fg="black")
         self.zoom_button.pack(fill=tk.X, pady=(0, 2))
         
         self.save_crop_button = tk.Button(control_frame, text="Save Cropped Matrix", command=self.save_cropped_matrix, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
@@ -510,7 +519,7 @@ class MuadDataViewer:
         if not self.zoom_active:
             # Activate zoom mode
             self.zoom_active = True
-            self.zoom_button.config(text="Cancel Selection", bg="#FF5722")
+            self.zoom_button.config(text="Cancel Selection", bg="#FF5722", fg="black")
             
             # Create rectangle selector with white edge color for visibility
             self.rectangle_selector = RectangleSelector(
@@ -524,8 +533,6 @@ class MuadDataViewer:
                 interactive=False,
                 props=dict(facecolor='none', edgecolor='white', linewidth=1, linestyle='--')
             )
-            
-            messagebox.showinfo("Zoom Mode", "Draw a rectangle on the image to select the region to zoom.\nClick and drag to select.")
         else:
             # Deactivate zoom mode
             self.deactivate_zoom_mode()
@@ -533,7 +540,7 @@ class MuadDataViewer:
     def deactivate_zoom_mode(self):
         """Deactivate zoom selection mode."""
         self.zoom_active = False
-        self.zoom_button.config(text="Select Region to Zoom", bg="#2196F3")
+        self.zoom_button.config(text="Select Region to Zoom", bg="#2196F3", fg="black")
         
         if self.rectangle_selector is not None:
             self.rectangle_selector.set_active(False)
@@ -570,14 +577,8 @@ class MuadDataViewer:
         # Deactivate zoom mode
         self.deactivate_zoom_mode()
         
-        # Ask user if they want to zoom to this region
-        result = messagebox.askyesno("Confirm Zoom", 
-                                    f"Zoom to selected region?\n\n"
-                                    f"Region: ({x1}, {y1}) to ({x2}, {y2})\n"
-                                    f"Size: {x2-x1} x {y2-y1} pixels")
-        
-        if result:
-            self.crop_to_selection()
+        # Automatically zoom to the selected region
+        self.crop_to_selection()
     
     def crop_to_selection(self):
         """Crop the matrix to the selected region and update display."""
@@ -618,8 +619,6 @@ class MuadDataViewer:
         self.update_histogram()
         self.view_single_map()
         self.update_file_label()
-        
-        messagebox.showinfo("Zoomed", f"Zoomed to region!\nNew matrix size: {self.cropped_matrix.shape}")
     
     def save_cropped_matrix(self):
         """Save the cropped matrix to a file."""
@@ -699,8 +698,6 @@ class MuadDataViewer:
         self.update_histogram()
         self.view_single_map()
         self.update_file_label()
-        
-        messagebox.showinfo("Reset", "Returned to full view.")
     
     # --- End Zoom/Crop Functionality ---
 
@@ -746,6 +743,33 @@ class MuadDataViewer:
         tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save RGB Image", command=self.save_rgb_image, font=("Arial", 13)).pack(fill=tk.X)
+
+        # --- Correlation & Ratio Analysis Section ---
+        tk.Label(control_frame, text="Correlation & Ratio Analysis", font=("Arial", 13, "bold")).pack(pady=(15, 5))
+        
+        # Element 1 selection
+        tk.Label(control_frame, text="Element 1 (numerator):", font=("Arial", 11)).pack(anchor='w')
+        elem1_menu = ttk.Combobox(control_frame, textvariable=self.correlation_elem1, values=['R', 'G', 'B'], 
+                                  state='readonly', font=("Arial", 11), width=10)
+        elem1_menu.pack(fill=tk.X, pady=(0, 5))
+        
+        # Element 2 selection
+        tk.Label(control_frame, text="Element 2 (denominator):", font=("Arial", 11)).pack(anchor='w')
+        elem2_menu = ttk.Combobox(control_frame, textvariable=self.correlation_elem2, values=['R', 'G', 'B'], 
+                                  state='readonly', font=("Arial", 11), width=10)
+        elem2_menu.pack(fill=tk.X, pady=(0, 5))
+        
+        # Calculate button
+        tk.Button(control_frame, text="Calculate Ratio Map", command=self.calculate_ratio_map, 
+                  font=("Arial", 12, "bold"), bg="#9C27B0", fg="white").pack(fill=tk.X, pady=(5, 2))
+        
+        # Correlation coefficient display
+        self.correlation_label = tk.Label(control_frame, text="Pearson r: --", font=("Arial", 11, "italic"))
+        self.correlation_label.pack(pady=(2, 5))
+        
+        # Save ratio matrix button
+        tk.Button(control_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix, 
+                  font=("Arial", 12), fg="black").pack(fill=tk.X, pady=(0, 2))
 
         # Add responsive colorbar canvas for RGB overlay
         colorbar_frame = tk.Frame(display_frame, bg="black")
@@ -1075,9 +1099,194 @@ class MuadDataViewer:
         if out_path:
             self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
 
+    # --- Correlation & Ratio Analysis Functions ---
+    def calculate_ratio_map(self):
+        """Calculate the ratio map between two selected elements."""
+        elem1 = self.correlation_elem1.get()
+        elem2 = self.correlation_elem2.get()
+        
+        # Check if both elements are loaded
+        if self.rgb_data[elem1] is None:
+            messagebox.showwarning("Missing Data", f"Please load data for {elem1} channel first.")
+            return
+        if self.rgb_data[elem2] is None:
+            messagebox.showwarning("Missing Data", f"Please load data for {elem2} channel first.")
+            return
+        
+        # Check if trying to divide element by itself
+        if elem1 == elem2:
+            messagebox.showwarning("Invalid Selection", "Please select two different elements.")
+            return
+        
+        # Get the matrices
+        mat1 = self.rgb_data[elem1]
+        mat2 = self.rgb_data[elem2]
+        
+        # Check if matrices have the same shape
+        if mat1.shape != mat2.shape:
+            messagebox.showerror("Shape Mismatch", 
+                                f"Element matrices have different shapes:\n"
+                                f"{elem1}: {mat1.shape}\n{elem2}: {mat2.shape}\n"
+                                f"Cannot calculate ratio.")
+            return
+        
+        # Calculate ratio (handle division by zero)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratio = mat1 / mat2
+            # Set infinite values to NaN
+            ratio[np.isinf(ratio)] = np.nan
+        
+        self.ratio_matrix = ratio
+        
+        # Calculate Pearson correlation coefficient
+        # Flatten and remove NaN values for correlation
+        flat1 = mat1.flatten()
+        flat2 = mat2.flatten()
+        valid_mask = ~(np.isnan(flat1) | np.isnan(flat2) | (flat1 == 0) | (flat2 == 0))
+        
+        if np.sum(valid_mask) > 2:  # Need at least 2 points for correlation
+            from scipy.stats import pearsonr
+            r_value, p_value = pearsonr(flat1[valid_mask], flat2[valid_mask])
+            self.correlation_coefficient = r_value
+            self.correlation_label.config(text=f"Pearson r: {r_value:.4f} (p={p_value:.2e})")
+        else:
+            self.correlation_coefficient = None
+            self.correlation_label.config(text="Pearson r: insufficient data")
+        
+        # Get element names from labels
+        elem1_name = self.rgb_labels[elem1]['elem'].cget("text").replace("Loaded Element: ", "")
+        elem2_name = self.rgb_labels[elem2]['elem'].cget("text").replace("Loaded Element: ", "")
+        if elem1_name == "None":
+            elem1_name = elem1
+        if elem2_name == "None":
+            elem2_name = elem2
+        
+        # Display the ratio map in a new window
+        self.display_ratio_map(ratio, elem1_name, elem2_name)
+    
+    def display_ratio_map(self, ratio, elem1_name, elem2_name):
+        """Display the ratio map in a new window."""
+        # Create a new window
+        ratio_window = tk.Toplevel(self.root)
+        ratio_window.title(f"Ratio Map: {elem1_name} / {elem2_name}")
+        ratio_window.geometry("800x700")
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # Display ratio map with a diverging colormap
+        # Calculate sensible vmin/vmax (exclude extreme outliers)
+        valid_ratios = ratio[~np.isnan(ratio)]
+        if len(valid_ratios) > 0:
+            vmin = np.nanpercentile(ratio, 5)
+            vmax = np.nanpercentile(ratio, 95)
+        else:
+            vmin, vmax = 0, 1
+        
+        im = ax.imshow(ratio, cmap='RdYlBu_r', vmin=vmin, vmax=vmax)
+        ax.axis('off')
+        
+        # Add colorbar
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(f"{elem1_name} / {elem2_name}", fontfamily='Arial', fontsize=12)
+        cbar.ax.tick_params(labelsize=10)
+        for label in cbar.ax.get_yticklabels():
+            label.set_fontfamily('Arial')
+        
+        # Add title with correlation info
+        if self.correlation_coefficient is not None:
+            ax.set_title(f"Ratio Map: {elem1_name} / {elem2_name}\nPearson r = {self.correlation_coefficient:.4f}", 
+                        fontfamily='Arial', fontsize=14, pad=10)
+        else:
+            ax.set_title(f"Ratio Map: {elem1_name} / {elem2_name}", 
+                        fontfamily='Arial', fontsize=14, pad=10)
+        
+        fig.tight_layout()
+        
+        # Embed in tkinter window
+        canvas = FigureCanvasTkAgg(fig, master=ratio_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Add buttons at the bottom
+        button_frame = tk.Frame(ratio_window)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        
+        tk.Button(button_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix, 
+                  font=("Arial", 12), fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Save as PNG", 
+                  command=lambda: self.save_ratio_image(fig), 
+                  font=("Arial", 12), fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Close", command=ratio_window.destroy, 
+                  font=("Arial", 12), fg="black").pack(side=tk.RIGHT, padx=5)
+        
+        # Store references
+        self.ratio_figure = fig
+        self.ratio_ax = ax
+    
+    def save_ratio_matrix(self):
+        """Save the ratio matrix to an Excel or CSV file."""
+        if self.ratio_matrix is None:
+            messagebox.showwarning("No Ratio Data", "Please calculate a ratio map first.")
+            return
+        
+        # Get element names for filename
+        elem1 = self.correlation_elem1.get()
+        elem2 = self.correlation_elem2.get()
+        elem1_name = self.rgb_labels[elem1]['elem'].cget("text").replace("Loaded Element: ", "")
+        elem2_name = self.rgb_labels[elem2]['elem'].cget("text").replace("Loaded Element: ", "")
+        if elem1_name == "None":
+            elem1_name = elem1
+        if elem2_name == "None":
+            elem2_name = elem2
+        
+        # Generate default filename
+        default_name = f"{elem1_name}_over_{elem2_name}_ratio.xlsx"
+        
+        # Ask user for save location
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv")
+            ],
+            initialfile=default_name
+        )
+        
+        if save_path:
+            try:
+                if save_path.endswith('.xlsx'):
+                    df = pd.DataFrame(self.ratio_matrix)
+                    df.to_excel(save_path, header=False, index=False)
+                elif save_path.endswith('.csv'):
+                    df = pd.DataFrame(self.ratio_matrix)
+                    df.to_csv(save_path, header=False, index=False)
+                
+                corr_text = ""
+                if self.correlation_coefficient is not None:
+                    corr_text = f"\nPearson r = {self.correlation_coefficient:.4f}"
+                
+                messagebox.showinfo("Saved", 
+                                  f"Ratio matrix saved successfully!\n\n"
+                                  f"File: {os.path.basename(save_path)}\n"
+                                  f"Ratio: {elem1_name} / {elem2_name}\n"
+                                  f"Matrix shape: {self.ratio_matrix.shape}{corr_text}")
+                
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save ratio matrix:\n{str(e)}")
+    
+    def save_ratio_image(self, figure):
+        """Save the ratio map figure as a PNG."""
+        out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
+        if out_path:
+            figure.savefig(out_path, dpi=300, bbox_inches='tight')
+            messagebox.showinfo("Saved", f"Ratio map image saved to:\n{os.path.basename(out_path)}")
+    
+    # --- End Correlation & Ratio Analysis Functions ---
+
 def main():
     root = tk.Tk()
-    root.geometry("1100x700")
+    root.geometry("1100x850")
     app = MuadDataViewer(root)
     root.mainloop()
 
