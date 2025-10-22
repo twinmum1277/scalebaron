@@ -257,10 +257,10 @@ class MuadDataViewer:
         self.zoom_button = tk.Button(control_frame, text="Select Region to Zoom", command=self.toggle_zoom_mode, font=("Arial", 13), bg="#2196F3", fg="white")
         self.zoom_button.pack(fill=tk.X, pady=(0, 2))
         
-        self.save_crop_button = tk.Button(control_frame, text="Save Cropped Matrix", command=self.save_cropped_matrix, font=("Arial", 13), state=tk.DISABLED)
+        self.save_crop_button = tk.Button(control_frame, text="Save Cropped Matrix", command=self.save_cropped_matrix, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
         self.save_crop_button.pack(fill=tk.X, pady=(0, 2))
         
-        self.reset_zoom_button = tk.Button(control_frame, text="Reset to Full View", command=self.reset_zoom, font=("Arial", 13), state=tk.DISABLED)
+        self.reset_zoom_button = tk.Button(control_frame, text="Reset to Full View", command=self.reset_zoom, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
         self.reset_zoom_button.pack(fill=tk.X, pady=(0, 2))
 
         # Add a label at the bottom left to display loaded file info
@@ -522,7 +522,7 @@ class MuadDataViewer:
                 minspany=5,
                 spancoords='pixels',
                 interactive=False,
-                props=dict(facecolor='none', edgecolor='white', linewidth=2, linestyle='--')
+                props=dict(facecolor='none', edgecolor='white', linewidth=1, linestyle='--')
             )
             
             messagebox.showinfo("Zoom Mode", "Draw a rectangle on the image to select the region to zoom.\nClick and drag to select.")
