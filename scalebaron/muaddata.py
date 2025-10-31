@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.widgets import RectangleSelector
+from matplotlib.gridspec import GridSpec
 import os
 
 # --- Math Expression Dialog (lifted from prior version) ---
@@ -176,12 +177,290 @@ class MuadDataViewer:
 
         self.single_tab = tk.Frame(self.tabs)
         self.rgb_tab = tk.Frame(self.tabs)
+        self.zstack_tab = tk.Frame(self.tabs)
 
         self.tabs.add(self.single_tab, text="Element Viewer")
         self.tabs.add(self.rgb_tab, text="RGB Overlay")
+        self.tabs.add(self.zstack_tab, text="Z-Stack / Sum")
+
+        # Z-Stack state
+        self.zstack_slices = []  # list of numpy arrays
+        self.zstack_offsets = []  # list of (dy, dx) per slice
+        self.zstack_file_labels = []  # list of file base names
+        self.zstack_show_overlay = tk.BooleanVar(value=True)
+        self.zstack_auto_pad = tk.BooleanVar(value=True)
+        self.zstack_colormap = tk.StringVar(value='viridis')
+        self.zstack_min = tk.DoubleVar(value=0.0)
+        self.zstack_max = tk.DoubleVar(value=1.0)
+        self.zstack_nudge_step = tk.IntVar(value=1)
+        self.zstack_sum_matrix = None
+        self.zstack_figure = None
+        self.zstack_ax = None
+        self.zstack_canvas = None
 
         self.build_single_tab()
         self.build_rgb_tab()
+        self.build_zstack_tab()
+
+    def pad_slices_to_same_size(self, slices):
+        """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
+        if not slices:
+            return []
+        max_rows = max(s.shape[0] for s in slices)
+        max_cols = max(s.shape[1] for s in slices)
+        padded = []
+        for s in slices:
+            r, c = s.shape
+            if r == max_rows and c == max_cols:
+                padded.append(s)
+                continue
+            pad_rows = max_rows - r
+            pad_cols = max_cols - c
+            # Pad on the right and bottom with zeros
+            padded_s = np.pad(s, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
+            padded.append(padded_s)
+        return padded
+
+    def apply_offsets_to_slices(self, slices, offsets):
+        """Shift each slice by (dy, dx) using zero padding; keep same shape as input."""
+        if not slices:
+            return []
+        H, W = slices[0].shape
+        shifted = []
+        for s, (dy, dx) in zip(slices, offsets):
+            out = np.zeros_like(s)
+            # Compute source and destination bounds
+            src_y0 = max(0, -dy)
+            src_y1 = min(H, H - dy)
+            dst_y0 = max(0, dy)
+            dst_y1 = dst_y0 + (src_y1 - src_y0)
+
+            src_x0 = max(0, -dx)
+            src_x1 = min(W, W - dx)
+            dst_x0 = max(0, dx)
+            dst_x1 = dst_x0 + (src_x1 - src_x0)
+
+            if src_y1 > src_y0 and src_x1 > src_x0 and dst_y1 > dst_y0 and dst_x1 > dst_x0:
+                out[dst_y0:dst_y1, dst_x0:dst_x1] = s[src_y0:src_y1, src_x0:src_x1]
+            shifted.append(out)
+        return shifted
+
+    def build_zstack_tab(self):
+        control_frame = tk.Frame(self.zstack_tab, padx=10, pady=10)
+        control_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+        display_frame = tk.Frame(self.zstack_tab)
+        display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        tk.Button(control_frame, text="Add Slice", command=self.zstack_add_slice, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
+        tk.Button(control_frame, text="Clear Slices", command=self.zstack_clear_slices, font=("Arial", 13)).pack(fill=tk.X, pady=(0, 6))
+
+        self.zstack_listbox = tk.Listbox(control_frame, height=6)
+        self.zstack_listbox.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
+        self.zstack_listbox.bind('<<ListboxSelect>>', lambda e: self.update_zstack_offset_label())
+
+        # Offset controls
+        self.zstack_offset_label = tk.Label(control_frame, text="Offset (dy, dx): --, --", font=("Arial", 11, "italic"))
+        self.zstack_offset_label.pack(pady=(0, 6))
+
+        nudge_frame = tk.Frame(control_frame)
+        nudge_frame.pack(pady=(0, 8))
+        up_btn = tk.Button(nudge_frame, text="↑", width=4, command=lambda: self.zstack_nudge_selected( -1,  0))
+        lf_btn = tk.Button(nudge_frame, text="←", width=4, command=lambda: self.zstack_nudge_selected(  0, -1))
+        dn_btn = tk.Button(nudge_frame, text="↓", width=4, command=lambda: self.zstack_nudge_selected(  1,  0))
+        rt_btn = tk.Button(nudge_frame, text="→", width=4, command=lambda: self.zstack_nudge_selected(  0,  1))
+        up_btn.grid(row=0, column=1)
+        lf_btn.grid(row=1, column=0)
+        dn_btn.grid(row=1, column=1)
+        rt_btn.grid(row=1, column=2)
+
+        # Nudge step selector
+        step_frame = tk.Frame(control_frame)
+        step_frame.pack(pady=(0, 8), anchor='w')
+        tk.Label(step_frame, text="Nudge step (px):", font=("Arial", 11)).pack(side=tk.LEFT)
+        self.zstack_step_spin = tk.Spinbox(step_frame, from_=1, to=100, increment=1, width=5, textvariable=self.zstack_nudge_step)
+        self.zstack_step_spin.pack(side=tk.LEFT, padx=(6, 0))
+        # Quick buttons for common steps
+        tk.Button(step_frame, text="1", width=3, command=lambda: self.zstack_nudge_step.set(1)).pack(side=tk.LEFT, padx=(6, 0))
+        tk.Button(step_frame, text="5", width=3, command=lambda: self.zstack_nudge_step.set(5)).pack(side=tk.LEFT)
+        tk.Button(step_frame, text="10", width=3, command=lambda: self.zstack_nudge_step.set(10)).pack(side=tk.LEFT)
+
+        reset_frame = tk.Frame(control_frame)
+        reset_frame.pack(pady=(0, 10))
+        tk.Button(reset_frame, text="Reset Selected", command=self.zstack_reset_selected_offset).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(reset_frame, text="Reset All", command=self.zstack_reset_all_offsets).pack(side=tk.LEFT)
+
+        tk.Label(control_frame, text="Colormap", font=("Arial", 13)).pack()
+        zcmap_menu = ttk.Combobox(control_frame, textvariable=self.zstack_colormap, values=plt.colormaps(), font=("Arial", 13))
+        zcmap_menu.pack(fill=tk.X)
+
+        tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack(pady=(6, 0))
+        self.zmin_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_min, font=("Arial", 13))
+        self.zmin_slider.pack(fill=tk.X)
+        self.zmin_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
+
+        tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
+        self.zmax_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_max, font=("Arial", 13))
+        self.zmax_slider.pack(fill=tk.X)
+        self.zmax_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
+
+        tk.Checkbutton(control_frame, text="Auto-pad smaller to largest", variable=self.zstack_auto_pad, font=("Arial", 13)).pack(anchor='w', pady=(6, 0))
+        tk.Checkbutton(control_frame, text="Show overlay preview", variable=self.zstack_show_overlay, font=("Arial", 13)).pack(anchor='w')
+
+        tk.Button(control_frame, text="Preview Alignment", command=self.zstack_render_preview, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
+        tk.Button(control_frame, text="Sum Slices", command=self.zstack_sum_slices, font=("Arial", 13), bg="#4CAF50", fg="black").pack(fill=tk.X)
+        tk.Button(control_frame, text="Save Summed Matrix", command=self.zstack_save_sum, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 0))
+
+        self.zstack_figure, self.zstack_ax = plt.subplots()
+        self.zstack_ax.axis('off')
+        self.zstack_canvas = FigureCanvasTkAgg(self.zstack_figure, master=display_frame)
+        self.zstack_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def zstack_add_slice(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
+        if not path:
+            return
+        try:
+            df = pd.read_excel(path, header=None) if path.endswith('.xlsx') else pd.read_csv(path, header=None)
+            df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
+            mat = df.to_numpy()
+            self.zstack_slices.append(mat)
+            self.zstack_offsets.append((0, 0))
+            self.zstack_file_labels.append(os.path.basename(path))
+            self.zstack_listbox.insert(tk.END, f"{os.path.basename(path)}  {mat.shape}")
+            # Update sliders to data range
+            min_val = float(np.nanmin(mat)) if np.isfinite(np.nanmin(mat)) else 0.0
+            max_val = float(np.nanmax(mat)) if np.isfinite(np.nanmax(mat)) else 1.0
+            self.zstack_min.set(min_val)
+            self.zstack_max.set(max_val)
+            self.zmin_slider.config(from_=min_val, to=max_val)
+            self.zmax_slider.config(from_=min_val, to=max_val)
+            self.zmin_slider.set(min_val)
+            self.zmax_slider.set(max_val)
+            self.zstack_render_preview()
+            self.update_zstack_offset_label()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load slice:\n{e}")
+
+    def zstack_clear_slices(self):
+        self.zstack_slices = []
+        self.zstack_offsets = []
+        self.zstack_file_labels = []
+        self.zstack_listbox.delete(0, tk.END)
+        self.zstack_ax.clear()
+        self.zstack_ax.axis('off')
+        self.zstack_canvas.draw()
+
+    def update_zstack_offset_label(self):
+        try:
+            idxs = self.zstack_listbox.curselection()
+            if not idxs:
+                self.zstack_offset_label.config(text="Offset (dy, dx): --, --")
+                return
+            i = idxs[0]
+            dy, dx = self.zstack_offsets[i]
+            self.zstack_offset_label.config(text=f"Offset (dy, dx): {dy}, {dx}")
+        except Exception:
+            self.zstack_offset_label.config(text="Offset (dy, dx): --, --")
+
+    def zstack_nudge_selected(self, dy, dx):
+        idxs = self.zstack_listbox.curselection()
+        if not idxs:
+            return
+        i = idxs[0]
+        step = max(1, int(self.zstack_nudge_step.get()))
+        cur_dy, cur_dx = self.zstack_offsets[i]
+        self.zstack_offsets[i] = (cur_dy + dy * step, cur_dx + dx * step)
+        self.update_zstack_offset_label()
+        self.zstack_render_preview()
+
+    def zstack_reset_selected_offset(self):
+        idxs = self.zstack_listbox.curselection()
+        if not idxs:
+            return
+        i = idxs[0]
+        self.zstack_offsets[i] = (0, 0)
+        self.update_zstack_offset_label()
+        self.zstack_render_preview()
+
+    def zstack_reset_all_offsets(self):
+        self.zstack_offsets = [(0, 0) for _ in self.zstack_offsets]
+        self.update_zstack_offset_label()
+        self.zstack_render_preview()
+
+    def zstack_render_preview(self):
+        if not self.zstack_slices:
+            return
+        slices = [np.array(s, dtype=float) for s in self.zstack_slices]
+        for s in slices:
+            s[np.isnan(s)] = 0
+        if self.zstack_auto_pad.get():
+            slices = self.pad_slices_to_same_size(slices)
+        # Apply offsets (ensure list matches length)
+        if len(self.zstack_offsets) == len(slices):
+            slices = self.apply_offsets_to_slices(slices, self.zstack_offsets)
+        self.zstack_ax.clear()
+        self.zstack_ax.axis('off')
+        vmin = self.zstack_min.get()
+        vmax = self.zstack_max.get()
+        if self.zstack_show_overlay.get():
+            # Overlay with decreasing alpha so all are visible
+            num = len(slices)
+            base_alpha = 0.6 if num <= 2 else max(0.25, 0.8/num)
+            for idx, s in enumerate(slices):
+                alpha = base_alpha
+                im = self.zstack_ax.imshow(s, cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax, alpha=alpha)
+        else:
+            # Show first slice only
+            im = self.zstack_ax.imshow(slices[0], cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax)
+        self.zstack_figure.tight_layout()
+        self.zstack_canvas.draw()
+
+    def zstack_sum_slices(self):
+        if not self.zstack_slices:
+            messagebox.showwarning("No Slices", "Please add at least one slice.")
+            return
+        slices = [np.array(s, dtype=float) for s in self.zstack_slices]
+        for s in slices:
+            s[np.isnan(s)] = 0
+        if self.zstack_auto_pad.get():
+            slices = self.pad_slices_to_same_size(slices)
+        if len(self.zstack_offsets) == len(slices):
+            slices = self.apply_offsets_to_slices(slices, self.zstack_offsets)
+        # Sum pixel-wise
+        total = np.zeros_like(slices[0], dtype=float)
+        for s in slices:
+            total += s
+        self.zstack_sum_matrix = total
+        # Render summed
+        self.zstack_ax.clear()
+        self.zstack_ax.axis('off')
+        im = self.zstack_ax.imshow(total, cmap=self.zstack_colormap.get(), vmin=self.zstack_min.get(), vmax=self.zstack_max.get())
+        cbar = self.zstack_figure.colorbar(im, ax=self.zstack_ax, fraction=0.046, pad=0.04, shrink=0.4, label="Sum")
+        cbar.set_label("Sum", fontfamily='Arial', fontsize=14)
+        cbar.ax.tick_params(labelsize=12)
+        self.zstack_figure.tight_layout()
+        self.zstack_canvas.draw()
+        messagebox.showinfo("Done", f"Summed {len(slices)} slice(s).")
+
+    def zstack_save_sum(self):
+        if self.zstack_sum_matrix is None:
+            messagebox.showwarning("Nothing to Save", "Please sum slices first.")
+            return
+        out_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv"), ("Excel", "*.xlsx")])
+        if not out_path:
+            return
+        try:
+            if out_path.endswith('.xlsx'):
+                # Save to Excel via pandas
+                df = pd.DataFrame(self.zstack_sum_matrix)
+                df.to_excel(out_path, header=False, index=False)
+            else:
+                # Default to CSV
+                np.savetxt(out_path, self.zstack_sum_matrix, delimiter=",", fmt='%g')
+            messagebox.showinfo("Saved", f"Saved summed matrix to: {out_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save summed matrix:\n{e}")
 
     def build_single_tab(self):
         control_frame = tk.Frame(self.single_tab, padx=10, pady=10)
@@ -891,10 +1170,10 @@ class MuadDataViewer:
             update_layout = True
         elif not colorbar_exists and colorbar_needed:
             # Create colorbar if it doesn't exist but should
-            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="PPM")
-            self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=12)
+            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, shrink=0.4, label="PPM")
+            self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=14)
             # Set tick labels to use Arial font
-            self._single_colorbar.ax.tick_params(labelsize=10)
+            self._single_colorbar.ax.tick_params(labelsize=12)
             for label in self._single_colorbar.ax.get_yticklabels():
                 label.set_fontfamily('Arial')
             # Layout needs to be updated when colorbar is created
@@ -902,6 +1181,14 @@ class MuadDataViewer:
         elif colorbar_exists and colorbar_needed:
             # Update existing colorbar without recreating it
             self._single_colorbar.update_normal(im)
+            # Ensure fonts are updated
+            try:
+                self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=14)
+                self._single_colorbar.ax.tick_params(labelsize=12)
+                for label in self._single_colorbar.ax.get_yticklabels():
+                    label.set_fontfamily('Arial')
+            except Exception:
+                pass
         
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
@@ -1097,7 +1384,119 @@ class MuadDataViewer:
             return
         out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if out_path:
-            self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
+            # Check if we should save with or without colorbar
+            save_with_colorbar = messagebox.askyesno(
+                "Save Options",
+                "Would you like to save the image with the colorbar?\n\n"
+                "Yes: Save RGB image + colorbar combined\n"
+                "No: Save RGB image only (no colorbar)"
+            )
+            
+            if save_with_colorbar:
+                # Create a combined figure with RGB image and colorbar
+                # Get the RGB image data from the current figure
+                img_array = self.rgb_ax.get_images()[0].get_array()
+                extent = self.rgb_ax.get_images()[0].get_extent()
+                
+                # Create new figure with proper proportions for colorbar
+                fig = plt.figure(figsize=(8, 8))
+                gs = GridSpec(2, 1, figure=fig, height_ratios=[10, 1], hspace=0.05)
+                
+                # Main RGB plot (larger)
+                ax_main = fig.add_subplot(gs[0])
+                ax_main.imshow(img_array, extent=extent, aspect='auto')
+                ax_main.axis('off')
+                
+                # Colorbar at bottom (smaller)
+                ax_cbar = fig.add_subplot(gs[1])
+                
+                # Determine which channels are loaded and draw colorbar
+                loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
+                colors = [self.rgb_colors[ch] for ch in loaded]
+                labels = []
+                for ch in loaded:
+                    label = self.rgb_labels[ch]['elem'].cget("text")
+                    if label.startswith("Loaded Element: "):
+                        label = label[len("Loaded Element: "):]
+                    labels.append(label if label != "None" else ch)
+                
+                ax_cbar.axis('off')
+                
+                if len(loaded) == 3:
+                    # Draw triangle colorbar
+                    triangle = np.zeros((100, 200, 3), dtype=float)
+                    rgb_vals = []
+                    for c in colors:
+                        r = int(c[1:3], 16) / 255.0
+                        g = int(c[3:5], 16) / 255.0
+                        b = int(c[5:7], 16) / 255.0
+                        rgb_vals.append([r, g, b])
+                    v0 = np.array([100, 10])
+                    v1 = np.array([190, 90])
+                    v2 = np.array([10, 90])
+                    for y in range(100):
+                        for x in range(200):
+                            p = np.array([x, y])
+                            denom = ((v1[1] - v2[1])*(v0[0] - v2[0]) + (v2[0] - v1[0])*(v0[1] - v2[1]))
+                            if denom == 0:
+                                continue
+                            l1 = ((v1[1] - v2[1])*(p[0] - v2[0]) + (v2[0] - v1[0])*(p[1] - v2[1])) / denom
+                            l2 = ((v2[1] - v0[1])*(p[0] - v2[0]) + (v0[0] - v2[0])*(p[1] - v2[1])) / denom
+                            l3 = 1 - l1 - l2
+                            if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
+                                color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
+                                triangle[y, x, :] = color
+                    ax_cbar.imshow(triangle, origin='upper', extent=[0, 1, 0, 1])
+                    ax_cbar.plot([v0[0]/200, v1[0]/200], [1-v0[1]/100, 1-v1[1]/100], color='k', lw=1)
+                    ax_cbar.plot([v1[0]/200, v2[0]/200], [1-v1[1]/100, 1-v2[1]/100], color='k', lw=1)
+                    ax_cbar.plot([v2[0]/200, v0[0]/200], [1-v2[1]/100, 1-v0[1]/100], color='k', lw=1)
+                    ax_cbar.text(v0[0]/200, 1-v0[1]/100-0.1, labels[0], color=colors[0], fontsize=8, ha='center', va='top', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(v1[0]/200+0.05, 1-v1[1]/100, labels[1], color=colors[1], fontsize=8, ha='left', va='center', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(v2[0]/200-0.05, 1-v2[1]/100, labels[2], color=colors[2], fontsize=8, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+                elif len(loaded) == 2:
+                    # Draw horizontal gradient bar
+                    width = 200
+                    height = 30
+                    grad = np.zeros((height, width, 3), dtype=float)
+                    rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
+                    rgb1 = [int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0]
+                    for x in range(width):
+                        frac = x / (width-1)
+                        color = (1-frac)*np.array(rgb0) + frac*np.array(rgb1)
+                        grad[:, x, :] = color
+                    ax_cbar.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+                    ax_cbar.plot([0, 1], [0, 0], color='k', lw=1)
+                    ax_cbar.plot([0, 1], [1, 1], color='k', lw=1)
+                    ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
+                    ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
+                    ax_cbar.text(0, 1.1, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(1, 1.1, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                elif len(loaded) == 1:
+                    # Draw single color bar
+                    width = 200
+                    height = 30
+                    grad = np.zeros((height, width, 3), dtype=float)
+                    rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
+                    for x in range(width):
+                        frac = x / (width-1)
+                        color = frac*np.array(rgb0)
+                        grad[:, x, :] = color
+                    ax_cbar.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+                    ax_cbar.plot([0, 1], [0, 0], color='k', lw=1)
+                    ax_cbar.plot([0, 1], [1, 1], color='k', lw=1)
+                    ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
+                    ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
+                    ax_cbar.text(1, 1.1, labels[0], color=colors[0], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                
+                ax_cbar.set_xlim(0, 1)
+                ax_cbar.set_ylim(0, 1)
+                
+                fig.tight_layout()
+                fig.savefig(out_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+            else:
+                # Save without colorbar (original behavior)
+                self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
 
     # --- Correlation & Ratio Analysis Functions ---
     def calculate_ratio_map(self):
@@ -1187,9 +1586,9 @@ class MuadDataViewer:
         ax.axis('off')
         
         # Add colorbar
-        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label(f"{elem1_name} / {elem2_name}", fontfamily='Arial', fontsize=12)
-        cbar.ax.tick_params(labelsize=10)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.4)
+        cbar.set_label(f"{elem1_name} / {elem2_name}", fontfamily='Arial', fontsize=14)
+        cbar.ax.tick_params(labelsize=12)
         for label in cbar.ax.get_yticklabels():
             label.set_fontfamily('Arial')
         
