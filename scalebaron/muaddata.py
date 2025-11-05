@@ -150,6 +150,7 @@ class MuadDataViewer:
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
         self.rgb_sliders = {}
+        self.rgb_max_limits = {}
         self.rgb_labels = {}
         self.rgb_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}  # Default colors
         self.rgb_color_buttons = {}
@@ -192,6 +193,7 @@ class MuadDataViewer:
         self.zstack_colormap = tk.StringVar(value='viridis')
         self.zstack_min = tk.DoubleVar(value=0.0)
         self.zstack_max = tk.DoubleVar(value=1.0)
+        self.zmax_slider_limit = tk.DoubleVar(value=1.0)
         self.zstack_nudge_step = tk.IntVar(value=1)
         self.zstack_sum_matrix = None
         self.zstack_figure = None
@@ -304,6 +306,15 @@ class MuadDataViewer:
         self.zmax_slider.pack(fill=tk.X)
         self.zmax_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
 
+        # Entry for setting z-stack max slider cap
+        zcap_frame = tk.Frame(control_frame)
+        zcap_frame.pack(fill=tk.X, pady=(2, 0))
+        tk.Label(zcap_frame, text="Slider Max:", font=("Arial", 11)).pack(side=tk.LEFT)
+        zcap_entry = tk.Entry(zcap_frame, textvariable=self.zmax_slider_limit, width=8, font=("Arial", 11))
+        zcap_entry.pack(side=tk.LEFT)
+        zcap_entry.bind("<Return>", lambda e: self.set_zmax_slider_limit())
+        zcap_entry.bind("<FocusOut>", lambda e: self.set_zmax_slider_limit())
+
         tk.Checkbutton(control_frame, text="Auto-pad smaller to largest", variable=self.zstack_auto_pad, font=("Arial", 13)).pack(anchor='w', pady=(6, 0))
         tk.Checkbutton(control_frame, text="Show overlay preview", variable=self.zstack_show_overlay, font=("Arial", 13)).pack(anchor='w')
 
@@ -337,10 +348,28 @@ class MuadDataViewer:
             self.zmax_slider.config(from_=min_val, to=max_val)
             self.zmin_slider.set(min_val)
             self.zmax_slider.set(max_val)
+            self.zmax_slider_limit.set(round(max_val))
             self.zstack_render_preview()
             self.update_zstack_offset_label()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load slice:\n{e}")
+
+    def set_zmax_slider_limit(self):
+        try:
+            val = float(self.zmax_slider_limit.get())
+            min_val = self.zmax_slider.cget('from')
+            if val > min_val:
+                self.zmax_slider.config(to=val)
+                # Adjust min slider upper bound as well to maintain consistency
+                self.zmin_slider.config(to=val)
+                if self.zstack_max.get() > val:
+                    self.zstack_max.set(val)
+                self.zmax_slider_limit.set(val)
+                self.zstack_render_preview()
+            else:
+                self.zmax_slider_limit.set(self.zmax_slider.cget('to'))
+        except Exception:
+            self.zmax_slider_limit.set(self.zmax_slider.cget('to'))
 
     def zstack_clear_slices(self):
         self.zstack_slices = []
@@ -478,16 +507,9 @@ class MuadDataViewer:
         tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack()
         self.min_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("Arial", 13))
         self.min_slider.pack(fill=tk.X)
-        # Update plot and histogram when min slider is changed
-        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.update_histogram_and_view())
-        self.min_slider.bind("<B1-Motion>", lambda e: self.update_histogram_and_view())
-
-        # Add histogram frame above Max Value
-        histogram_frame = tk.Frame(control_frame)
-        histogram_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Label(histogram_frame, text="Data Distribution", font=("Arial", 13)).pack()
-        self.histogram_canvas = tk.Canvas(histogram_frame, height=60, width=200, bg='white', relief='sunken', bd=1)
-        self.histogram_canvas.pack(fill=tk.X, pady=(2, 5))
+        # Update plot when min slider is changed
+        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
+        self.min_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
 
         # --- Max Value controls ---
         tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
@@ -498,9 +520,9 @@ class MuadDataViewer:
 
         self.max_slider = tk.Scale(max_slider_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("Arial", 13))
         self.max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        # Update plot and histogram when max slider is changed
-        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.update_histogram_and_view())
-        self.max_slider.bind("<B1-Motion>", lambda e: self.update_histogram_and_view())
+        # Update plot when max slider is changed
+        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
+        self.max_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
 
         # Entry for setting the max value of the slider (now below the slider)
         slider_max_frame = tk.Frame(control_frame)
@@ -564,15 +586,15 @@ class MuadDataViewer:
         """Set the maximum value of the max slider from the entry box."""
         try:
             val = float(self.max_slider_limit.get())
-            # Round to nearest integer
-            val = round(val)
             min_val = self.max_slider.cget('from')
             if val > min_val:
                 self.max_slider.config(to=val)
+                # Keep min slider's upper bound consistent with max slider's upper bound
+                self.min_slider.config(to=val)
                 # If the current slider value is above the new max, set it to the new max
                 if self.single_max.get() > val:
                     self.single_max.set(val)
-                # Update the entry to show the rounded integer value
+                # Update the entry to show the value actually applied
                 self.max_slider_limit.set(val)
                 # Update the map (layout will be updated only if colorbar changes)
                 self.view_single_map()
@@ -583,84 +605,7 @@ class MuadDataViewer:
             # If invalid input, reset to current slider max
             self.max_slider_limit.set(self.max_slider.cget('to'))
 
-    def update_histogram_and_view(self):
-        self.update_histogram()
-        self.view_single_map(update_layout=False)
-
-    def update_histogram(self):
-        """Update the data distribution histogram based on current min/max slider values."""
-        if self.single_matrix is None or self.histogram_canvas is None:
-            return
-
-        self.histogram_canvas.delete("all")
-
-        # Get data and create histogram (only in current slider range)
-        data = self.single_matrix.flatten()
-        data = data[~np.isnan(data)]  # Remove NaN values
-        current_min = self.single_min.get()
-        current_max = self.single_max.get()
-        data = data[(data >= current_min) & (data <= current_max)]
-
-        if len(data) == 0:
-            return
-
-        # Create histogram
-        hist, bin_edges = np.histogram(data, bins=50)
-
-        # Get canvas dimensions
-        canvas_width = self.histogram_canvas.winfo_width()
-        canvas_height = self.histogram_canvas.winfo_height()
-
-        if canvas_width <= 1:  # Canvas not yet drawn
-            canvas_width = 200
-            canvas_height = 60
-
-        # Normalize histogram to fit canvas
-        max_hist = np.max(hist)
-        if max_hist == 0:
-            return
-
-        # Draw smooth curve like photo editors
-        x_coords = []
-        y_coords = []
-        for i, count in enumerate(hist):
-            if count > 0:
-                x = (i / len(hist)) * canvas_width
-                y = canvas_height - 5 - (count / max_hist) * (canvas_height - 10)
-                x_coords.append(x)
-                y_coords.append(y)
-
-        # Create smooth curve with more points for better smoothing
-        if len(x_coords) >= 2:
-            # Create filled area under the curve (like photo editors)
-            fill_points = []
-
-            # Start at bottom-left
-            fill_points.extend([0, canvas_height - 5])
-
-            # Add curve points
-            for i in range(len(x_coords)):
-                fill_points.extend([x_coords[i], y_coords[i]])
-
-            # End at bottom-right
-            fill_points.extend([canvas_width, canvas_height - 5])
-
-            # Draw filled area with light gray
-            if len(fill_points) >= 6:
-                self.histogram_canvas.create_polygon(fill_points, fill='lightgray', outline='', smooth=True)
-
-            # Draw the curve line on top
-            curve_points = []
-            for i in range(len(x_coords)):
-                curve_points.extend([x_coords[i], y_coords[i]])
-
-            # Draw the smooth curve with anti-aliasing
-            if len(curve_points) >= 4:
-                self.histogram_canvas.create_line(curve_points, fill='darkgray', width=2, smooth=True, capstyle='round')
-
-        # Add min/max indicators (always at left/right of canvas now)
-        self.histogram_canvas.create_line(0, 0, 0, canvas_height, fill='red', width=2)
-        self.histogram_canvas.create_line(canvas_width, 0, canvas_width, canvas_height, fill='blue', width=2)
+    # Removed histogram functions and UI per request
 
     # --- Math Expression Functionality ---
     def open_map_math(self):
@@ -716,9 +661,7 @@ class MuadDataViewer:
                 
                 # Set the max_slider_limit variable and entry to the new max (rounded to integer)
                 self.max_slider_limit.set(round(max_val))
-                
-                # Update histogram and view
-                self.update_histogram()
+                # Update view
                 self.view_single_map()
                 
                 # Update file label to show modification status
@@ -895,7 +838,6 @@ class MuadDataViewer:
         self.reset_zoom_button.config(state=tk.NORMAL)
         
         # Update display
-        self.update_histogram()
         self.view_single_map()
         self.update_file_label()
     
@@ -974,7 +916,6 @@ class MuadDataViewer:
         self.reset_zoom_button.config(state=tk.DISABLED)
         
         # Update display
-        self.update_histogram()
         self.view_single_map()
         self.update_file_label()
     
@@ -1018,6 +959,16 @@ class MuadDataViewer:
             max_slider.bind("<B1-Motion>", lambda e, c=ch: self.view_rgb_overlay())
             self.rgb_sliders[ch] = {'max': max_slider}
             self.rgb_labels[ch] = {'elem': elem_label}
+
+            # Entry to cap the max slider value
+            cap_frame = tk.Frame(control_frame)
+            cap_frame.pack(fill=tk.X, pady=(0, 4))
+            tk.Label(cap_frame, text=f"{color} Slider Max:", font=("Arial", 11)).pack(side=tk.LEFT)
+            self.rgb_max_limits[ch] = tk.DoubleVar(value=1.0)
+            cap_entry = tk.Entry(cap_frame, textvariable=self.rgb_max_limits[ch], width=8, font=("Arial", 11))
+            cap_entry.pack(side=tk.LEFT)
+            cap_entry.bind("<Return>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
+            cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
 
         tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
@@ -1079,6 +1030,22 @@ class MuadDataViewer:
             # Update overlay if visible
             self.view_rgb_overlay()
 
+    def set_rgb_max_slider_limit(self, channel):
+        try:
+            val = float(self.rgb_max_limits[channel].get())
+            val = float(val)
+            min_val = self.rgb_sliders[channel]['max'].cget('from')
+            if val > min_val:
+                self.rgb_sliders[channel]['max'].config(to=val)
+                if self.rgb_sliders[channel]['max'].get() > val:
+                    self.rgb_sliders[channel]['max'].set(val)
+                self.rgb_max_limits[channel].set(val)
+                self.view_rgb_overlay()
+            else:
+                self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('to'))
+        except Exception:
+            self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('to'))
+
     def pick_scalebar_color(self):
         """Open color chooser for scale bar color and update the scale bar."""
         initial_color = self.scalebar_color
@@ -1136,7 +1103,6 @@ class MuadDataViewer:
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
-            self.update_histogram()
             self.view_single_map()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load matrix file:\n{e}")
@@ -1227,6 +1193,9 @@ class MuadDataViewer:
             if np.isfinite(max_val):
                 self.rgb_sliders[channel]['max'].config(from_=0, to=max_val)
                 self.rgb_sliders[channel]['max'].set(max_val)
+                # initialize per-channel slider cap
+                if channel in self.rgb_max_limits:
+                    self.rgb_max_limits[channel].set(round(max_val))
             messagebox.showinfo("Loaded", f"{channel} channel loaded with shape {mat.shape}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {channel} channel:\n{e}")
