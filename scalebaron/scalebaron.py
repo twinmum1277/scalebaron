@@ -90,9 +90,7 @@ class CompositeApp:
         self.labels = []
         self.preview_file = None
         self.custom_pixel_sizes = {}  # Dictionary to store custom pixel sizes
-        self.adjusted_dimensions = []  # List to store pixel size adjusted dimensions
         self.pixel_sizes_by_sample = {}
-        self.scale_factors = {}  # New dictionary to store scale factors for each matrix
         style = ttk.Style()
         style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         self.setup_widgets()
@@ -350,16 +348,13 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
-        self.adjusted_dimensions = []
+        self.pixel_sizes_by_sample = {}
         percentiles = []
         iqrs = []
         means = []
 
         # If using custom pixel sizes, only load data for samples present in the custom file
         samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
-
-        max_physical_width = 0
-        max_physical_height = 0
 
         for f in files:
             match = re.match(r"(.+)[ _]([A-Za-z]{1,2}\d{2,3})_(ppm|CPS) matrix\.xlsx", os.path.basename(f))
@@ -376,11 +371,8 @@ class CompositeApp:
                     else:
                         pixel_size = self.pixel_size.get()
 
-                    # Calculate physical dimensions
-                    physical_height, physical_width = matrix.shape[0] * pixel_size, matrix.shape[1] * pixel_size
-                    max_physical_height = max(max_physical_height, physical_height)
-                    max_physical_width = max(max_physical_width, physical_width)
-                    
+                    self.pixel_sizes_by_sample[sample] = pixel_size
+
                     # Calculate percentiles, IQR, and mean
                     p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
                     iqr = p75 - p25
@@ -399,25 +391,6 @@ class CompositeApp:
                     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                     plt.savefig(hist_path)
                     plt.close()
-
-        # Calculate scale factors and adjusted dimensions
-        # max_physical_dim = max(max_physical_height, max_physical_width)
-        max_dimension = "height" if max_physical_height > max_physical_width else "width"
-        self.reference_pixel_size = None
-        for i, (matrix, label) in enumerate(zip(self.matrices, self.labels)):
-            pixel_size = self.custom_pixel_sizes.get(label, self.pixel_size.get())
-            physical_height, physical_width = matrix.shape[0] * pixel_size, matrix.shape[1] * pixel_size
-            if max_dimension == "height":
-                scale_factor = physical_height / max_physical_height
-            else:
-                scale_factor = physical_width / max_physical_width
-            self.scale_factors[label] = scale_factor
-            if scale_factor == 1.0:
-                self.reference_pixel_size = pixel_size
-            adjusted_height = int(matrix.shape[0] * scale_factor)
-            adjusted_width = int(matrix.shape[1] * scale_factor)
-            self.adjusted_dimensions.append((adjusted_height, adjusted_width))
-        assert self.reference_pixel_size is not None, "No reference pixel size found"
 
         self.log_print(f"✅ Loaded {len(self.matrices)} matrix files.")
         self.log_print(f"Histograms saved in: {os.path.join(self.output_dir, self.element.get(), 'histograms')}")
@@ -519,35 +492,18 @@ class CompositeApp:
         fig.patch.set_facecolor(bg_color)
         text_color = 'white' if np.mean(bg_color[:3]) < 0.5 else 'black'
 
-        # Find the maximum dimensions of all adjusted matrices
-        max_height = max(dim[0] for dim in self.adjusted_dimensions)
-        max_width = max(dim[1] for dim in self.adjusted_dimensions)
-
         percentiles = []
         iqrs = []
         means = []
+
+        im = None
 
         for i, (matrix, label) in enumerate(zip(matrices_to_use, self.labels)):
             r, c = i // cols, i % cols
             ax = axs[r, c] if rows > 1 else axs[c]
 
             # Get the pixel size for this sample
-            if self.use_custom_pixel_sizes.get() and label in self.custom_pixel_sizes:
-                pixel_size = self.custom_pixel_sizes[label]
-            else:
-                pixel_size = self.pixel_size.get()
-
-            # Use the pre-calculated scale factor
-            scale_factor = self.scale_factors[label]
-
-            # Calculate the size of the inset axes
-            inset_width = min(1.0, matrix.shape[1] * scale_factor / max_width)
-            inset_height = min(1.0, matrix.shape[0] * scale_factor / max_height)
-
-            # Create inset axes
-            inset_ax = inset_axes(ax, width=f"{scale_factor*100}%", height=f"{scale_factor*100}%", loc='center',
-                                #   bbox_to_anchor=((1-inset_width)/2, (1-inset_height)/2, inset_width, inset_height),
-                                  bbox_transform=ax.transAxes)
+            pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
 
             # Determine font size based on selection
             font_size = None
@@ -558,13 +514,25 @@ class CompositeApp:
             elif self.sample_name_font_size.get() == "Large":
                 font_size = 16
 
-            im = inset_ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
-            report_custom_pixel_sizes=False
-            ax.set_title(f"{label}"+(f"\n({pixel_size:.2f} µm/pixel)" if report_custom_pixel_sizes else ""), color=text_color, fontsize=font_size)
+            im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
+            ax.set_aspect('equal')
+            ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+            if self.use_custom_pixel_sizes.get():
+                pixel_label = f"{int(round(pixel_size))} µm/px"
+                subtitle_size = (font_size - 2) if font_size else 9
+                subtitle_size = max(subtitle_size, 8)
+                ax.text(
+                    0.5,
+                    -0.08,
+                    pixel_label,
+                    transform=ax.transAxes,
+                    ha='center',
+                    va='top',
+                    color=text_color,
+                    fontsize=subtitle_size
+                )
             ax.axis('off')
-            inset_ax.axis('off')
             ax.set_facecolor(bg_color)
-            inset_ax.set_facecolor(bg_color)
 
             # Save individual subplot
             subplot_path = os.path.join(self.output_dir, self.element.get(), 'subplots', f"{label}.png")
@@ -617,36 +585,24 @@ class CompositeApp:
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
 
-        # Add scale bar (fixed calculation)
-        max_pixel_size = max(self.custom_pixel_sizes.values()) if self.use_custom_pixel_sizes.get() else self.pixel_size.get()
-        pixel_size_um = max_pixel_size  # microns per pixel
+        # Add scale bar using a representative pixel size
+        if self.use_custom_pixel_sizes.get() and self.labels:
+            reference_label = self.labels[0]
+            pixel_size_um = self.pixel_sizes_by_sample.get(reference_label, self.pixel_size.get())
+            scale_bar_caption = f"{reference_label}: {pixel_size_um:.2f} µm/px"
+        else:
+            reference_label = None
+            pixel_size_um = self.pixel_size.get()
+            scale_bar_caption = None
 
-        # Assume matrices[0] is representative of image dimensions
-        image_width_pixels = self.matrices[0].shape[1]  # get width in pixels
-
-        # --- Draw scale bar in data coordinates ---
-        #Avoid crashing when a label isn't found
-        # pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
-
-
-        # # Get pixel size for this sample
-        # pixel_size_um = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
-        pixel_size_um = self.reference_pixel_size 
         scale_bar_um = self.scale_bar_length_um.get()  # e.g., 500
 
         
         # Convert to pixels
-        scale_bar_px = int(scale_bar_um / pixel_size_um)
-
-        # Position: bottom-left of the image
-        bar_height = matrix.shape[0]  # number of rows (height in pixels)
-        bar_width = matrix.shape[1]   # number of cols (width in pixels)
-
-        # Padding in pixels from edge
-        pad_x = 10
-        pad_y = 10
-
-        
+        if pixel_size_um <= 0:
+            scale_bar_px = 0
+        else:
+            scale_bar_px = max(1, int(round(scale_bar_um / pixel_size_um)))
 
         # Keep scale_ax data limits compact
         scale_ax.set_xlim(0, scale_bar_px + 20)
@@ -662,10 +618,13 @@ class CompositeApp:
         scale_ax.hlines(y=y_pos, xmin=x_start, xmax=x_end, colors='white', linewidth=3)
 
         # Centered label just above
+        label_lines = [f"{scale_bar_um:.0f} µm"]
+        if scale_bar_caption:
+            label_lines.append(scale_bar_caption)
         scale_ax.text(
             (x_start + x_end) / 2,
             y_pos + 4,  # tighter vertical gap
-            f"{scale_bar_um:.0f} µm",
+            "\n".join(label_lines),
             color='white',
             fontsize=8,
             ha='center',
@@ -673,13 +632,9 @@ class CompositeApp:
         )
         
         # Set background color for all axes
-        for ax in axs.flat:
+        for ax in np.atleast_1d(axs).flat:
             ax.set_facecolor(bg_color)
             ax.axis('off')
-            # Set background color for any inset axes
-            for child in ax.get_children():
-                if isinstance(child, plt.Axes):
-                    child.set_facecolor(bg_color)
         
         # Create standalone colorbar figure
         colorbar_fig, colorbar_ax = plt.subplots(figsize=(1, 4))
