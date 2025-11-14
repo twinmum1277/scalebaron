@@ -197,6 +197,7 @@ class MuadDataViewer:
         self.zstack_nudge_step = tk.IntVar(value=1)
         self.zstack_sum_matrix = None
         self.zstack_figure = None
+        self._zstack_colorbar = None  # Store the colorbar object for removal
         self.zstack_ax = None
         self.zstack_canvas = None
 
@@ -378,6 +379,13 @@ class MuadDataViewer:
         self.zstack_listbox.delete(0, tk.END)
         self.zstack_ax.clear()
         self.zstack_ax.axis('off')
+        # Remove colorbar if it exists
+        if self._zstack_colorbar is not None:
+            try:
+                self._zstack_colorbar.remove()
+            except Exception:
+                pass
+            self._zstack_colorbar = None
         self.zstack_canvas.draw()
 
     def update_zstack_offset_label(self):
@@ -430,6 +438,13 @@ class MuadDataViewer:
             slices = self.apply_offsets_to_slices(slices, self.zstack_offsets)
         self.zstack_ax.clear()
         self.zstack_ax.axis('off')
+        # Remove colorbar if it exists (preview doesn't show colorbar)
+        if self._zstack_colorbar is not None:
+            try:
+                self._zstack_colorbar.remove()
+            except Exception:
+                pass
+            self._zstack_colorbar = None
         vmin = self.zstack_min.get()
         vmax = self.zstack_max.get()
         if self.zstack_show_overlay.get():
@@ -464,10 +479,17 @@ class MuadDataViewer:
         # Render summed
         self.zstack_ax.clear()
         self.zstack_ax.axis('off')
+        # Remove existing colorbar if it exists
+        if self._zstack_colorbar is not None:
+            try:
+                self._zstack_colorbar.remove()
+            except Exception:
+                pass
+            self._zstack_colorbar = None
         im = self.zstack_ax.imshow(total, cmap=self.zstack_colormap.get(), vmin=self.zstack_min.get(), vmax=self.zstack_max.get())
-        cbar = self.zstack_figure.colorbar(im, ax=self.zstack_ax, fraction=0.046, pad=0.04, shrink=0.4, label="Sum")
-        cbar.set_label("Sum", fontfamily='Arial', fontsize=14)
-        cbar.ax.tick_params(labelsize=12)
+        self._zstack_colorbar = self.zstack_figure.colorbar(im, ax=self.zstack_ax, fraction=0.046, pad=0.04, shrink=0.4, label="Sum")
+        self._zstack_colorbar.set_label("Sum", fontfamily='Arial', fontsize=14)
+        self._zstack_colorbar.ax.tick_params(labelsize=12)
         self.zstack_figure.tight_layout()
         self.zstack_canvas.draw()
         messagebox.showinfo("Done", f"Summed {len(slices)} slice(s).")
