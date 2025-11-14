@@ -297,7 +297,11 @@ class MuadDataViewer:
         zcmap_menu = ttk.Combobox(control_frame, textvariable=self.zstack_colormap, values=plt.colormaps(), font=("Arial", 13))
         zcmap_menu.pack(fill=tk.X)
 
-        tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack(pady=(6, 0))
+        # Min Value label with button
+        min_label_frame = tk.Frame(control_frame)
+        min_label_frame.pack(fill=tk.X, pady=(6, 0))
+        tk.Label(min_label_frame, text="Min Value", font=("Arial", 13)).pack(side=tk.LEFT)
+        tk.Button(min_label_frame, text="Set to 0", command=self.set_zstack_min_to_zero, font=("Arial", 9), width=8).pack(side=tk.RIGHT, padx=(5, 0))
         self.zmin_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_min, font=("Arial", 13))
         self.zmin_slider.pack(fill=tk.X)
         self.zmin_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
@@ -372,13 +376,16 @@ class MuadDataViewer:
         except Exception:
             self.zmax_slider_limit.set(self.zmax_slider.cget('to'))
 
+    def set_zstack_min_to_zero(self):
+        """Set Z-stack min value to zero."""
+        self.zstack_min.set(0.0)
+        self.zstack_render_preview()
+
     def zstack_clear_slices(self):
         self.zstack_slices = []
         self.zstack_offsets = []
         self.zstack_file_labels = []
         self.zstack_listbox.delete(0, tk.END)
-        self.zstack_ax.clear()
-        self.zstack_ax.axis('off')
         # Remove colorbar if it exists
         if self._zstack_colorbar is not None:
             try:
@@ -386,6 +393,10 @@ class MuadDataViewer:
             except Exception:
                 pass
             self._zstack_colorbar = None
+        self.zstack_ax.clear()
+        self.zstack_ax.axis('off')
+        # Reset figure layout to remove colorbar space
+        self.zstack_figure.tight_layout()
         self.zstack_canvas.draw()
 
     def update_zstack_offset_label(self):
@@ -457,6 +468,7 @@ class MuadDataViewer:
         else:
             # Show first slice only
             im = self.zstack_ax.imshow(slices[0], cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax)
+        # Reset layout to use full figure space when no colorbar
         self.zstack_figure.tight_layout()
         self.zstack_canvas.draw()
 
@@ -526,7 +538,11 @@ class MuadDataViewer:
         cmap_menu = ttk.Combobox(control_frame, textvariable=self.single_colormap, values=plt.colormaps(), font=("Arial", 13))
         cmap_menu.pack(fill=tk.X)
 
-        tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack()
+        # Min Value label with button
+        min_label_frame = tk.Frame(control_frame)
+        min_label_frame.pack(fill=tk.X)
+        tk.Label(min_label_frame, text="Min Value", font=("Arial", 13)).pack(side=tk.LEFT)
+        tk.Button(min_label_frame, text="Set to 0", command=self.set_single_min_to_zero, font=("Arial", 9), width=8).pack(side=tk.RIGHT, padx=(5, 0))
         self.min_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("Arial", 13))
         self.min_slider.pack(fill=tk.X)
         # Update plot when min slider is changed
@@ -626,6 +642,11 @@ class MuadDataViewer:
         except Exception:
             # If invalid input, reset to current slider max
             self.max_slider_limit.set(self.max_slider.cget('to'))
+
+    def set_single_min_to_zero(self):
+        """Set single map min value to zero."""
+        self.single_min.set(0.0)
+        self.view_single_map()
 
     # Removed histogram functions and UI per request
 
@@ -961,8 +982,13 @@ class MuadDataViewer:
         for ch in ['R', 'G', 'B']:
             color = color_names[ch]
             tk.Button(control_frame, text=f"Load {color} Channel", command=lambda c=ch: self.load_rgb_file(c), font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
-            elem_label = tk.Label(control_frame, text=f"Loaded Element: None", font=("Arial", 13, "italic"))
-            elem_label.pack()
+            # Frame for element label and max value
+            elem_frame = tk.Frame(control_frame)
+            elem_frame.pack(fill=tk.X)
+            elem_label = tk.Label(elem_frame, text=f"Loaded Element: None", font=("Arial", 13, "italic"))
+            elem_label.pack(side=tk.LEFT)
+            max_value_label = tk.Label(elem_frame, text="", font=("Arial", 11), foreground="gray")
+            max_value_label.pack(side=tk.RIGHT)
             # Color picker and gradient
             color_picker_frame = tk.Frame(control_frame)
             color_picker_frame.pack(fill=tk.X, padx=5, pady=2)
@@ -978,9 +1004,15 @@ class MuadDataViewer:
             max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} Max", font=("Arial", 13))
             max_slider.set(1)
             max_slider.pack(fill=tk.X)
-            max_slider.bind("<B1-Motion>", lambda e, c=ch: self.view_rgb_overlay())
+            def make_slider_handler(c):
+                def handler(event):
+                    self.update_rgb_max_value_display(c)
+                    self.view_rgb_overlay()
+                return handler
+            max_slider.bind("<B1-Motion>", make_slider_handler(ch))
+            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch))
             self.rgb_sliders[ch] = {'max': max_slider}
-            self.rgb_labels[ch] = {'elem': elem_label}
+            self.rgb_labels[ch] = {'elem': elem_label, 'max_value': max_value_label}
 
             # Entry to cap the max slider value
             cap_frame = tk.Frame(control_frame)
@@ -995,6 +1027,7 @@ class MuadDataViewer:
         tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save RGB Image", command=self.save_rgb_image, font=("Arial", 13)).pack(fill=tk.X)
+        tk.Button(control_frame, text="Clear Data", command=self.clear_rgb_data, font=("Arial", 13), bg="#f44336", fg="black").pack(fill=tk.X, pady=(6, 0))
 
         # --- Correlation & Ratio Analysis Section ---
         tk.Label(control_frame, text="Correlation & Ratio Analysis", font=("Arial", 13, "bold")).pack(pady=(15, 5))
@@ -1013,7 +1046,7 @@ class MuadDataViewer:
         
         # Calculate button
         tk.Button(control_frame, text="Calculate Ratio Map", command=self.calculate_ratio_map, 
-                  font=("Arial", 12, "bold"), bg="#9C27B0", fg="white").pack(fill=tk.X, pady=(5, 2))
+                  font=("Arial", 12, "bold"), bg="#9C27B0", fg="black").pack(fill=tk.X, pady=(5, 2))
         
         # Correlation coefficient display
         self.correlation_label = tk.Label(control_frame, text="Pearson r: --", font=("Arial", 11, "italic"))
@@ -1052,6 +1085,44 @@ class MuadDataViewer:
             # Update overlay if visible
             self.view_rgb_overlay()
 
+    def update_rgb_max_value_display(self, channel):
+        """Update the max value display for the specified RGB channel."""
+        if channel in self.rgb_sliders and 'max_value' in self.rgb_labels[channel]:
+            current_max = self.rgb_sliders[channel]['max'].get()
+            self.rgb_labels[channel]['max_value'].config(text=f"Max: {current_max:.2f}")
+
+    def clear_rgb_data(self):
+        """Clear all RGB data and reset the interface."""
+        # Clear all data
+        for ch in ['R', 'G', 'B']:
+            self.rgb_data[ch] = None
+            # Reset element labels
+            self.rgb_labels[ch]['elem'].config(text="Loaded Element: None")
+            # Reset max value display
+            if 'max_value' in self.rgb_labels[ch]:
+                self.rgb_labels[ch]['max_value'].config(text="")
+            # Reset sliders to default
+            self.rgb_sliders[ch]['max'].config(from_=0, to=1)
+            self.rgb_sliders[ch]['max'].set(1)
+            # Reset slider max limits
+            if ch in self.rgb_max_limits:
+                self.rgb_max_limits[ch].set(1.0)
+        # Reset dataset label
+        self.file_root_label.config(text="Dataset: None")
+        # Clear the overlay displays
+        if hasattr(self, 'rgb_ax') and self.rgb_ax is not None:
+            self.rgb_ax.clear()
+            self.rgb_ax.axis('off')
+            self.rgb_ax.set_facecolor('black')
+            if hasattr(self, 'rgb_canvas'):
+                self.rgb_canvas.draw()
+        if hasattr(self, 'rgb_colorbar_ax') and self.rgb_colorbar_ax is not None:
+            self.rgb_colorbar_ax.clear()
+            self.rgb_colorbar_ax.axis('off')
+            if hasattr(self, 'rgb_colorbar_canvas'):
+                self.rgb_colorbar_canvas.draw()
+        messagebox.showinfo("Cleared", "All RGB data has been cleared.")
+
     def set_rgb_max_slider_limit(self, channel):
         try:
             val = float(self.rgb_max_limits[channel].get())
@@ -1062,6 +1133,7 @@ class MuadDataViewer:
                 if self.rgb_sliders[channel]['max'].get() > val:
                     self.rgb_sliders[channel]['max'].set(val)
                 self.rgb_max_limits[channel].set(val)
+                self.update_rgb_max_value_display(channel)
                 self.view_rgb_overlay()
             else:
                 self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('to'))
@@ -1209,8 +1281,8 @@ class MuadDataViewer:
             root_name = file_name.split()[0]
             elem = next((part for part in file_name.split() if any(e in part for e in ['ppm', 'CPS'])), 'Unknown')
             self.rgb_labels[channel]['elem'].config(text=f"Loaded Element: {elem.split('_')[0]}")
-            if self.file_root_label.cget("text") == "Dataset: None":
-                self.file_root_label.config(text=f"Dataset: {root_name}")
+            # Always update dataset label when a new file is loaded
+            self.file_root_label.config(text=f"Dataset: {root_name}")
             max_val = float(np.nanmax(mat))
             if np.isfinite(max_val):
                 self.rgb_sliders[channel]['max'].config(from_=0, to=max_val)
@@ -1218,6 +1290,8 @@ class MuadDataViewer:
                 # initialize per-channel slider cap
                 if channel in self.rgb_max_limits:
                     self.rgb_max_limits[channel].set(round(max_val))
+                # Update max value display
+                self.update_rgb_max_value_display(channel)
             messagebox.showinfo("Loaded", f"{channel} channel loaded with shape {mat.shape}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {channel} channel:\n{e}")
@@ -1340,11 +1414,12 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
-            # Place labels at ends
-            self.rgb_colorbar_ax.text(0, 1.05, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(1, 1.05, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.set_xlim(0, 1)
-            self.rgb_colorbar_ax.set_ylim(0, 1)
+            # Expand xlim to give more space for labels
+            self.rgb_colorbar_ax.set_xlim(-0.25, 1.25)
+            self.rgb_colorbar_ax.set_ylim(0, 1.3)
+            # Place labels further apart to prevent overlap
+            self.rgb_colorbar_ax.text(-0.15, 1.15, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(1.15, 1.15, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
         elif len(loaded) == 1:
             # Draw a single color bar
             width = 240
@@ -1372,9 +1447,26 @@ class MuadDataViewer:
 
     def save_rgb_image(self):
         if all(self.rgb_data[c] is None for c in 'RGB'):
+            messagebox.showwarning("No Data", "Please load at least one RGB channel before saving.")
             return
+        try:
+            # Check if RGB image exists
+            if not hasattr(self, 'rgb_ax') or self.rgb_ax is None:
+                messagebox.showerror("Error", "No RGB image to save. Please view the overlay first.")
+                return
+            images = self.rgb_ax.get_images()
+            if not images:
+                messagebox.showerror("Error", "No RGB image to save. Please view the overlay first.")
+                return
+        except Exception as e:
+            messagebox.showerror("Error", f"Error accessing RGB image: {str(e)}")
+            return
+        
         out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
-        if out_path:
+        if not out_path:
+            return
+        
+        try:
             # Check if we should save with or without colorbar
             save_with_colorbar = messagebox.askyesno(
                 "Save Options",
@@ -1387,15 +1479,26 @@ class MuadDataViewer:
                 # Create a combined figure with RGB image and colorbar
                 # Get the RGB image data from the current figure
                 img_array = self.rgb_ax.get_images()[0].get_array()
-                extent = self.rgb_ax.get_images()[0].get_extent()
+                
+                # Get actual image dimensions
+                img_height, img_width = img_array.shape[:2]
+                aspect_ratio = img_width / img_height
+                
+                # Calculate figure size to preserve aspect ratio
+                # Use a base height and scale width accordingly
+                base_height = 10
+                fig_width = base_height * aspect_ratio
+                # Add space for colorbar (about 1.5 inches)
+                colorbar_height = 1.5
+                total_height = base_height + colorbar_height
                 
                 # Create new figure with proper proportions for colorbar
-                fig = plt.figure(figsize=(8, 8))
-                gs = GridSpec(2, 1, figure=fig, height_ratios=[10, 1], hspace=0.05)
+                fig = plt.figure(figsize=(fig_width, total_height), dpi=300)
+                gs = GridSpec(2, 1, figure=fig, height_ratios=[base_height, colorbar_height], hspace=0.05)
                 
                 # Main RGB plot (larger)
                 ax_main = fig.add_subplot(gs[0])
-                ax_main.imshow(img_array, extent=extent, aspect='auto')
+                ax_main.imshow(img_array, aspect='equal', interpolation='nearest')
                 ax_main.axis('off')
                 
                 # Colorbar at bottom (smaller)
@@ -1409,7 +1512,12 @@ class MuadDataViewer:
                     label = self.rgb_labels[ch]['elem'].cget("text")
                     if label.startswith("Loaded Element: "):
                         label = label[len("Loaded Element: "):]
-                    labels.append(label if label != "None" else ch)
+                    if label == "None":
+                        label = ch
+                    # Get current slider max value
+                    max_val = self.rgb_sliders[ch]['max'].get()
+                    # Append max value to label
+                    labels.append(f"{label}\n(max: {max_val:.2f})")
                 
                 ax_cbar.axis('off')
                 
@@ -1460,8 +1568,12 @@ class MuadDataViewer:
                     ax_cbar.plot([0, 1], [1, 1], color='k', lw=1)
                     ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
                     ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
-                    ax_cbar.text(0, 1.1, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(1, 1.1, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                    # Expand xlim to give more space for labels (especially with two-line labels)
+                    ax_cbar.set_xlim(-0.25, 1.25)
+                    ax_cbar.set_ylim(0, 1.3)
+                    # Position labels further apart to prevent overlap
+                    ax_cbar.text(-0.15, 1.15, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(1.15, 1.15, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
                 elif len(loaded) == 1:
                     # Draw single color bar
                     width = 200
@@ -1478,16 +1590,42 @@ class MuadDataViewer:
                     ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
                     ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
                     ax_cbar.text(1, 1.1, labels[0], color=colors[0], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
-                
-                ax_cbar.set_xlim(0, 1)
-                ax_cbar.set_ylim(0, 1)
+                    ax_cbar.set_xlim(0, 1)
+                    ax_cbar.set_ylim(0, 1.2)
                 
                 fig.tight_layout()
-                fig.savefig(out_path, dpi=300, bbox_inches='tight')
+                fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black')
                 plt.close(fig)
             else:
-                # Save without colorbar (original behavior)
-                self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
+                # Save without colorbar - preserve actual image dimensions
+                img_array = self.rgb_ax.get_images()[0].get_array()
+                img_height, img_width = img_array.shape[:2]
+                aspect_ratio = img_width / img_height
+                
+                # Calculate figure size to preserve aspect ratio
+                base_height = 10
+                fig_width = base_height * aspect_ratio
+                
+                # Create new figure with correct dimensions
+                fig = plt.figure(figsize=(fig_width, base_height), dpi=300, facecolor='black')
+                ax = fig.add_subplot(111)
+                ax.imshow(img_array, aspect='equal', interpolation='nearest')
+                ax.axis('off')
+                ax.set_facecolor('black')
+                fig.patch.set_facecolor('black')
+                
+                fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black', pad_inches=0)
+                plt.close(fig)
+            
+            messagebox.showinfo("Success", f"RGB image saved successfully to:\n{out_path}")
+        except Exception as e:
+            error_msg = f"Error saving RGB image:\n{str(e)}\n\nPlease try again. If the problem persists, ensure the overlay is displayed first."
+            messagebox.showerror("Save Error", error_msg)
+            # Try to close any open figures to prevent resource leaks
+            try:
+                plt.close('all')
+            except:
+                pass
 
     # --- Correlation & Ratio Analysis Functions ---
     def calculate_ratio_map(self):
