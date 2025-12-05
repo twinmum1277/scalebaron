@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
 # Muad'Data v18 - Element Viewer + RGB Overlay + Zoom/Crop Feature
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox, colorchooser
+from tkinter import filedialog, ttk, messagebox, colorchooser, simpledialog
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.widgets import RectangleSelector
 from matplotlib.gridspec import GridSpec
+from matplotlib.patches import Polygon
+try:
+    from scipy import stats
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    # Fallback mode calculation without scipy
 import os
+import re
 
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
@@ -113,6 +121,33 @@ class MathExpressionDialog:
         self.dialog.destroy()
 
 class MuadDataViewer:  
+    def parse_matrix_filename(self, filename):
+        """
+        Parse matrix filename to extract sample name, element, and unit type.
+        Supports two formats:
+        1. Old format: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
+        2. New format (Iolite raw counts): {sample} {element} matrix.xlsx
+        
+        Returns: (sample, element, unit_type) or None if no match
+        unit_type will be 'ppm', 'CPS', or 'raw' (for new format)
+        """
+        basename = os.path.basename(filename)
+        
+        # Try old format first: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
+        match = re.match(r"(.+?)[ _]([A-Za-z]{1,2}\d{1,3})_(ppm|CPS) matrix\.xlsx", basename)
+        if match:
+            sample, element, unit_type = match.groups()
+            return (sample, element, unit_type)
+        
+        # Try new format: {sample} {element} matrix.xlsx
+        # This matches filenames like "LVG D4 0.6 Se80 matrix.xlsx" or "sample Li7 matrix.xlsx"
+        match = re.match(r"(.+?) ([A-Za-z]{1,2}\d{1,3}) matrix\.xlsx", basename)
+        if match:
+            sample, element = match.groups()
+            return (sample, element, 'raw')
+        
+        return None
+    
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
@@ -146,6 +181,16 @@ class MuadDataViewer:
         self.cropped_matrix = None  # Store the cropped matrix
         self.crop_bounds = None  # Store crop bounds (x1, x2, y1, y2)
         self.is_zoomed = False  # Whether we're currently viewing a zoomed region
+        
+        # Polygon selection state
+        self.polygon_active = False  # Whether polygon selection mode is active
+        self.polygon_vertices = []  # List of (x, y) tuples for current polygon being drawn
+        self.polygon_patches = []  # List of Polygon patches for visualization
+        self.polygon_data = []  # List of dicts: {'name': str, 'vertices': list, 'color': str, 'stats': dict}
+        self.polygon_colors = plt.cm.tab20(np.linspace(0, 1, 20))  # 20 distinct colors
+        self.polygon_color_index = 0
+        self.polygon_results_window = None  # Results table window
+        self.polygon_results_table = None  # Treeview widget for results
 
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
@@ -610,6 +655,17 @@ class MuadDataViewer:
         
         self.reset_zoom_button = tk.Button(control_frame, text="Reset to Full View", command=self.reset_zoom, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
         self.reset_zoom_button.pack(fill=tk.X, pady=(0, 2))
+        
+        # --- Polygon Selection for Statistics ---
+        tk.Label(control_frame, text="Region Statistics", font=("Arial", 13, "bold")).pack(pady=(10, 5))
+        self.polygon_button = tk.Button(control_frame, text="Select Polygon Region", command=self.toggle_polygon_mode, font=("Arial", 13), bg="#9C27B0", fg="black")
+        self.polygon_button.pack(fill=tk.X, pady=(0, 2))
+        
+        self.view_stats_button = tk.Button(control_frame, text="View Statistics Table", command=self.show_polygon_results_window, font=("Arial", 13), fg="black")
+        self.view_stats_button.pack(fill=tk.X, pady=(0, 2))
+        
+        self.clear_polygons_button = tk.Button(control_frame, text="Clear All Polygons", command=self.clear_all_polygons, font=("Arial", 13), fg="black")
+        self.clear_polygons_button.pack(fill=tk.X, pady=(0, 2))
 
         # Add a label at the bottom left to display loaded file info
         self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 13, "italic"), anchor="w", justify="left", wraplength=200)
@@ -964,6 +1020,315 @@ class MuadDataViewer:
     
     # --- End Zoom/Crop Functionality ---
 
+    # --- Polygon Selection for Statistics ---
+    def toggle_polygon_mode(self):
+        """Toggle polygon selection mode on/off."""
+        if self.single_matrix is None:
+            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            return
+        
+        if not self.polygon_active:
+            # Activate polygon mode
+            self.polygon_active = True
+            self.polygon_vertices = []
+            self.polygon_button.config(text="Cancel Selection", bg="#FF5722", fg="black")
+            
+            # Disable zoom mode if active
+            if self.zoom_active:
+                self.deactivate_zoom_mode()
+            
+            # Connect event handlers (single handler handles both single and double click)
+            self.polygon_cid = self.single_canvas.mpl_connect('button_press_event', self.on_polygon_click)
+            
+            messagebox.showinfo("Polygon Selection", 
+                              "Click to place vertices.\n"
+                              "Double-click the last vertex (or click the first vertex) to complete the polygon.")
+        else:
+            # Deactivate polygon mode
+            self.deactivate_polygon_mode()
+    
+    def deactivate_polygon_mode(self):
+        """Deactivate polygon selection mode."""
+        self.polygon_active = False
+        self.polygon_vertices = []
+        self.polygon_button.config(text="Select Polygon Region", bg="#9C27B0", fg="black")
+        # Disconnect event handlers
+        if hasattr(self, 'polygon_cid'):
+            self.single_canvas.mpl_disconnect(self.polygon_cid)
+        # Redraw to remove temporary vertices
+        self.view_single_map()
+    
+    def on_polygon_click(self, event):
+        """Handle click events for polygon selection (both single and double click)."""
+        if not self.polygon_active or event.inaxes != self.single_ax:
+            return
+        
+        # Get coordinates in data space
+        if event.xdata is None or event.ydata is None:
+            return
+        
+        x, y = int(event.xdata), int(event.ydata)
+        
+        # Validate bounds
+        if x < 0 or y < 0 or x >= self.single_matrix.shape[1] or y >= self.single_matrix.shape[0]:
+            return
+        
+        # Handle double-click to complete polygon
+        if event.dblclick:
+            if len(self.polygon_vertices) >= 3:
+                self.complete_polygon()
+            return
+        
+        # Handle single click
+        # Check if clicking on first vertex (close polygon)
+        if len(self.polygon_vertices) >= 3:
+            first_x, first_y = self.polygon_vertices[0]
+            # Check if click is near first vertex (within 5 pixels)
+            if abs(x - first_x) < 5 and abs(y - first_y) < 5:
+                self.complete_polygon()
+                return
+        
+        # Add vertex
+        self.polygon_vertices.append((x, y))
+        
+        # Redraw to show current polygon
+        self.view_single_map()
+    
+    def complete_polygon(self):
+        """Complete the polygon and calculate statistics."""
+        if len(self.polygon_vertices) < 3:
+            messagebox.showwarning("Invalid Polygon", "A polygon needs at least 3 vertices.")
+            self.polygon_vertices = []
+            self.view_single_map()
+            return
+        
+        # Close the polygon by adding first vertex at the end
+        vertices = self.polygon_vertices + [self.polygon_vertices[0]]
+        
+        # Prompt for polygon name
+        name = tk.simpledialog.askstring("Polygon Name", "Enter a name for this region:")
+        if not name:
+            # User cancelled, clear the polygon
+            self.polygon_vertices = []
+            self.view_single_map()
+            return
+        
+        # Get color for this polygon
+        color = self.polygon_colors[self.polygon_color_index % len(self.polygon_colors)]
+        self.polygon_color_index += 1
+        
+        # Calculate statistics
+        stats_dict = self.calculate_polygon_statistics(vertices)
+        
+        # Store polygon data
+        polygon_info = {
+            'name': name,
+            'vertices': vertices,
+            'color': color,
+            'stats': stats_dict
+        }
+        self.polygon_data.append(polygon_info)
+        
+        # Clear current vertices and deactivate mode
+        self.polygon_vertices = []
+        self.deactivate_polygon_mode()
+        
+        # Update display
+        self.view_single_map()
+        
+        # Update results window if open
+        if self.polygon_results_window:
+            self.update_polygon_results_table()
+        
+        messagebox.showinfo("Polygon Complete", f"Region '{name}' added. Statistics calculated.")
+    
+    def calculate_polygon_statistics(self, vertices):
+        """Calculate statistics for pixels inside the polygon."""
+        # Create a mask for pixels inside the polygon
+        h, w = self.single_matrix.shape
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        points = np.column_stack([x_coords.ravel(), y_coords.ravel()])
+        
+        # Use matplotlib's Path to check if points are inside polygon
+        from matplotlib.path import Path
+        path = Path(vertices)
+        mask = path.contains_points(points).reshape(h, w)
+        
+        # Get values inside polygon
+        values = self.single_matrix[mask]
+        values = values[~np.isnan(values)]  # Remove NaN values
+        
+        if len(values) == 0:
+            return {
+                'sum': 0, 'mean': 0, 'std': 0, 'min': 0, 'max': 0,
+                'median': 0, 'mode': 0, 'area_um2': 0, 'pixel_count': 0
+            }
+        
+        # Calculate statistics
+        pixel_count = len(values)
+        pixel_size_um = self.pixel_size.get()
+        area_um2 = pixel_count * (pixel_size_um ** 2)
+        
+        # For mode, use the most frequent value (rounded for continuous data)
+        # Bin the data and find the mode
+        if SCIPY_AVAILABLE:
+            try:
+                mode_result = stats.mode(np.round(values, decimals=2))
+                mode_value = float(mode_result.mode[0])
+            except:
+                # Fallback: use median if mode calculation fails
+                mode_value = float(np.median(values))
+        else:
+            # Fallback: use histogram to find mode
+            try:
+                hist, bin_edges = np.histogram(np.round(values, decimals=2), bins=50)
+                mode_bin = np.argmax(hist)
+                mode_value = float((bin_edges[mode_bin] + bin_edges[mode_bin + 1]) / 2)
+            except:
+                mode_value = float(np.median(values))
+        
+        stats_dict = {
+            'sum': float(np.sum(values)),
+            'mean': float(np.mean(values)),
+            'std': float(np.std(values)),
+            'min': float(np.min(values)),
+            'max': float(np.max(values)),
+            'median': float(np.median(values)),
+            'mode': mode_value,
+            'area_um2': area_um2,
+            'pixel_count': pixel_count
+        }
+        
+        return stats_dict
+    
+    def show_polygon_results_window(self):
+        """Show or create the polygon statistics results window."""
+        if self.polygon_results_window is None or not self.polygon_results_window.winfo_exists():
+            # Create new window
+            self.polygon_results_window = tk.Toplevel(self.root)
+            self.polygon_results_window.title("Region Statistics")
+            self.polygon_results_window.geometry("900x500")
+            
+            # Create frame for table and scrollbar
+            table_frame = tk.Frame(self.polygon_results_window)
+            table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Create Treeview with scrollbars
+            scrollbar_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL)
+            scrollbar_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL)
+            
+            columns = ('Name', 'Sum', 'Mean', 'SD', 'Min', 'Max', 'Median', 'Mode', 'Area (µm²)', 'Pixels')
+            self.polygon_results_table = ttk.Treeview(table_frame, columns=columns, show='headings',
+                                                     yscrollcommand=scrollbar_y.set,
+                                                     xscrollcommand=scrollbar_x.set)
+            
+            # Configure scrollbars
+            scrollbar_y.config(command=self.polygon_results_table.yview)
+            scrollbar_x.config(command=self.polygon_results_table.xview)
+            
+            # Set column headings and widths
+            column_widths = {'Name': 100, 'Sum': 80, 'Mean': 80, 'SD': 80, 'Min': 80, 'Max': 80,
+                           'Median': 80, 'Mode': 80, 'Area (µm²)': 100, 'Pixels': 80}
+            for col in columns:
+                self.polygon_results_table.heading(col, text=col)
+                self.polygon_results_table.column(col, width=column_widths.get(col, 100))
+            
+            # Pack table and scrollbars
+            self.polygon_results_table.grid(row=0, column=0, sticky='nsew')
+            scrollbar_y.grid(row=0, column=1, sticky='ns')
+            scrollbar_x.grid(row=1, column=0, sticky='ew')
+            table_frame.grid_rowconfigure(0, weight=1)
+            table_frame.grid_columnconfigure(0, weight=1)
+            
+            # Export button
+            export_frame = tk.Frame(self.polygon_results_window)
+            export_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+            tk.Button(export_frame, text="Export to CSV", command=self.export_polygon_results,
+                     font=("Arial", 12), fg="black").pack(side=tk.RIGHT)
+        
+        # Update the table
+        self.update_polygon_results_table()
+        
+        # Bring window to front
+        self.polygon_results_window.lift()
+        self.polygon_results_window.focus()
+    
+    def update_polygon_results_table(self):
+        """Update the polygon results table with current data."""
+        if self.polygon_results_table is None:
+            return
+        
+        # Clear existing items
+        for item in self.polygon_results_table.get_children():
+            self.polygon_results_table.delete(item)
+        
+        # Add rows for each polygon
+        for poly_data in self.polygon_data:
+            stats = poly_data['stats']
+            values = (
+                poly_data['name'],
+                f"{stats['sum']:.2f}",
+                f"{stats['mean']:.2f}",
+                f"{stats['std']:.2f}",
+                f"{stats['min']:.2f}",
+                f"{stats['max']:.2f}",
+                f"{stats['median']:.2f}",
+                f"{stats['mode']:.2f}",
+                f"{stats['area_um2']:.2f}",
+                f"{stats['pixel_count']}"
+            )
+            self.polygon_results_table.insert('', tk.END, values=values)
+    
+    def export_polygon_results(self):
+        """Export polygon statistics to CSV."""
+        if not self.polygon_data:
+            messagebox.showwarning("No Data", "No polygon regions to export.")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Create DataFrame
+            rows = []
+            for poly_data in self.polygon_data:
+                row = {'Name': poly_data['name']}
+                row.update(poly_data['stats'])
+                rows.append(row)
+            
+            df = pd.DataFrame(rows)
+            df.to_csv(file_path, index=False)
+            messagebox.showinfo("Export Complete", f"Statistics exported to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export:\n{e}")
+    
+    def clear_all_polygons(self):
+        """Clear all polygon selections."""
+        if not self.polygon_data:
+            messagebox.showinfo("No Polygons", "No polygons to clear.")
+            return
+        
+        result = messagebox.askyesno("Clear All Polygons", 
+                                    f"Are you sure you want to clear all {len(self.polygon_data)} polygon region(s)?")
+        if result:
+            self.polygon_data = []
+            self.polygon_patches = []
+            self.polygon_color_index = 0
+            self.polygon_vertices = []
+            if self.polygon_active:
+                self.deactivate_polygon_mode()
+            self.view_single_map()
+            if self.polygon_results_table:
+                self.update_polygon_results_table()
+            messagebox.showinfo("Cleared", "All polygon regions have been cleared.")
+
+    # --- End Polygon Selection Functionality ---
+
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
     def build_rgb_tab(self):
@@ -1257,9 +1622,58 @@ class MuadDataViewer:
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
             self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
         
+        # Draw polygon overlays
+        self.draw_polygon_overlays()
+        
         if update_layout:
             self.single_figure.tight_layout()
         self.single_canvas.draw()
+    
+    def draw_polygon_overlays(self):
+        """Draw all polygon selections on the map."""
+        # Clear existing polygon patches
+        for patch in self.polygon_patches:
+            try:
+                patch.remove()
+            except:
+                pass
+        self.polygon_patches = []
+        
+        # Draw completed polygons
+        for poly_data in self.polygon_data:
+            vertices = poly_data['vertices']
+            color = poly_data['color']
+            # Convert color to tuple if it's an array (for matplotlib)
+            if isinstance(color, np.ndarray):
+                # Convert RGBA array to tuple
+                if len(color) >= 3:
+                    color_tuple = tuple(color[:3])  # RGB only, alpha handled separately
+                else:
+                    color_tuple = tuple(color)
+            elif isinstance(color, str):
+                # Already a hex string, convert to tuple for consistency
+                color_tuple = color
+            else:
+                color_tuple = color
+            
+            # Create polygon patch with semi-transparent fill
+            polygon = Polygon(vertices, closed=True, 
+                            facecolor=color_tuple, edgecolor=color_tuple, 
+                            alpha=0.3, linewidth=2)
+            self.single_ax.add_patch(polygon)
+            self.polygon_patches.append(polygon)
+        
+        # Draw current polygon being drawn (if active)
+        if self.polygon_active and len(self.polygon_vertices) > 0:
+            # Draw vertices as markers
+            if len(self.polygon_vertices) > 0:
+                x_coords = [v[0] for v in self.polygon_vertices]
+                y_coords = [v[1] for v in self.polygon_vertices]
+                self.single_ax.plot(x_coords, y_coords, 'wo', markersize=8, markeredgecolor='black', markeredgewidth=1)
+                self.single_ax.plot(x_coords, y_coords, 'w-', linewidth=2, alpha=0.5)
+            
+            # Draw line to current mouse position would require mouse move tracking
+            # For now, just show the vertices and connecting lines
 
     def save_single_image(self):
         if self.single_matrix is None:
@@ -1278,9 +1692,20 @@ class MuadDataViewer:
             mat = df.to_numpy()
             self.rgb_data[channel] = mat
             file_name = os.path.basename(path)
-            root_name = file_name.split()[0]
-            elem = next((part for part in file_name.split() if any(e in part for e in ['ppm', 'CPS'])), 'Unknown')
-            self.rgb_labels[channel]['elem'].config(text=f"Loaded Element: {elem.split('_')[0]}")
+            
+            # Parse filename to extract sample and element
+            parsed = self.parse_matrix_filename(path)
+            if parsed:
+                sample, element, unit_type = parsed
+                root_name = sample
+                elem_display = element
+            else:
+                # Fallback to simple parsing if filename doesn't match expected format
+                root_name = file_name.split()[0]
+                elem = next((part for part in file_name.split() if any(e in part for e in ['ppm', 'CPS'])), 'Unknown')
+                elem_display = elem.split('_')[0] if '_' in elem else elem
+            
+            self.rgb_labels[channel]['elem'].config(text=f"Loaded Element: {elem_display}")
             # Always update dataset label when a new file is loaded
             self.file_root_label.config(text=f"Dataset: {root_name}")
             max_val = float(np.nanmax(mat))
