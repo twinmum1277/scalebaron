@@ -1201,6 +1201,27 @@ class MuadDataViewer:
         
         return stats_dict
     
+    def recalculate_all_polygon_statistics(self):
+        """Recalculate statistics for all existing polygons with the current element data."""
+        if not self.polygon_data or self.single_matrix is None:
+            return
+        
+        # Recalculate statistics for each polygon
+        for poly_data in self.polygon_data:
+            stored_vertices = poly_data['vertices']
+            # Remove the duplicate first vertex at the end if present (for calculation)
+            # The stored vertices have the first vertex duplicated at the end to close the polygon
+            if len(stored_vertices) > 0 and stored_vertices[0] == stored_vertices[-1]:
+                vertices = stored_vertices[:-1]
+            else:
+                vertices = stored_vertices
+            # Recalculate statistics
+            poly_data['stats'] = self.calculate_polygon_statistics(vertices)
+        
+        # Update the results table if it's open
+        if self.polygon_results_table:
+            self.update_polygon_results_table()
+    
     def show_polygon_results_window(self):
         """Show or create the polygon statistics results window."""
         if self.polygon_results_window is None or not self.polygon_results_window.winfo_exists():
@@ -1240,6 +1261,24 @@ class MuadDataViewer:
             table_frame.grid_rowconfigure(0, weight=1)
             table_frame.grid_columnconfigure(0, weight=1)
             
+            # Configure table for extended selection (multiple rows)
+            self.polygon_results_table.configure(selectmode='extended')
+            
+            # Bind copy and cut keyboard shortcuts
+            self.polygon_results_table.bind('<Control-c>', self.copy_polygon_table_selection)
+            self.polygon_results_table.bind('<Control-C>', self.copy_polygon_table_selection)
+            self.polygon_results_table.bind('<Control-x>', self.copy_polygon_table_selection)
+            self.polygon_results_table.bind('<Control-X>', self.copy_polygon_table_selection)
+            
+            # Bind right-click for context menu
+            self.polygon_results_table.bind('<Button-3>', self.show_polygon_table_context_menu)
+            
+            # Create context menu
+            self.polygon_table_context_menu = tk.Menu(self.polygon_results_window, tearoff=0)
+            self.polygon_table_context_menu.add_command(label="Copy", command=self.copy_polygon_table_selection)
+            self.polygon_table_context_menu.add_separator()
+            self.polygon_table_context_menu.add_command(label="Select All", command=self.select_all_polygon_table_rows)
+            
             # Export button
             export_frame = tk.Frame(self.polygon_results_window)
             export_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
@@ -1278,6 +1317,68 @@ class MuadDataViewer:
                 f"{stats['pixel_count']}"
             )
             self.polygon_results_table.insert('', tk.END, values=values)
+    
+    def show_polygon_table_context_menu(self, event):
+        """Show context menu on right-click."""
+        if self.polygon_results_table is None:
+            return
+        
+        # Select the item under the cursor if not already selected
+        item = self.polygon_results_table.identify_row(event.y)
+        if item:
+            if item not in self.polygon_results_table.selection():
+                self.polygon_results_table.selection_set(item)
+        
+        # Show context menu
+        try:
+            self.polygon_table_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.polygon_table_context_menu.grab_release()
+    
+    def select_all_polygon_table_rows(self):
+        """Select all rows in the polygon results table."""
+        if self.polygon_results_table is None:
+            return
+        
+        all_items = self.polygon_results_table.get_children()
+        self.polygon_results_table.selection_set(all_items)
+    
+    def copy_polygon_table_selection(self, event=None):
+        """Copy selected table cells/rows to clipboard."""
+        if self.polygon_results_table is None:
+            return "break"
+        
+        # Get selected items
+        selected_items = self.polygon_results_table.selection()
+        
+        # If nothing selected, select all
+        if not selected_items:
+            selected_items = self.polygon_results_table.get_children()
+            if not selected_items:
+                return "break"
+        
+        # Get column names
+        columns = self.polygon_results_table['columns']
+        
+        # Build clipboard text
+        clipboard_lines = []
+        
+        # First, add header row
+        header_row = '\t'.join(columns)
+        clipboard_lines.append(header_row)
+        
+        # Add data rows for selected items
+        for item_id in selected_items:
+            item_values = self.polygon_results_table.item(item_id, 'values')
+            if item_values:
+                clipboard_lines.append('\t'.join(str(v) for v in item_values))
+        
+        # Copy to clipboard
+        clipboard_text = '\n'.join(clipboard_lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(clipboard_text)
+        
+        return "break"  # Prevent default behavior
     
     def export_polygon_results(self):
         """Export polygon statistics to CSV."""
@@ -1621,6 +1722,9 @@ class MuadDataViewer:
             y = mat.shape[0] - 15
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
             self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+        
+        # Recalculate statistics for all existing polygons with the current element data
+        self.recalculate_all_polygon_statistics()
         
         # Draw polygon overlays
         self.draw_polygon_overlays()
