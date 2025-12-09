@@ -308,9 +308,17 @@ class CompositeApp:
         
         ttk.Label(control_frame, text="Progress Log:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
 
+        # Create a frame for the log with scrollbar
+        log_frame = ttk.Frame(control_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
+        
         custom_font = font.Font(family="Arial", size=13, slant="roman")
-        self.log = tk.Text(control_frame, height=12, width=40, wrap="word", font=custom_font)
-        self.log.pack(pady=10)
+        self.log = tk.Text(log_frame, height=10, width=35, wrap="word", font=custom_font)
+        log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
+        self.log.configure(yscrollcommand=log_scrollbar.set)
+        
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Window into ScaleBarOn's soul:     
         self.preview_container = ttk.Frame(preview_frame)
@@ -320,8 +328,10 @@ class CompositeApp:
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         
         # Set minimum window size to prevent GUI from shrinking too small
-        # Let Tkinter size the window naturally based on content (like earlier versions)
-        self.master.minsize(400, 500)
+        # Ensure minimum size accommodates all controls and progress log
+        self.master.minsize(600, 700)
+        # Ensure window is resizable
+        self.master.resizable(True, True)
         
         # Bind resize event to update the preview image's aspect ratio
         self.preview_container.bind("<Configure>", self.on_resize)
@@ -403,7 +413,28 @@ class CompositeApp:
         # Create new window
         self.progress_table_window = tk.Toplevel(self.master)
         self.progress_table_window.title("Progress Table")
-        self.progress_table_window.geometry("800x500")
+        
+        # Make window resizable
+        self.progress_table_window.resizable(True, True)
+        
+        # Get screen dimensions to ensure window fits
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+        
+        # Set reasonable default size (80% of screen, but cap at 1000x700)
+        default_width = min(800, int(screen_width * 0.8))
+        default_height = min(500, int(screen_height * 0.7))
+        
+        # Set minimum size
+        self.progress_table_window.minsize(400, 300)
+        
+        # Set initial geometry
+        self.progress_table_window.geometry(f"{default_width}x{default_height}")
+        
+        # Center window on screen
+        x = (screen_width - default_width) // 2
+        y = (screen_height - default_height) // 2
+        self.progress_table_window.geometry(f"{default_width}x{default_height}+{x}+{y}")
         
         # Main container
         main_frame = ttk.Frame(self.progress_table_window, padding=10)
@@ -1064,6 +1095,9 @@ class CompositeApp:
         element = self.element.get()
         self.preview_window.title(f"Composite Preview - {element}")
         
+        # Make window resizable
+        self.preview_window.resizable(True, True)
+        
         # Get image dimensions
         img_width, img_height = self.preview_image.size
         
@@ -1090,6 +1124,11 @@ class CompositeApp:
         control_panel_height = 100  # Space for controls at bottom
         window_width = display_width + 20
         window_height = display_height + 40 + control_panel_height
+        
+        # Set minimum size to ensure controls are always visible
+        self.preview_window.minsize(400, 300)
+        
+        # Set initial geometry
         self.preview_window.geometry(f"{window_width}x{window_height}")
         
         # Center the window on screen
