@@ -81,31 +81,6 @@ class CompositeApp:
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
-        
-        # Set custom ScaleBaron icon
-        try:
-            icon_path = os.path.join(os.path.dirname(__file__), 'icons', 'ScaleBarOn LOGO.png')
-            if os.path.exists(icon_path):
-                icon = tk.PhotoImage(file=icon_path)
-                master.iconphoto(True, icon)
-                # Keep a reference to prevent garbage collection
-                self.icon = icon
-                print("✅ ScaleBaron icon loaded successfully")
-            else:
-                print(f"⚠️ Icon file not found at {icon_path}")
-        except Exception as e:
-            print(f"⚠️ Could not load custom icon: {e}")
-        
-        # Debug: Test if app is running updated code
-        print("🔍 DEBUG: ScaleBaron app initialized with updated code")
-    
-    def set_window_icon(self, window):
-        """Helper method to set icon on Toplevel windows."""
-        try:
-            if hasattr(self, 'icon'):
-                window.iconphoto(True, self.icon)
-        except Exception as e:
-            print(f"⚠️ Could not set window icon: {e}")
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -153,10 +128,10 @@ class CompositeApp:
         preview_frame = ttk.Frame(self.master)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # Step 1. Select folders (stacked buttons + path labels), centered
+        # 1. Select folders (stacked buttons + path labels), centered
         folders_group = ttk.Frame(control_frame)
         folders_group.pack(pady=5)
-        ttk.Label(folders_group, text="Step 1. Select folders", style="Hint.TLabel").pack(pady=(5, 0))
+        ttk.Label(folders_group, text="1. Select folders", style="Hint.TLabel").pack(pady=(5, 0))
 
         # Input folder (centered)
         ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(4, 0))
@@ -174,8 +149,8 @@ class CompositeApp:
 
         # Element dropdown
         ttk.Label(grid_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, state="disabled")
-        self.element_dropdown.grid(row=0, column=1, padx=5, pady=2)
+        self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, state="disabled", width=12)
+        self.element_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
         # Pixel Size input
         ttk.Label(grid_frame, text="Pixel Size (µm):").grid(row=1, column=0, sticky="e", padx=(0, 2), pady=2)
@@ -197,21 +172,23 @@ class CompositeApp:
 
         # Scale bar length
         ttk.Label(grid_frame, text="Scale bar length (µm):").grid(row=3, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um).grid(row=3, column=1, padx=5, pady=2)
+        scale_bar_entry = ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um, width=12)
+        scale_bar_entry.grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
         # Rows
         ttk.Label(grid_frame, text="Rows:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.num_rows).grid(row=4, column=1, padx=5, pady=2)
+        rows_entry = ttk.Entry(grid_frame, textvariable=self.num_rows, width=12)
+        rows_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
 
         # Color scheme
         ttk.Label(grid_frame, text="Color Scheme:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
-        self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps())
-        self.color_scheme_dropdown.grid(row=5, column=1, padx=5, pady=2)
+        self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=12)
+        self.color_scheme_dropdown.grid(row=5, column=1, padx=5, pady=2, sticky="w")
 
         # Font size
         ttk.Label(grid_frame, text="Sample Name Font Size:").grid(row=6, column=0, sticky="e", padx=5, pady=2)
-        self.sample_name_font_size_dropdown = ttk.Combobox(grid_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"])
-        self.sample_name_font_size_dropdown.grid(row=6, column=1, padx=5, pady=2)
+        self.sample_name_font_size_dropdown = ttk.Combobox(grid_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=12)
+        self.sample_name_font_size_dropdown.grid(row=6, column=1, padx=5, pady=2, sticky="w")
         
         # Element label font size
         ttk.Label(grid_frame, text="Element Label Font Size:").grid(row=7, column=0, sticky="e", padx=5, pady=2)
@@ -224,7 +201,8 @@ class CompositeApp:
 
         # Scale max
         ttk.Label(grid_frame, text="Scale Max:").grid(row=8, column=0, sticky="e", padx=5, pady=2)
-        ttk.Entry(grid_frame, textvariable=self.scale_max).grid(row=8, column=1, padx=5, pady=2)
+        scale_max_entry = ttk.Entry(grid_frame, textvariable=self.scale_max, width=12)
+        scale_max_entry.grid(row=8, column=1, padx=5, pady=2, sticky="w")
 
         # Pseudolog Scale option
         ttk.Checkbutton(grid_frame, text="Log Scale", variable=self.use_log).grid(row=9, column=0, columnspan=2, pady=2)
@@ -233,7 +211,7 @@ class CompositeApp:
         button_frame.pack(pady=10)
 
         # Step 2. Calculate statistics
-        ttk.Label(button_frame, text="Step 2. Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
+        ttk.Label(button_frame, text="2. Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
         summarize_icon = self.button_icons.get('summarize')
         if summarize_icon:
             self.summarize_btn = tk.Button(button_frame, image=summarize_icon, command=self.load_data, 
@@ -245,7 +223,7 @@ class CompositeApp:
         self.summarize_btn.grid(row=1, column=0, padx=5, pady=(0, 10), sticky="")
 
         # Step 3. Preview composite
-        ttk.Label(button_frame, text="Step 3. Preview composite", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="3. Preview composite", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
         preview_icon = self.button_icons.get('preview')
         if preview_icon:
             self.preview_btn = tk.Button(button_frame, image=preview_icon, command=self.preview_composite,
@@ -257,7 +235,7 @@ class CompositeApp:
         self.preview_btn.grid(row=3, column=0, padx=5, pady=(0, 5), sticky="")
         
         # Step 4. Add Element Label (optional)
-        ttk.Label(button_frame, text="Step 4. Add Element Label (optional)", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="4. Add Element Label (optional)", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
         add_label_icon = self.button_icons.get('add_label')
         if add_label_icon:
             self.add_label_btn = tk.Button(button_frame, image=add_label_icon, command=self.add_element_label,
@@ -269,7 +247,7 @@ class CompositeApp:
         self.add_label_btn.grid(row=5, column=0, padx=5, pady=(0, 10), sticky="")
 
         # Step 5. Save Composite
-        ttk.Label(button_frame, text="Step 5. Save Composite", style="Hint.TLabel").grid(row=6, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="5. Save Composite", style="Hint.TLabel").grid(row=6, column=0, padx=5, pady=(0, 0), sticky="w")
         save_icon = self.button_icons.get('save')
         if save_icon:
             self.save_btn = tk.Button(button_frame, image=save_icon, command=self.save_composite,
@@ -314,14 +292,14 @@ class CompositeApp:
         self.preview_window = None
         self.preview_window_label = None
         
-        ttk.Label(control_frame, text="Progress Log:", style="Hint.TLabel").pack(anchor="w", padx=5, pady=(10, 0))
+        ttk.Label(control_frame, text="Progress Log:", style="Hint.TLabel").pack(anchor="center", padx=5, pady=(10, 0))
 
         # Create a frame for the log with scrollbar
         log_frame = ttk.Frame(control_frame)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
         
         custom_font = font.Font(family="Arial", size=13, slant="roman")
-        self.log = tk.Text(log_frame, height=10, width=35, wrap="word", font=custom_font)
+        self.log = tk.Text(log_frame, height=10, width=22, wrap="word", font=custom_font)
         log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scrollbar.set)
         
@@ -336,8 +314,7 @@ class CompositeApp:
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         
         # Set minimum window size to prevent GUI from shrinking too small
-        # Ensure minimum size accommodates all controls and progress log
-        self.master.minsize(600, 700)
+        self.master.minsize(450, 700)
         # Ensure window is resizable
         self.master.resizable(True, True)
         
@@ -367,12 +344,12 @@ class CompositeApp:
                 try:
                     # Load with PIL to handle transparency and resize if needed
                     icon_img = Image.open(icon_path)
-                    # Resize to 24x24 if larger (keeps icons consistent)
-                    if icon_img.size[0] > 24 or icon_img.size[1] > 24:
-                        icon_img = icon_img.resize((24, 24), Image.LANCZOS)
-                    elif icon_img.size[0] < 24 or icon_img.size[1] < 24:
+                    # Resize to 32x32 (larger icons for better visibility)
+                    if icon_img.size[0] > 32 or icon_img.size[1] > 32:
+                        icon_img = icon_img.resize((32, 32), Image.LANCZOS)
+                    elif icon_img.size[0] < 32 or icon_img.size[1] < 32:
                         # Upscale smaller icons
-                        icon_img = icon_img.resize((24, 24), Image.LANCZOS)
+                        icon_img = icon_img.resize((32, 32), Image.LANCZOS)
                     
                     # Convert to PhotoImage for Tkinter
                     self.button_icons[key] = ImageTk.PhotoImage(icon_img)
@@ -421,7 +398,6 @@ class CompositeApp:
         # Create new window
         self.progress_table_window = tk.Toplevel(self.master)
         self.progress_table_window.title("Progress Table")
-        self.set_window_icon(self.progress_table_window)
         
         # Make window resizable
         self.progress_table_window.resizable(True, True)
@@ -1103,7 +1079,6 @@ class CompositeApp:
         self.preview_window = tk.Toplevel(self.master)
         element = self.element.get()
         self.preview_window.title(f"Composite Preview - {element}")
-        self.set_window_icon(self.preview_window)
         
         # Make window resizable
         self.preview_window.resizable(True, True)
