@@ -84,7 +84,7 @@ class CompositeApp:
         
         # Set custom ScaleBaron icon
         try:
-            icon_path = os.path.join(os.path.dirname(__file__), 'scalebaron_icon.png')
+            icon_path = os.path.join(os.path.dirname(__file__), 'icons', 'ScaleBarOn LOGO.png')
             if os.path.exists(icon_path):
                 icon = tk.PhotoImage(file=icon_path)
                 master.iconphoto(True, icon)
@@ -98,6 +98,14 @@ class CompositeApp:
         
         # Debug: Test if app is running updated code
         print("🔍 DEBUG: ScaleBaron app initialized with updated code")
+    
+    def set_window_icon(self, window):
+        """Helper method to set icon on Toplevel windows."""
+        try:
+            if hasattr(self, 'icon'):
+                window.iconphoto(True, self.icon)
+        except Exception as e:
+            print(f"⚠️ Could not set window icon: {e}")
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -413,6 +421,7 @@ class CompositeApp:
         # Create new window
         self.progress_table_window = tk.Toplevel(self.master)
         self.progress_table_window.title("Progress Table")
+        self.set_window_icon(self.progress_table_window)
         
         # Make window resizable
         self.progress_table_window.resizable(True, True)
@@ -1094,6 +1103,7 @@ class CompositeApp:
         self.preview_window = tk.Toplevel(self.master)
         element = self.element.get()
         self.preview_window.title(f"Composite Preview - {element}")
+        self.set_window_icon(self.preview_window)
         
         # Make window resizable
         self.preview_window.resizable(True, True)

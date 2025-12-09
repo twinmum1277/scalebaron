@@ -30,6 +30,13 @@ class MathExpressionDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
+        # Set icon if parent (root) has one
+        try:
+            if hasattr(parent, 'icon'):
+                self.dialog.iconphoto(True, parent.icon)
+        except Exception:
+            pass
+        
         # Center the dialog
         self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
         
@@ -151,6 +158,29 @@ class MuadDataViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
+        
+        # Set custom Muad'Data icon
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), 'icons', 'muaddata ICON.png')
+            if os.path.exists(icon_path):
+                icon = tk.PhotoImage(file=icon_path)
+                root.iconphoto(True, icon)
+                # Keep a reference to prevent garbage collection
+                self.icon = icon
+                # Also store on root for easy access by dialogs
+                root.icon = icon
+            else:
+                print(f"⚠️ Icon file not found at {icon_path}")
+        except Exception as e:
+            print(f"⚠️ Could not load custom icon: {e}")
+    
+    def set_window_icon(self, window):
+        """Helper method to set icon on Toplevel windows."""
+        try:
+            if hasattr(self, 'icon'):
+                window.iconphoto(True, self.icon)
+        except Exception as e:
+            print(f"⚠️ Could not set window icon: {e}")
 
         # Single Element Viewer state
         self.single_matrix = None
@@ -1228,6 +1258,7 @@ class MuadDataViewer:
             # Create new window
             self.polygon_results_window = tk.Toplevel(self.root)
             self.polygon_results_window.title("Region Statistics")
+            self.set_window_icon(self.polygon_results_window)
             self.polygon_results_window.geometry("900x500")
             
             # Create frame for table and scrollbar
@@ -2226,6 +2257,7 @@ class MuadDataViewer:
         # Create a new window
         ratio_window = tk.Toplevel(self.root)
         ratio_window.title(f"Ratio Map: {elem1_name} / {elem2_name}")
+        self.set_window_icon(ratio_window)
         ratio_window.geometry("800x700")
         
         # Create figure
