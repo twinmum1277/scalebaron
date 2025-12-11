@@ -112,6 +112,9 @@ class CompositeApp:
         self.progress_table = None  # Treeview widget
         self.progress_data = {}  # {(sample, element): status} where status is 'complete', 'partial', or None
         
+        # Status tracking for simplified log
+        self.status = "Idle"  # Idle, Busy, Finishing
+        
         # Button icons storage
         self.button_icons = {}  # Dictionary to store loaded button icons
         
@@ -122,201 +125,332 @@ class CompositeApp:
         self.setup_widgets()
 
     def setup_widgets(self):
-        control_frame = ttk.Frame(self.master)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
-
-        preview_frame = ttk.Frame(self.master)
-        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-        # 1. Select folders (stacked buttons + path labels), centered
-        folders_group = ttk.Frame(control_frame)
+        # Create notebook for tabs (similar to Muad'Data style)
+        self.tabs = ttk.Notebook(self.master)
+        self.tabs.pack(fill=tk.BOTH, expand=True)
+        
+        # Create tab frames
+        self.setup_tab = ttk.Frame(self.tabs)
+        self.preview_tab = ttk.Frame(self.tabs)
+        
+        # Add tabs
+        self.tabs.add(self.setup_tab, text="Setup & Statistics")
+        self.tabs.add(self.preview_tab, text="Preview & Export")
+        
+        # Build each tab
+        self.build_setup_tab()
+        self.build_preview_tab()
+        
+        # Set minimum window size
+        self.master.minsize(600, 500)
+        self.master.resizable(True, True)
+        
+        # Progress table window (created on demand - legacy, not used in tabbed interface)
+        self.progress_table_window = None
+        # Note: self.progress_table is created in build_setup_tab(), don't overwrite it here!
+        
+        # Preview window (created on demand) - kept for separate window option
+        self.preview_window = None
+        self.preview_window_label = None
+    
+    def build_setup_tab(self):
+        """Build the Setup & Statistics tab."""
+        # Left side: Controls (fixed width to match Preview tab)
+        left_frame = ttk.Frame(self.setup_tab, width=280)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        left_frame.pack_propagate(False)  # Maintain fixed width
+        
+        # Right side: Two-panel layout (Statistics Table, Progress Table)
+        right_frame = ttk.Frame(self.setup_tab)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # 1. Select folders
+        folders_group = ttk.Frame(left_frame)
         folders_group.pack(pady=5)
         ttk.Label(folders_group, text="1. Select folders", style="Hint.TLabel").pack(pady=(5, 0))
-
-        # Input folder (centered)
+        
+        # Input folder
         ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(4, 0))
         self.input_folder_label = ttk.Label(folders_group, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
         self.input_folder_label.pack(pady=(2, 6))
-
-        # Output folder (centered)
+        
+        # Output folder
         ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 0))
         self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
         self.output_folder_label.pack(pady=(2, 6))
-
-        # Control panel inside grid_frame
-        grid_frame = ttk.Frame(control_frame)
+        
+        # Control panel
+        grid_frame = ttk.Frame(left_frame)
         grid_frame.pack(pady=10)
-
+        
         # Element dropdown
         ttk.Label(grid_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, state="disabled", width=12)
         self.element_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-
+        # Update statistics table when element changes
+        self.element.trace('w', lambda *args: self.update_statistics_table())
+        
         # Pixel Size input
         ttk.Label(grid_frame, text="Pixel Size (µm):").grid(row=1, column=0, sticky="e", padx=(0, 2), pady=2)
-
-        # Create a horizontal frame for entry + hint
         pixel_entry_frame = ttk.Frame(grid_frame)
         pixel_entry_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-
-        # Inside the frame: entry box + grey italic label
         ttk.Entry(pixel_entry_frame, textvariable=self.pixel_size, width=10).pack(side="left")
         ttk.Label(pixel_entry_frame, text="Hint: In your metadata", style="Hint.TLabel").pack(side="left", padx=(4, 0))
         
-        # Combine the checkbox and Pixel Sizes button in one horizontal frame
+        # Multiple sizes checkbox
         multi_size_frame = ttk.Frame(grid_frame)
-        multi_size_frame.grid(row=2, column=1, columnspan=2, sticky="w", pady=(0, 10))
-
+        multi_size_frame.grid(row=2, column=1, sticky="w", pady=(0, 10))
         ttk.Checkbutton(multi_size_frame, text="Multiple sizes?", variable=self.use_custom_pixel_sizes).pack(side="left")
         ttk.Button(multi_size_frame, text="Pixel Sizes", command=self.handle_pixel_sizes).pack(side="left", padx=(5, 0))
-
-        # Scale bar length
-        ttk.Label(grid_frame, text="Scale bar length (µm):").grid(row=3, column=0, sticky="e", padx=5, pady=2)
-        scale_bar_entry = ttk.Entry(grid_frame, textvariable=self.scale_bar_length_um, width=12)
-        scale_bar_entry.grid(row=3, column=1, padx=5, pady=2, sticky="w")
-
-        # Rows
-        ttk.Label(grid_frame, text="Rows:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
-        rows_entry = ttk.Entry(grid_frame, textvariable=self.num_rows, width=12)
-        rows_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
-
-        # Color scheme
-        ttk.Label(grid_frame, text="Color Scheme:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
-        self.color_scheme_dropdown = ttk.Combobox(grid_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=12)
-        self.color_scheme_dropdown.grid(row=5, column=1, padx=5, pady=2, sticky="w")
-
-        # Font size
-        ttk.Label(grid_frame, text="Sample Name Font Size:").grid(row=6, column=0, sticky="e", padx=5, pady=2)
-        self.sample_name_font_size_dropdown = ttk.Combobox(grid_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=12)
-        self.sample_name_font_size_dropdown.grid(row=6, column=1, padx=5, pady=2, sticky="w")
         
-        # Element label font size
-        ttk.Label(grid_frame, text="Element Label Font Size:").grid(row=7, column=0, sticky="e", padx=5, pady=2)
-        element_font_frame = ttk.Frame(grid_frame)
-        element_font_frame.grid(row=7, column=1, sticky="w", padx=5, pady=2)
-        ttk.Scale(element_font_frame, from_=13, to=72, variable=self.element_label_font_size, orient=tk.HORIZONTAL, length=120).pack(side=tk.LEFT)
-        self.element_font_size_label = ttk.Label(element_font_frame, text="16")
-        self.element_font_size_label.pack(side=tk.LEFT, padx=(5, 0))
-        self.element_label_font_size.trace('w', lambda *args: self.element_font_size_label.config(text=str(self.element_label_font_size.get())))
-
-        # Scale max
-        ttk.Label(grid_frame, text="Scale Max:").grid(row=8, column=0, sticky="e", padx=5, pady=2)
-        scale_max_entry = ttk.Entry(grid_frame, textvariable=self.scale_max, width=12)
-        scale_max_entry.grid(row=8, column=1, padx=5, pady=2, sticky="w")
-
-        # Pseudolog Scale option
-        ttk.Checkbutton(grid_frame, text="Log Scale", variable=self.use_log).grid(row=9, column=0, columnspan=2, pady=2)
-
-        button_frame = ttk.Frame(control_frame)
+        # Calculate statistics button
+        button_frame = ttk.Frame(left_frame)
         button_frame.pack(pady=10)
-
-        # Step 2. Calculate statistics
+        
         ttk.Label(button_frame, text="2. Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
         summarize_icon = self.button_icons.get('summarize')
         if summarize_icon:
             self.summarize_btn = tk.Button(button_frame, image=summarize_icon, command=self.load_data, 
                                           padx=2, pady=8, bg='#f0f0f0', relief='raised',
                                           activebackground='#4CAF50')
-            self.summarize_btn.image = summarize_icon  # Keep reference
+            self.summarize_btn.image = summarize_icon
         else:
             self.summarize_btn = ttk.Button(button_frame, text="📊", command=self.load_data, width=1)
         self.summarize_btn.grid(row=1, column=0, padx=5, pady=(0, 10), sticky="")
-
-        # Step 3. Preview composite
-        ttk.Label(button_frame, text="3. Preview composite", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
-        preview_icon = self.button_icons.get('preview')
-        if preview_icon:
-            self.preview_btn = tk.Button(button_frame, image=preview_icon, command=self.preview_composite,
-                                        padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                        activebackground='#4CAF50')
-            self.preview_btn.image = preview_icon  # Keep reference
-        else:
-            self.preview_btn = ttk.Button(button_frame, text="👁️", command=self.preview_composite, width=1)
-        self.preview_btn.grid(row=3, column=0, padx=5, pady=(0, 5), sticky="")
-        
-        # Step 4. Add Element Label (optional)
-        ttk.Label(button_frame, text="4. Add Element Label (optional)", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
-        add_label_icon = self.button_icons.get('add_label')
-        if add_label_icon:
-            self.add_label_btn = tk.Button(button_frame, image=add_label_icon, command=self.add_element_label,
-                                           padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                           activebackground='#4CAF50')
-            self.add_label_btn.image = add_label_icon  # Keep reference
-        else:
-            self.add_label_btn = ttk.Button(button_frame, text="🏷️", command=self.add_element_label, width=1)
-        self.add_label_btn.grid(row=5, column=0, padx=5, pady=(0, 10), sticky="")
-
-        # Step 5. Save Composite
-        ttk.Label(button_frame, text="5. Save Composite", style="Hint.TLabel").grid(row=6, column=0, padx=5, pady=(0, 0), sticky="w")
-        save_icon = self.button_icons.get('save')
-        if save_icon:
-            self.save_btn = tk.Button(button_frame, image=save_icon, command=self.save_composite,
-                                     padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                     activebackground='#4CAF50')
-            self.save_btn.image = save_icon  # Keep reference
-        else:
-            self.save_btn = ttk.Button(button_frame, text="💾", command=self.save_composite, width=1)
-        self.save_btn.grid(row=7, column=0, padx=5, pady=(0, 10), sticky="")
         
         # Batch processing
-        ttk.Label(button_frame, text="Batch Processing", style="Hint.TLabel").grid(row=8, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="Batch Processing", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
         batch_icon = self.button_icons.get('batch')
         if batch_icon:
             batch_button = tk.Button(button_frame, image=batch_icon,
                   command=self.batch_process_all_elements,
                   padx=2, pady=8, bg="#4CAF50", fg="black", relief='raised',
                   activebackground='#45a049')
-            batch_button.image = batch_icon  # Keep reference
+            batch_button.image = batch_icon
         else:
             batch_button = tk.Button(button_frame, text="⚡", command=self.batch_process_all_elements, 
                   bg="#4CAF50", fg="black", width=1, height=3)
-        batch_button.grid(row=9, column=0, padx=5, pady=(0, 10), sticky="")
-
-        # Progress table button (opens in separate window)
-        ttk.Label(button_frame, text="View Progress Table", style="Hint.TLabel").grid(row=10, column=0, padx=5, pady=(0, 0), sticky="w")
+        batch_button.grid(row=3, column=0, padx=5, pady=(0, 10), sticky="")
+        
+        # Progress table button
+        ttk.Label(button_frame, text="View Progress Table", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
         progress_icon = self.button_icons.get('progress')
         if progress_icon:
             progress_btn = tk.Button(button_frame, image=progress_icon, command=self.show_progress_table_window,
                                     padx=2, pady=8, bg='#f0f0f0', relief='raised',
                                     activebackground='#4CAF50')
-            progress_btn.image = progress_icon  # Keep reference
+            progress_btn.image = progress_icon
         else:
             progress_btn = ttk.Button(button_frame, text="📊", command=self.show_progress_table_window, width=1)
-        progress_btn.grid(row=11, column=0, padx=5, pady=(0, 10), sticky="")
+        progress_btn.grid(row=5, column=0, padx=5, pady=(0, 10), sticky="")
         
-        # Progress table window (created on demand)
-        self.progress_table_window = None
-        self.progress_table = None
+        # Progress Log at bottom of control panel
+        log_group = ttk.LabelFrame(left_frame, text="Status Log", padding=5)
+        log_group.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
         
-        # Preview window (created on demand)
-        self.preview_window = None
-        self.preview_window_label = None
+        log_frame = ttk.Frame(log_group)
+        log_frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(control_frame, text="Progress Log:", style="Hint.TLabel").pack(anchor="center", padx=5, pady=(10, 0))
-
-        # Create a frame for the log with scrollbar
-        log_frame = ttk.Frame(control_frame)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
-        
-        custom_font = font.Font(family="Arial", size=13, slant="roman")
-        self.log = tk.Text(log_frame, height=10, width=22, wrap="word", font=custom_font)
+        custom_font = font.Font(family="Arial", size=11, slant="roman")
+        self.log = tk.Text(log_frame, height=4, width=30, wrap="word", font=custom_font)
         log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scrollbar.set)
         
         self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Window into ScaleBarOn's soul:     
+        
+        # Use PanedWindow to create resizable sections
+        paned = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Section 1: Statistics Table (top)
+        stats_section = ttk.Frame(paned)
+        paned.add(stats_section, weight=1)
+        ttk.Label(stats_section, text="Statistics Table (Current Element):", style="Hint.TLabel").pack(anchor="center", padx=5, pady=(5, 0))
+        
+        stats_frame = ttk.Frame(stats_section)
+        stats_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
+        
+        # Create Treeview for statistics
+        stats_columns = ('Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile', 'IQR', 'Mean')
+        self.stats_table = ttk.Treeview(stats_frame, columns=stats_columns, show='headings', height=6)
+        stats_xscroll = ttk.Scrollbar(stats_frame, orient=tk.HORIZONTAL, command=self.stats_table.xview)
+        stats_yscroll = ttk.Scrollbar(stats_frame, orient=tk.VERTICAL, command=self.stats_table.yview)
+        self.stats_table.configure(xscrollcommand=stats_xscroll.set, yscrollcommand=stats_yscroll.set)
+        
+        # Configure column headings
+        for col in stats_columns:
+            self.stats_table.heading(col, text=col)
+            self.stats_table.column(col, width=100, anchor='center')
+        
+        self.stats_table.grid(row=0, column=0, sticky='nsew')
+        stats_yscroll.grid(row=0, column=1, sticky='ns')
+        stats_xscroll.grid(row=1, column=0, sticky='ew')
+        stats_frame.grid_rowconfigure(0, weight=1)
+        stats_frame.grid_columnconfigure(0, weight=1)
+        
+        # Section 2: Progress Table (bottom)
+        progress_section = ttk.Frame(paned)
+        paned.add(progress_section, weight=1)
+        ttk.Label(progress_section, text="Progress Table:", style="Hint.TLabel").pack(anchor="center", padx=5, pady=(5, 0))
+        
+        progress_frame = ttk.Frame(progress_section)
+        progress_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
+        
+        # Create Treeview for progress table (embedded version)
+        self.progress_table = ttk.Treeview(progress_frame, columns=(), show="headings", height=6)
+        progress_xscroll = ttk.Scrollbar(progress_frame, orient=tk.HORIZONTAL, command=self.progress_table.xview)
+        progress_yscroll = ttk.Scrollbar(progress_frame, orient=tk.VERTICAL, command=self.progress_table.yview)
+        self.progress_table.configure(xscrollcommand=progress_xscroll.set, yscrollcommand=progress_yscroll.set)
+        
+        self.progress_table.grid(row=0, column=0, sticky='nsew')
+        progress_yscroll.grid(row=0, column=1, sticky='ns')
+        progress_xscroll.grid(row=1, column=0, sticky='ew')
+        progress_frame.grid_rowconfigure(0, weight=1)
+        progress_frame.grid_columnconfigure(0, weight=1)
+        
+        # Configure tag colors for progress table
+        self.progress_table.tag_configure("complete", background="#90EE90")
+        self.progress_table.tag_configure("partial", background="#FFE4B5")
+        self.progress_table.tag_configure("missing", background="#FFB6C1")
+        self.progress_table.tag_configure("missing_file", background="#D3D3D3", foreground="#666666")
+        
+        # Add refresh button for progress table
+        refresh_frame = ttk.Frame(progress_section)
+        refresh_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        ttk.Button(refresh_frame, text="Refresh Progress Table", command=self.refresh_progress_table).pack(side=tk.RIGHT)
+    
+    def build_preview_tab(self):
+        """Build the Preview & Export tab."""
+        # Left side: Controls (fixed width to match Setup tab)
+        control_frame = ttk.Frame(self.preview_tab, width=280)
+        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        control_frame.pack_propagate(False)  # Maintain fixed width
+        
+        # Right side: Preview pane
+        preview_frame = ttk.Frame(self.preview_tab)
+        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Element dropdown at top
+        element_group = ttk.Frame(control_frame)
+        element_group.pack(pady=5)
+        ttk.Label(element_group, text="Element:").pack(side=tk.LEFT, padx=5)
+        self.element_dropdown_preview = ttk.Combobox(element_group, textvariable=self.element, state="readonly", width=15)
+        self.element_dropdown_preview.pack(side=tk.LEFT, padx=5)
+        # Update statistics table when element changes (same trace as in setup tab)
+        
+        # Layout controls
+        layout_frame = ttk.LabelFrame(control_frame, text="Layout", padding=10)
+        layout_frame.pack(fill=tk.X, pady=5)
+        
+        # Scale bar length
+        ttk.Label(layout_frame, text="Scale bar length (µm):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        scale_bar_entry = ttk.Entry(layout_frame, textvariable=self.scale_bar_length_um, width=12)
+        scale_bar_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        
+        # Rows
+        ttk.Label(layout_frame, text="Rows:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=12)
+        rows_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        
+        # Display controls
+        display_frame = ttk.LabelFrame(control_frame, text="Display", padding=10)
+        display_frame.pack(fill=tk.X, pady=5)
+        
+        # Color scheme
+        ttk.Label(display_frame, text="Color Scheme:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        self.color_scheme_dropdown = ttk.Combobox(display_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=12)
+        self.color_scheme_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        
+        # Scale max
+        ttk.Label(display_frame, text="Scale Max:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        scale_max_entry = ttk.Entry(display_frame, textvariable=self.scale_max, width=12)
+        scale_max_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        
+        # Log Scale
+        ttk.Checkbutton(display_frame, text="Log Scale", variable=self.use_log).grid(row=2, column=0, columnspan=2, pady=2)
+        
+        # Font controls
+        font_frame = ttk.LabelFrame(control_frame, text="Fonts", padding=10)
+        font_frame.pack(fill=tk.X, pady=5)
+        
+        # Sample name font size
+        ttk.Label(font_frame, text="Sample Name Font:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=12)
+        self.sample_name_font_size_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        
+        # Element label font size
+        ttk.Label(font_frame, text="Element Label Font:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        element_font_frame = ttk.Frame(font_frame)
+        element_font_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        ttk.Scale(element_font_frame, from_=13, to=72, variable=self.element_label_font_size, orient=tk.HORIZONTAL, length=120).pack(side=tk.LEFT)
+        self.element_font_size_label = ttk.Label(element_font_frame, text="16")
+        self.element_font_size_label.pack(side=tk.LEFT, padx=(5, 0))
+        self.element_label_font_size.trace('w', lambda *args: self.element_font_size_label.config(text=str(self.element_label_font_size.get())))
+        
+        # Action buttons
+        action_frame = ttk.Frame(control_frame)
+        action_frame.pack(fill=tk.X, pady=10)
+        
+        # Preview button
+        ttk.Label(action_frame, text="3. Preview composite", style="Hint.TLabel").pack(pady=(5, 0))
+        preview_icon = self.button_icons.get('preview')
+        if preview_icon:
+            self.preview_btn = tk.Button(action_frame, image=preview_icon, command=self.preview_composite,
+                                        padx=2, pady=8, bg='#f0f0f0', relief='raised',
+                                        activebackground='#4CAF50')
+            self.preview_btn.image = preview_icon
+        else:
+            self.preview_btn = ttk.Button(action_frame, text="👁️", command=self.preview_composite, width=1)
+        self.preview_btn.pack(pady=(0, 10))
+        
+        # Add Element Label button
+        ttk.Label(action_frame, text="4. Add Element Label (optional)", style="Hint.TLabel").pack(pady=(5, 0))
+        add_label_icon = self.button_icons.get('add_label')
+        if add_label_icon:
+            self.add_label_btn = tk.Button(action_frame, image=add_label_icon, command=self.add_element_label,
+                                           padx=2, pady=8, bg='#f0f0f0', relief='raised',
+                                           activebackground='#4CAF50')
+            self.add_label_btn.image = add_label_icon
+        else:
+            self.add_label_btn = ttk.Button(action_frame, text="🏷️", command=self.add_element_label, width=1)
+        self.add_label_btn.pack(pady=(0, 10))
+        
+        # Save Composite button
+        ttk.Label(action_frame, text="5. Save Composite", style="Hint.TLabel").pack(pady=(5, 0))
+        save_icon = self.button_icons.get('save')
+        if save_icon:
+            self.save_btn = tk.Button(action_frame, image=save_icon, command=self.save_composite,
+                                     padx=2, pady=8, bg='#f0f0f0', relief='raised',
+                                     activebackground='#4CAF50')
+            self.save_btn.image = save_icon
+        else:
+            self.save_btn = ttk.Button(action_frame, text="💾", command=self.save_composite, width=1)
+        self.save_btn.pack(pady=(0, 10))
+        
+        # Progress Log at bottom of control panel
+        log_group_preview = ttk.LabelFrame(control_frame, text="Status Log", padding=5)
+        log_group_preview.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
+        
+        log_frame_preview = ttk.Frame(log_group_preview)
+        log_frame_preview.pack(fill=tk.BOTH, expand=True)
+        
+        custom_font_preview = font.Font(family="Arial", size=11, slant="roman")
+        self.log_preview = tk.Text(log_frame_preview, height=4, width=30, wrap="word", font=custom_font_preview)
+        log_scrollbar_preview = ttk.Scrollbar(log_frame_preview, orient=tk.VERTICAL, command=self.log_preview.yview)
+        self.log_preview.configure(yscrollcommand=log_scrollbar_preview.set)
+        
+        self.log_preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scrollbar_preview.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Preview pane
         self.preview_container = ttk.Frame(preview_frame)
         self.preview_container.pack(fill=tk.BOTH, expand=True)
         
-        self.preview_label = ttk.Label(self.preview_container)
+        self.preview_label = ttk.Label(self.preview_container, 
+                                      text="\n\nCalculate statistics in the 'Setup & Statistics' tab first,\nthen click 'Preview composite' to generate preview here.\n\n",
+                                      font=("Arial", 12), foreground="gray", justify=tk.CENTER)
         self.preview_label.pack(fill=tk.BOTH, expand=True)
-        
-        # Set minimum window size to prevent GUI from shrinking too small
-        self.master.minsize(450, 700)
-        # Ensure window is resizable
-        self.master.resizable(True, True)
         
         # Bind resize event to update the preview image's aspect ratio
         self.preview_container.bind("<Configure>", self.on_resize)
@@ -384,113 +518,84 @@ class CompositeApp:
             # Re-check existing progress and update table
             if self.progress_samples:
                 self._check_existing_progress()
-                self.update_progress_table()
+                # Only update table if widget exists
+                if hasattr(self, 'progress_table') and self.progress_table is not None:
+                    self.update_progress_table()
         # If user cancels, keep the current output directory (no change)
 
     def show_progress_table_window(self):
-        """Open progress table in a separate window."""
-        if self.progress_table_window is not None and self.progress_table_window.winfo_exists():
-            # Window already exists, just bring it to front
-            self.progress_table_window.lift()
-            self.progress_table_window.focus()
+        """Refresh the embedded progress table (now in Setup & Statistics tab)."""
+        # Debug: Check if progress_table exists
+        if not hasattr(self, 'progress_table') or self.progress_table is None:
+            self.log_print("⚠️ Progress table widget not initialized. Please restart the application.")
             return
         
-        # Create new window
-        self.progress_table_window = tk.Toplevel(self.master)
-        self.progress_table_window.title("Progress Table")
+        self.set_status("Busy")
         
-        # Make window resizable
-        self.progress_table_window.resizable(True, True)
+        # First scan the input folder to build the progress table structure
+        if not self.progress_samples or not self.progress_elements:
+            if self.input_dir and os.path.isdir(self.input_dir):
+                self.log_print("Status: Busy - Scanning input folder...")
+                self.scan_progress_table()
+            elif self.output_dir and os.path.isdir(self.output_dir):
+                # If no input dir but output dir exists, try to infer from output structure
+                self.log_print("Status: Busy - Scanning output folder...")
+                self._scan_progress_from_output()
+            else:
+                self.log_print("⚠️ Please select an input or output folder first to view progress table.")
+                self.set_status("Idle")
+                return
         
-        # Get screen dimensions to ensure window fits
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
+        # Always refresh the status to get latest updates
+        self._check_existing_progress()
+        self.update_progress_table()
         
-        # Set reasonable default size (80% of screen, but cap at 1000x700)
-        default_width = min(800, int(screen_width * 0.8))
-        default_height = min(500, int(screen_height * 0.7))
-        
-        # Set minimum size
-        self.progress_table_window.minsize(400, 300)
-        
-        # Set initial geometry
-        self.progress_table_window.geometry(f"{default_width}x{default_height}")
-        
-        # Center window on screen
-        x = (screen_width - default_width) // 2
-        y = (screen_height - default_height) // 2
-        self.progress_table_window.geometry(f"{default_width}x{default_height}+{x}+{y}")
-        
-        # Main container
-        main_frame = ttk.Frame(self.progress_table_window, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Header with refresh button
-        header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(header_frame, text="Element Processing Progress", font=("TkDefaultFont", 12, "bold")).pack(side=tk.LEFT)
-        ttk.Button(header_frame, text="Refresh", command=self.refresh_progress_table).pack(side=tk.RIGHT)
-        
-        # Table container with scrollbars
-        table_container = ttk.Frame(main_frame)
-        table_container.pack(fill=tk.BOTH, expand=True)
-        
-        # Create Treeview
-        self.progress_table = ttk.Treeview(table_container, columns=(), show="headings")
-        progress_xscroll = ttk.Scrollbar(table_container, orient=tk.HORIZONTAL, command=self.progress_table.xview)
-        progress_yscroll = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.progress_table.yview)
-        self.progress_table.configure(xscrollcommand=progress_xscroll.set, yscrollcommand=progress_yscroll.set)
-        
-        self.progress_table.grid(row=0, column=0, sticky="nsew")
-        progress_yscroll.grid(row=0, column=1, sticky="ns")
-        progress_xscroll.grid(row=1, column=0, sticky="ew")
-        table_container.grid_rowconfigure(0, weight=1)
-        table_container.grid_columnconfigure(0, weight=1)
-        
-        # Configure tag colors
-        self.progress_table.tag_configure("complete", background="#90EE90")
-        self.progress_table.tag_configure("partial", background="#FFE4B5")
-        self.progress_table.tag_configure("missing", background="#FFB6C1")
-        self.progress_table.tag_configure("missing_file", background="#D3D3D3", foreground="#666666")  # Gray for missing files
-        
-        # Legend
-        legend_frame = ttk.Frame(main_frame)
-        legend_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(legend_frame, text="Legend:", font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(legend_frame, text="✓ = Complete", foreground="green", font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="~ = Partial", foreground="orange", font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="Empty = Not Started", foreground="red", font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="X = Missing File", foreground="gray", font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=5)
-        
-        # Scan and populate if we have data
-        if self.progress_samples:
-            self._check_existing_progress()
-            self.update_progress_table()
+        # Debug info
+        if self.progress_samples and self.progress_elements:
+            self.log_print(f"Status: Idle - Progress table updated: {len(self.progress_samples)} samples, {len(self.progress_elements)} elements")
         else:
-            self.scan_progress_table()
+            self.log_print("⚠️ No progress data found. Please calculate statistics first.")
         
-        # Handle window close
-        self.progress_table_window.protocol("WM_DELETE_WINDOW", self._close_progress_window)
-    
-    def _close_progress_window(self):
-        """Close progress table window."""
-        if self.progress_table_window:
-            self.progress_table_window.destroy()
-            self.progress_table_window = None
-            self.progress_table = None
+        self.set_status("Idle")
+        
+        # Switch to Setup & Statistics tab to show the table
+        self.tabs.select(0)  # Index 0 is the Setup & Statistics tab
     
     def refresh_progress_table(self):
         """Refresh the progress table by re-scanning and checking status."""
-        if not self.progress_table:
+        if not hasattr(self, 'progress_table') or self.progress_table is None:
+            self.log_print("⚠️ Progress table widget not initialized.")
+            # Try to initialize if not already done
+            if self.input_dir and os.path.isdir(self.input_dir):
+                self.scan_progress_table()
+            elif self.output_dir and os.path.isdir(self.output_dir):
+                self._scan_progress_from_output()
             return
-        self.scan_progress_table()
-        # Log status summary for debugging
-        if self.progress_data:
-            complete_count = sum(1 for s in self.progress_data.values() if s == 'complete')
-            partial_count = sum(1 for s in self.progress_data.values() if s == 'partial')
-            missing_count = sum(1 for s in self.progress_data.values() if s == 'missing_file')
-            not_started = sum(1 for s in self.progress_data.values() if s is None)
-            self.log_print(f"Progress: {complete_count} complete, {partial_count} partial, {not_started} not started, {missing_count} missing files")
+        
+        self.set_status("Busy")
+        self.log_print("Status: Busy - Refreshing progress table...")
+        
+        # Re-scan and update
+        if self.input_dir and os.path.isdir(self.input_dir):
+            self.scan_progress_table()
+        elif self.output_dir and os.path.isdir(self.output_dir):
+            # If we have progress data, just refresh status
+            if self.progress_samples and self.progress_elements:
+                self._check_existing_progress()
+                self.update_progress_table()
+            else:
+                # Try to infer from output
+                self._scan_progress_from_output()
+        else:
+            self.log_print("⚠️ No input or output folder set.")
+            self.set_status("Idle")
+            return
+        
+        self.set_status("Idle")
+        if self.progress_samples and self.progress_elements:
+            self.log_print(f"Status: Idle - Progress table refreshed: {len(self.progress_samples)} samples, {len(self.progress_elements)} elements")
+        else:
+            self.log_print("Status: Idle - No progress data found.")
     
     def scan_progress_table(self):
         """Scan input folder and build initial progress table."""
@@ -531,7 +636,57 @@ class CompositeApp:
         
         # Check existing output files to determine initial status
         self._check_existing_progress()
-        self.update_progress_table()
+        # Only update table if widget exists
+        if hasattr(self, 'progress_table') and self.progress_table is not None:
+            self.update_progress_table()
+    
+    def _scan_progress_from_output(self):
+        """Scan output folder to infer progress when input folder is not available."""
+        if not self.output_dir or not os.path.isdir(self.output_dir):
+            return
+        
+        samples = set()
+        elements = set()
+        
+        # Scan output directories for element folders
+        for item in os.listdir(self.output_dir):
+            element_dir = os.path.join(self.output_dir, item)
+            if os.path.isdir(element_dir):
+                # Check if this looks like an element folder (has composite or histograms)
+                composite_path = os.path.join(element_dir, f"{item}_composite.png")
+                hist_dir = os.path.join(element_dir, 'Histograms')
+                
+                if os.path.exists(composite_path) or (os.path.isdir(hist_dir) and os.listdir(hist_dir)):
+                    elements.add(item)
+                    # Try to find samples from histogram files
+                    if os.path.isdir(hist_dir):
+                        for hist_file in os.listdir(hist_dir):
+                            if hist_file.endswith('_histogram.png'):
+                                sample = hist_file.replace('_histogram.png', '')
+                                samples.add(sample)
+        
+        if samples and elements:
+            # Sort elements
+            def sort_key(elem):
+                m = re.search(r"(\D+)(\d+)$", elem)
+                if m:
+                    return (m.group(1), int(m.group(2)))
+                return (elem, 0)
+            
+            self.progress_samples = sorted(samples)
+            self.progress_elements = sorted(elements, key=sort_key)
+            
+            # Build progress data - all will be checked by _check_existing_progress
+            self.progress_data = {}
+            for sample in self.progress_samples:
+                for element in self.progress_elements:
+                    self.progress_data[(sample, element)] = None
+            
+            self._check_existing_progress()
+            # Only update table if widget exists
+            if hasattr(self, 'progress_table') and self.progress_table is not None:
+                self.update_progress_table()
+            self.log_print(f"📊 Inferred progress from output: {len(self.progress_samples)} samples, {len(self.progress_elements)} elements")
     
     def _check_existing_progress(self):
         """Check output folder for existing files to determine progress status."""
@@ -548,9 +703,7 @@ class CompositeApp:
             composite_path = os.path.join(element_dir, f"{element}_composite.png")
             if os.path.exists(composite_path) and os.path.getsize(composite_path) > 0:
                 elements_with_composite.add(element)
-                # Debug: log found composites
-                if hasattr(self, 'log'):
-                    self.log_print(f"Found composite for {element}: {composite_path}")
+                # Progress table will show this information, no need to log
         
         # Update status for each sample-element pair
         for (sample, element), current_status in list(self.progress_data.items()):
@@ -576,17 +729,103 @@ class CompositeApp:
                     # No histograms directory - keep as None (not started, but file exists)
                     self.progress_data[(sample, element)] = None
     
-    def update_progress_table(self):
-        """Update the progress table display."""
-        if not self.progress_table:
+    def update_statistics_table(self, stats_df=None):
+        """Update the statistics table display with current element's statistics."""
+        if not hasattr(self, 'stats_table') or self.stats_table is None:
             return
         
-        # Clear existing
-        for col in self.progress_table["columns"]:
-            self.progress_table.heading(col, text="")
-        self.progress_table.delete(*self.progress_table.get_children())
+        # Clear existing rows
+        for item in self.stats_table.get_children():
+            self.stats_table.delete(item)
+        
+        # If no stats_df provided, try to load from file
+        if stats_df is None:
+            element = self.element.get()
+            if not element:
+                return
+            
+            stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
+            if os.path.exists(stats_path):
+                try:
+                    stats_df = pd.read_csv(stats_path)
+                except Exception as e:
+                    self.log_print(f"⚠️ Could not load statistics: {e}")
+                    return
+            else:
+                return
+        
+        # Populate table
+        for _, row in stats_df.iterrows():
+            values = (
+                str(row.get('Sample', '')),
+                f"{row.get('25th Percentile', 0):.2f}",
+                f"{row.get('50th Percentile', 0):.2f}",
+                f"{row.get('75th Percentile', 0):.2f}",
+                f"{row.get('99th Percentile', 0):.2f}",
+                f"{row.get('IQR', 0):.2f}",
+                f"{row.get('Mean', 0):.2f}"
+            )
+            self.stats_table.insert('', tk.END, values=values)
+    
+    def update_progress_table(self):
+        """Update the progress table display."""
+        if not hasattr(self, 'progress_table') or self.progress_table is None:
+            # Widget not initialized yet - this is normal during startup
+            # Don't log an error, just return silently
+            return
+        
+        try:
+            # Clear existing - handle case where columns might be empty
+            current_columns = self.progress_table["columns"]
+            if current_columns:
+                for col in current_columns:
+                    try:
+                        self.progress_table.heading(col, text="")
+                    except:
+                        pass
+            # Clear all rows
+            for item in self.progress_table.get_children():
+                try:
+                    self.progress_table.delete(item)
+                except:
+                    pass
+        except Exception as e:
+            try:
+                self.log_print(f"⚠️ Error clearing progress table: {e}")
+                import traceback
+                self.log_print(traceback.format_exc())
+            except:
+                pass
+            return
         
         if not self.progress_elements:
+            # Add a message row if no elements
+            try:
+                # Configure a single column for the message
+                self.progress_table.configure(columns=("message",))
+                self.progress_table.heading("message", text="")
+                self.progress_table.column("message", width=400)
+                self.progress_table.insert('', tk.END, values=["No elements found. Please calculate statistics first."])
+            except Exception as e:
+                try:
+                    self.log_print(f"⚠️ Error adding message to progress table: {e}")
+                except:
+                    pass
+            return
+        
+        if not self.progress_samples:
+            # Add a message row if no samples
+            try:
+                # Configure a single column for the message
+                self.progress_table.configure(columns=("message",))
+                self.progress_table.heading("message", text="")
+                self.progress_table.column("message", width=400)
+                self.progress_table.insert('', tk.END, values=["No samples found. Please calculate statistics first."])
+            except Exception as e:
+                try:
+                    self.log_print(f"⚠️ Error adding message to progress table: {e}")
+                except:
+                    pass
             return
         
         # Set up columns
@@ -791,9 +1030,17 @@ class CompositeApp:
                 elements.add(element)
         
         if elements:
-            self.element_dropdown['values'] = sorted(list(elements))
-            self.element_dropdown['state'] = 'readonly'
-            self.element.set(next(iter(elements)))  # Set the first element as default
+            element_list = sorted(list(elements))
+            # Update both dropdowns if they exist
+            if hasattr(self, 'element_dropdown'):
+                self.element_dropdown['values'] = element_list
+                self.element_dropdown['state'] = 'readonly'
+            if hasattr(self, 'element_dropdown_preview'):
+                self.element_dropdown_preview['values'] = element_list
+                self.element_dropdown_preview['state'] = 'readonly'
+            # Set the first element as default if no element is currently selected
+            if not self.element.get() or self.element.get() not in element_list:
+                self.element.set(next(iter(elements)))
         else:
             self.log_print("No valid element files found in the selected directory.")
 
@@ -812,12 +1059,35 @@ class CompositeApp:
             
             self.update_preview_image()
 
-    def log_print(self, message):
-        self.log.insert(tk.END, message + "\n")
-        self.log.see(tk.END)
+    def log_print(self, message, status_only=False):
+        """Print message to log. If status_only=True, only show status-related messages."""
+        # Helper function to write to a log widget
+        def write_to_log(log_widget):
+            if log_widget:
+                if status_only:
+                    # Only log status changes and important messages
+                    if any(keyword in message.lower() for keyword in ['status', 'idle', 'busy', 'finishing', 'complete', 'error', 'warning', '⚠️', '✅', '❌']):
+                        log_widget.insert(tk.END, message + "\n")
+                        log_widget.see(tk.END)
+                else:
+                    # Show all messages for now, but we'll filter specific ones
+                    # Skip verbose debug and progress messages
+                    skip_keywords = ['found composite', 'skipping subplot', 'debug:', 'figure created', 'grid layout']
+                    if not any(keyword in message.lower() for keyword in skip_keywords):
+                        log_widget.insert(tk.END, message + "\n")
+                        log_widget.see(tk.END)
+        
+        # Write to both log widgets (main log and preview tab log)
+        write_to_log(self.log if hasattr(self, 'log') else None)
+        write_to_log(self.log_preview if hasattr(self, 'log_preview') else None)
+        
         # Update GUI in real-time for better user feedback
-        # Use update_idletasks() which is lighter than update() but still provides real-time updates
-        self.master.update_idletasks()  # Force update of the GUI for real-time log display
+        self.master.update_idletasks()
+    
+    def set_status(self, status):
+        """Set the application status (Idle, Busy, Finishing)."""
+        self.status = status
+        self.log_print(f"Status: {status}", status_only=True)
 
     def load_matrix_2d(self, path):
         """Load a 2D matrix from an Excel file, with error handling for Dropbox sync issues."""
@@ -920,7 +1190,8 @@ class CompositeApp:
         if not self.output_dir or not os.path.isdir(self.output_dir):
             self.select_output_folder()
 
-        self.log_print("\n🔍 Scanning INPUT folder...")
+        self.set_status("Busy")
+        self.log_print("Status: Busy - Calculating statistics...")
         element = self.element.get()
         # Search for files with old format (ppm/CPS) and new format (raw, no unit)
         pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
@@ -944,7 +1215,7 @@ class CompositeApp:
                 existing_stats_df = pd.read_csv(stats_path)
                 if 'Sample' in existing_stats_df.columns:
                     existing_samples = set(existing_stats_df['Sample'].tolist())
-                    self.log_print(f"📊 Found existing statistics for {len(existing_samples)} sample(s): {', '.join(sorted(existing_samples))}")
+                    # Progress table will show this information
             except Exception as e:
                 self.log_print(f"⚠️ Could not read existing statistics: {e}")
 
@@ -970,17 +1241,14 @@ class CompositeApp:
                     # Check if this sample is new
                     is_new = sample not in existing_samples
                     
-                    # Log file loading progress
-                    self.log_print(f"📂 Loading file: {os.path.basename(f)}")
                     try:
                         matrix = self.load_matrix_2d(f)
                         self.labels.append(sample)
                         self.matrices.append(matrix)
-                        self.log_print(f"   ✓ Loaded {sample} ({matrix.shape[0]}x{matrix.shape[1]} pixels)")
                     except (FileNotFoundError, Exception) as e:
                         # Handle Dropbox sync issues or other file loading errors
                         error_msg = str(e)
-                        self.log_print(f"   ❌ Failed to load {sample}: {error_msg}")
+                        self.log_print(f"❌ Failed to load {sample}: {error_msg}")
                         # Continue processing other files instead of stopping
                         continue
                     
@@ -995,20 +1263,16 @@ class CompositeApp:
                     # Only process statistics and histograms for new samples
                     if is_new:
                         new_samples.append(sample)
-                        self.log_print(f"🆕 Processing new sample: {sample}")
                         
                         # Calculate percentiles, IQR, and mean
-                        self.log_print(f"   📊 Calculating statistics...")
                         p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
                         iqr = p75 - p25
                         mean = np.nanmean(matrix)
                         percentiles.append((sample, p25, p50, p75, p99))
                         iqrs.append((sample, iqr))
                         means.append((sample, mean))
-                        self.log_print(f"   ✓ Statistics: 99th={p99:.2f}, mean={mean:.2f}")
                         
                         # Generate and save histogram
-                        self.log_print(f"   📈 Generating histogram...")
                         plt.figure(figsize=(10, 6))
                         plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
                         plt.title(f"Histogram for {sample}")
@@ -1018,9 +1282,11 @@ class CompositeApp:
                         os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                         plt.savefig(hist_path)
                         plt.close()
-                        self.log_print(f"   ✓ Saved histogram: {os.path.basename(hist_path)}")
-                    else:
-                        self.log_print(f"⏭️  Skipping existing sample: {sample} (already processed)")
+                        
+                        # Update progress table for this sample
+                        if hasattr(self, 'progress_table') and self.progress_table:
+                            self.update_sample_element_progress(sample, element, 'partial')
+                            self.update_progress_table()
 
         # Merge new statistics with existing ones
         if existing_stats_df is not None and new_samples:
@@ -1032,39 +1298,48 @@ class CompositeApp:
             
             # Combine with existing
             stats_df = pd.concat([existing_stats_df, new_stats_df], ignore_index=True)
-            self.log_print(f"📊 Merged statistics: {len(existing_samples)} existing + {len(new_samples)} new = {len(stats_df)} total")
         elif existing_stats_df is not None:
             # No new samples, use existing
             stats_df = existing_stats_df
-            self.log_print(f"📊 Using existing statistics for all {len(existing_samples)} sample(s)")
         else:
             # No existing stats, create new
             percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
             mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
-            self.log_print(f"📊 Created new statistics for {len(new_samples)} sample(s)")
 
         # Round statistics and save
         stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
         os.makedirs(os.path.dirname(stats_path), exist_ok=True)
         stats_df.to_csv(stats_path, index=False)
-        self.log_print(f"✅ Saved statistics table to {stats_path}")
+        
+        # Update statistics table display
+        self.update_statistics_table(stats_df)
+        
+        # Update progress table
+        if hasattr(self, 'progress_table') and self.progress_table:
+            self._check_existing_progress()
+            self.update_progress_table()
+        
+        self.set_status("Idle")
+        self.log_print("Status: Idle - Statistics calculation complete.")
 
         # Set scale_max based on 99th percentile of ALL data (existing + new)
         overall_99th = np.nanpercentile(np.hstack([m.flatten() for m in self.matrices]), 99)
         self.scale_max.set(round(overall_99th,3))
         self.log_print(f"Scale max set to {self.scale_max.get():.2f} based on overall 99th percentile (all {len(self.matrices)} sample(s))")
         
-        if new_samples:
-            self.log_print(f"✅ Processed {len(new_samples)} new sample(s): {', '.join(new_samples)}")
-        else:
-            self.log_print(f"✅ All samples already processed. Loaded {len(self.matrices)} sample(s) for composite generation.")
+        # Progress table will show this information - no need to log
         
         # Update progress table - mark as partial (histograms and stats done)
         element = self.element.get()
         for sample in self.labels:
             self.update_sample_element_progress(sample, element, 'partial')
+        
+        # Update progress table display
+        if hasattr(self, 'progress_table') and self.progress_table:
+            self._check_existing_progress()
+            self.update_progress_table()
 
     def show_preview_window(self):
         """Display the preview image in a separate window."""
@@ -1273,17 +1548,18 @@ class CompositeApp:
     
     def preview_composite(self):
         try:
-            self.log_print("🔍 DEBUG: preview_composite() called")
             self.generate_composite(preview=True)
             # Track which element was last previewed for safety validation
             self._last_previewed_element = self.element.get()
+            self.set_status("Idle")
+            self.log_print("Status: Idle - Preview generated.")
         except Exception as e:
-            self.log_print(f"🔍 ERROR in preview_composite: {e}")
-            import traceback
-            self.log_print(f"🔍 TRACEBACK: {traceback.format_exc()}")
+            self.set_status("Idle")
+            self.log_print(f"❌ Error generating preview: {e}")
 
     def save_composite(self):
-        self.log_print("🔍 DEBUG: save_composite() called")
+        self.set_status("Busy")
+        self.log_print("Status: Busy - Saving composite...")
         if self.preview_file:
             # Additional safety: Warn user if they're saving a preview that might be from a different element
             if not hasattr(self, '_last_previewed_element') or self._last_previewed_element != self.element.get():
@@ -1300,11 +1576,9 @@ class CompositeApp:
             # Save the modified preview image (which includes element labels if added)
             if hasattr(self, 'preview_image'):
                 self.preview_image.save(out_path, dpi=(300, 300))
-                self.log_print(f"✅ Saved composite with element labels to {out_path}")
             else:
                 # Fallback to moving the original file if preview_image is not available
                 shutil.move(self.preview_file, out_path)
-                self.log_print(f"✅ Saved composite to {out_path}")
             
             # Clean up the temporary file
             if os.path.exists(self.preview_file):
@@ -1315,36 +1589,39 @@ class CompositeApp:
             element = self.element.get()
             for sample in self.labels:
                 self.update_sample_element_progress(sample, element, 'complete')
+            
+            # Update progress table display
+            if hasattr(self, 'progress_table') and self.progress_table:
+                self._check_existing_progress()
+                self.update_progress_table()
+            
+            self.set_status("Idle")
+            self.log_print("Status: Idle - Composite saved.")
         else:
-            self.log_print("🔍 DEBUG: No preview file, calling generate_composite(preview=False)")
             self.generate_composite(preview=False)
 
     def generate_composite(self, preview=False):
-        self.log_print(f"🔍 DEBUG: generate_composite() called with preview={preview}")
         if not self.matrices:
             self.log_print("⚠️ No data loaded.")
             return
 
+        self.set_status("Busy")
+        if preview:
+            self.log_print("Status: Busy - Generating preview...")
+        else:
+            self.log_print("Status: Busy - Generating composite...")
+
         # Auto-downsample when many samples (both preview and save)
-        self.log_print(f"🔍 Debug: preview={preview}, num_matrices={len(self.matrices)}")
         use_downsampling = len(self.matrices) > 10
         if use_downsampling:
-            mode = "preview" if preview else "save"
-            self.log_print(f"📊 Auto-downsampling {mode} for {len(self.matrices)} samples (faster rendering)")
-            self.log_print("🔍 DEBUG: Starting downsampling...")
             downsampled_matrices = [self.downsample_matrix(matrix) for matrix in self.matrices]
-            self.log_print("🔍 DEBUG: Downsampling complete")
             matrices_to_use = downsampled_matrices
         else:
-            self.log_print(f"🔍 Debug: No downsampling (preview={preview}, matrices={len(self.matrices)})")
             matrices_to_use = self.matrices
 
-        self.log_print("🔍 DEBUG: Creating matplotlib figure...")
         rows = min(self.num_rows.get(), len(self.matrices))  # Ensure rows don't exceed number of samples
         cols = math.ceil(len(self.matrices) / rows)
-        self.log_print(f"🔍 DEBUG: Grid layout: {rows} rows x {cols} cols")
         fig, axs = plt.subplots(rows, cols + 1, figsize=(4 * cols + 1, 4 * rows), gridspec_kw={'width_ratios': [1] * cols + [0.2]})
-        self.log_print("🔍 DEBUG: Figure created successfully")
         cmap = matplotlib.colormaps.get_cmap(self.color_scheme.get())
 
         scale_max = self.scale_max.get()
@@ -1422,10 +1699,11 @@ class CompositeApp:
                 subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight', transparent=True)
                 plt.close(subplot_fig)
                 if preview:
-                    self.log_print(f"   ✓ Generated subplot for {label}")
+                    # Subplot generated - progress table will show status
+                    pass
             else:
-                if preview:
-                    self.log_print(f"   ⏭️  Skipping subplot for {label} (already exists)")
+                # Skipping - progress table will show status
+                pass
 
             # Calculate percentiles, IQR, and mean
             p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
@@ -1458,6 +1736,10 @@ class CompositeApp:
         cbar.ax.yaxis.set_tick_params(color=text_color)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
+        # Set color for scientific notation offset label (e.g., "1e7")
+        offset_text = cbar.ax.yaxis.get_offset_text()
+        if offset_text:
+            offset_text.set_color(text_color)
 
         # Add scale bar using a representative pixel size
         if self.use_custom_pixel_sizes.get() and self.labels:
@@ -1522,15 +1804,17 @@ class CompositeApp:
         export_cbar.ax.yaxis.set_tick_params(color=text_color)
         export_cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
+        # Set color for scientific notation offset label (e.g., "1e7")
+        export_offset_text = export_cbar.ax.yaxis.get_offset_text()
+        if export_offset_text:
+            export_offset_text.set_color(text_color)
 
         # Save
         colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
         colorbar_fig.savefig(colorbar_path, dpi=300, bbox_inches='tight', transparent=True)
         plt.close(colorbar_fig)
-        self.log_print(f"✅ Saved separate colorbar to {colorbar_path}")
         
         if preview:
-            self.log_print("💾 Saving preview image...")
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
                 plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             plt.close(fig)
@@ -1538,26 +1822,30 @@ class CompositeApp:
             self.preview_image = Image.open(tmp_file.name)
             # Store the original unlabeled image
             self.original_preview_image = self.preview_image.copy()
-            self.log_print(f"✓ Preview image saved and loaded: {self.preview_image.size[0]}x{self.preview_image.size[1]} pixels")
             
             # Store the temp file path
             self.preview_file = tmp_file.name
             
-            # Show preview in separate window
-            self.show_preview_window()
+            # Update preview in the Preview tab
+            self.update_preview_image()
             
-            self.log_print("✅ Preview generated in separate window. Click 'Save' to keep this image.")
+            # Switch to Preview tab to show the preview
+            self.tabs.select(1)  # Index 1 is the Preview & Export tab
         else:
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             plt.savefig(out_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             plt.close(fig)
-            self.log_print(f"✅ Saved composite to {out_path}")
             
             # Update progress table - mark as complete
             element = self.element.get()
             for sample in self.labels:
                 self.update_sample_element_progress(sample, element, 'complete')
+            
+            # Update progress table display
+            if hasattr(self, 'progress_table') and self.progress_table:
+                self._check_existing_progress()
+                self.update_progress_table()
 
             # Save percentiles, IQR, and mean table
             percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
@@ -1566,10 +1854,15 @@ class CompositeApp:
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
             stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
             stats_df.to_csv(stats_path, index=False)
-            self.log_print(f"✅ Saved statistics table to {stats_path}")
+            
+            # Update statistics table display
+            self.update_statistics_table(stats_df)
+            
+            self.set_status("Idle")
+            self.log_print("Status: Idle - Composite saved.")
 
     def update_preview_image(self):
-        """Update preview image in main window (legacy - now using separate preview window)."""
+        """Update preview image in the Preview tab."""
         if not hasattr(self, 'preview_image') or self.preview_image is None:
             return
         
@@ -1722,13 +2015,12 @@ class CompositeApp:
             # Update the preview image
             self.preview_image = labeled_image
             
-            # Update the separate preview window if it exists
+            # Update the preview in the Preview tab
+            self.update_preview_image()
+            
+            # Also update separate preview window if it exists (for backward compatibility)
             if self.preview_window is not None and self.preview_window.winfo_exists():
-                # Update the image in the existing window
                 self._update_preview_window_image()
-            else:
-                # Show preview window if it was closed
-                self.show_preview_window()
             
             self.log_print(f"✅ Added element label: {element_text}")
             
