@@ -145,6 +145,11 @@ class CompositeApp:
         self.master.minsize(600, 500)
         self.master.resizable(True, True)
         
+        # Set initial window size to ensure all buttons and status log are visible
+        # Width: 280px (left panel) + ~800px (right panel) + padding = ~1200px
+        # Height: enough to show all controls and status log = ~800px
+        self.master.geometry("1200x800")
+        
         # Progress table window (created on demand - legacy, not used in tabbed interface)
         self.progress_table_window = None
         # Note: self.progress_table is created in build_setup_tab(), don't overwrite it here!
@@ -164,50 +169,52 @@ class CompositeApp:
         right_frame = ttk.Frame(self.setup_tab)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # 1. Select folders
-        folders_group = ttk.Frame(left_frame)
-        folders_group.pack(pady=5)
-        ttk.Label(folders_group, text="1. Select folders", style="Hint.TLabel").pack(pady=(5, 0))
+        # Select folders
+        folders_group = ttk.LabelFrame(left_frame, text="Select folders", padding=10)
+        folders_group.pack(fill=tk.X, pady=5)
         
         # Input folder
-        ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(4, 0))
+        ttk.Button(folders_group, text="Input", command=self.select_input_folder).pack(pady=(0, 2))
         self.input_folder_label = ttk.Label(folders_group, text="Input: None", font=("TkDefaultFont", 9), foreground="gray")
-        self.input_folder_label.pack(pady=(2, 6))
+        self.input_folder_label.pack(pady=(0, 6))
         
         # Output folder
-        ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 0))
+        ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 2))
         self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
-        self.output_folder_label.pack(pady=(2, 6))
+        self.output_folder_label.pack(pady=(0, 0))
         
-        # Control panel
-        grid_frame = ttk.Frame(left_frame)
-        grid_frame.pack(pady=10)
+        # Element and Pixel Size controls
+        element_pixel_frame = ttk.LabelFrame(left_frame, text="Element & Pixel Size", padding=10)
+        element_pixel_frame.pack(fill=tk.X, pady=5)
+        element_pixel_frame.columnconfigure(0, weight=1)
+        element_pixel_frame.columnconfigure(1, weight=0, minsize=80)
         
         # Element dropdown
-        ttk.Label(grid_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.element_dropdown = ttk.Combobox(grid_frame, textvariable=self.element, state="disabled", width=12)
+        ttk.Label(element_pixel_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        self.element_dropdown = ttk.Combobox(element_pixel_frame, textvariable=self.element, state="disabled", width=12)
         self.element_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         # Update statistics table when element changes
         self.element.trace('w', lambda *args: self.update_statistics_table())
         
         # Pixel Size input
-        ttk.Label(grid_frame, text="Pixel Size (µm):").grid(row=1, column=0, sticky="e", padx=(0, 2), pady=2)
-        pixel_entry_frame = ttk.Frame(grid_frame)
+        ttk.Label(element_pixel_frame, text="Pixel Size (µm):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        pixel_entry_frame = ttk.Frame(element_pixel_frame)
         pixel_entry_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        ttk.Entry(pixel_entry_frame, textvariable=self.pixel_size, width=10).pack(side="left")
-        ttk.Label(pixel_entry_frame, text="Hint: In your metadata", style="Hint.TLabel").pack(side="left", padx=(4, 0))
+        ttk.Entry(pixel_entry_frame, textvariable=self.pixel_size, width=10).pack(side="top", anchor="w")
+        ttk.Label(pixel_entry_frame, text="Hint: In your metadata", style="Hint.TLabel").pack(side="top", anchor="w", pady=(2, 0))
         
         # Multiple sizes checkbox
-        multi_size_frame = ttk.Frame(grid_frame)
-        multi_size_frame.grid(row=2, column=1, sticky="w", pady=(0, 10))
-        ttk.Checkbutton(multi_size_frame, text="Multiple sizes?", variable=self.use_custom_pixel_sizes).pack(side="left")
-        ttk.Button(multi_size_frame, text="Pixel Sizes", command=self.handle_pixel_sizes).pack(side="left", padx=(5, 0))
+        multi_size_frame = ttk.Frame(element_pixel_frame)
+        multi_size_frame.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
+        ttk.Checkbutton(multi_size_frame, text="Multiple sizes?", variable=self.use_custom_pixel_sizes).pack(side="top", anchor="w")
+        ttk.Button(multi_size_frame, text="Pixel Sizes", command=self.handle_pixel_sizes).pack(side="top", anchor="w", pady=(5, 0))
+        
+        # Action buttons
+        button_frame = ttk.LabelFrame(left_frame, text="Actions", padding=10)
+        button_frame.pack(fill=tk.X, pady=5)
         
         # Calculate statistics button
-        button_frame = ttk.Frame(left_frame)
-        button_frame.pack(pady=10)
-        
-        ttk.Label(button_frame, text="2. Calculate statistics", style="Hint.TLabel").grid(row=0, column=0, padx=5, pady=(5, 0), sticky="w")
+        ttk.Label(button_frame, text="Calculate statistics", style="Hint.TLabel").pack(pady=(0, 2))
         summarize_icon = self.button_icons.get('summarize')
         if summarize_icon:
             self.summarize_btn = tk.Button(button_frame, image=summarize_icon, command=self.load_data, 
@@ -216,10 +223,10 @@ class CompositeApp:
             self.summarize_btn.image = summarize_icon
         else:
             self.summarize_btn = ttk.Button(button_frame, text="📊", command=self.load_data, width=1)
-        self.summarize_btn.grid(row=1, column=0, padx=5, pady=(0, 10), sticky="")
+        self.summarize_btn.pack(pady=(0, 10))
         
         # Batch processing
-        ttk.Label(button_frame, text="Batch Processing", style="Hint.TLabel").grid(row=2, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="Batch Processing", style="Hint.TLabel").pack(pady=(0, 2))
         batch_icon = self.button_icons.get('batch')
         if batch_icon:
             batch_button = tk.Button(button_frame, image=batch_icon,
@@ -230,10 +237,10 @@ class CompositeApp:
         else:
             batch_button = tk.Button(button_frame, text="⚡", command=self.batch_process_all_elements, 
                   bg="#4CAF50", fg="black", width=1, height=3)
-        batch_button.grid(row=3, column=0, padx=5, pady=(0, 10), sticky="")
+        batch_button.pack(pady=(0, 10))
         
         # Progress table button
-        ttk.Label(button_frame, text="View Progress Table", style="Hint.TLabel").grid(row=4, column=0, padx=5, pady=(0, 0), sticky="w")
+        ttk.Label(button_frame, text="View Progress Table", style="Hint.TLabel").pack(pady=(0, 2))
         progress_icon = self.button_icons.get('progress')
         if progress_icon:
             progress_btn = tk.Button(button_frame, image=progress_icon, command=self.show_progress_table_window,
@@ -242,7 +249,7 @@ class CompositeApp:
             progress_btn.image = progress_icon
         else:
             progress_btn = ttk.Button(button_frame, text="📊", command=self.show_progress_table_window, width=1)
-        progress_btn.grid(row=5, column=0, padx=5, pady=(0, 10), sticky="")
+        progress_btn.pack(pady=(0, 0))
         
         # Progress Log at bottom of control panel
         log_group = ttk.LabelFrame(left_frame, text="Status Log", padding=5)
@@ -335,36 +342,40 @@ class CompositeApp:
         element_group = ttk.Frame(control_frame)
         element_group.pack(pady=5)
         ttk.Label(element_group, text="Element:").pack(side=tk.LEFT, padx=5)
-        self.element_dropdown_preview = ttk.Combobox(element_group, textvariable=self.element, state="readonly", width=15)
+        self.element_dropdown_preview = ttk.Combobox(element_group, textvariable=self.element, state="readonly", width=12)
         self.element_dropdown_preview.pack(side=tk.LEFT, padx=5)
         # Update statistics table when element changes (same trace as in setup tab)
         
         # Layout controls
         layout_frame = ttk.LabelFrame(control_frame, text="Layout", padding=10)
         layout_frame.pack(fill=tk.X, pady=5)
+        layout_frame.columnconfigure(0, weight=1)
+        layout_frame.columnconfigure(1, weight=0, minsize=80)
         
         # Scale bar length
         ttk.Label(layout_frame, text="Scale bar length (µm):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        scale_bar_entry = ttk.Entry(layout_frame, textvariable=self.scale_bar_length_um, width=12)
+        scale_bar_entry = ttk.Entry(layout_frame, textvariable=self.scale_bar_length_um, width=8)
         scale_bar_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         
         # Rows
         ttk.Label(layout_frame, text="Rows:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=12)
+        rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=8)
         rows_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         
         # Display controls
         display_frame = ttk.LabelFrame(control_frame, text="Display", padding=10)
         display_frame.pack(fill=tk.X, pady=5)
+        display_frame.columnconfigure(0, weight=1)
+        display_frame.columnconfigure(1, weight=0, minsize=80)
         
         # Color scheme
         ttk.Label(display_frame, text="Color Scheme:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.color_scheme_dropdown = ttk.Combobox(display_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=12)
+        self.color_scheme_dropdown = ttk.Combobox(display_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=8)
         self.color_scheme_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         
         # Scale max
         ttk.Label(display_frame, text="Scale Max:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        scale_max_entry = ttk.Entry(display_frame, textvariable=self.scale_max, width=12)
+        scale_max_entry = ttk.Entry(display_frame, textvariable=self.scale_max, width=8)
         scale_max_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         
         # Log Scale
@@ -373,19 +384,21 @@ class CompositeApp:
         # Font controls
         font_frame = ttk.LabelFrame(control_frame, text="Fonts", padding=10)
         font_frame.pack(fill=tk.X, pady=5)
+        font_frame.columnconfigure(0, weight=1)
+        font_frame.columnconfigure(1, weight=0, minsize=80)
         
         # Sample name font size
         ttk.Label(font_frame, text="Sample Name Font:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=12)
+        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=8)
         self.sample_name_font_size_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         
         # Element label font size
         ttk.Label(font_frame, text="Element Label Font:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         element_font_frame = ttk.Frame(font_frame)
         element_font_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        ttk.Scale(element_font_frame, from_=13, to=72, variable=self.element_label_font_size, orient=tk.HORIZONTAL, length=120).pack(side=tk.LEFT)
-        self.element_font_size_label = ttk.Label(element_font_frame, text="16")
-        self.element_font_size_label.pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Scale(element_font_frame, from_=13, to=72, variable=self.element_label_font_size, orient=tk.HORIZONTAL, length=60).pack(side=tk.LEFT)
+        self.element_font_size_label = ttk.Label(element_font_frame, text="16", width=3)
+        self.element_font_size_label.pack(side=tk.LEFT, padx=(3, 0))
         self.element_label_font_size.trace('w', lambda *args: self.element_font_size_label.config(text=str(self.element_label_font_size.get())))
         
         # Action buttons
@@ -449,7 +462,7 @@ class CompositeApp:
         
         self.preview_label = ttk.Label(self.preview_container, 
                                       text="\n\nCalculate statistics in the 'Setup & Statistics' tab first,\nthen click 'Preview composite' to generate preview here.\n\n",
-                                      font=("Arial", 12), foreground="gray", justify=tk.CENTER)
+                                      font=("Arial", 12), foreground="gray", justify=tk.CENTER, anchor="center")
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         
         # Bind resize event to update the preview image's aspect ratio

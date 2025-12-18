@@ -148,6 +148,125 @@ class MuadDataViewer:
         
         return None
     
+    def parse_geopixe_csv(self, filepath):
+        """
+        Parse GEOPIXE CSV file format to extract numeric matrix data.
+        GEOPIXE CSV files may contain:
+        - Header rows with metadata
+        - Column headers
+        - Row labels (first column may start with '.' or contain non-numeric data)
+        - Numeric matrix data
+        
+        This function attempts to automatically detect and extract the numeric matrix.
+        It tries multiple parsing strategies:
+        1. Reads without headers and handles '.' as empty/NaN
+        2. Detects and removes row labels in first column
+        3. Tries reading with headers
+        4. Tries reading with skiprows to handle metadata at the top
+        
+        Returns: numpy array of the numeric matrix, or None if parsing fails
+        """
+        # Strategy 1: Read without headers (most common for GEOPIXE matrix format)
+        # GEOPIXE often uses '.' as empty cell marker in first column
+        try:
+            df = pd.read_csv(filepath, header=None, encoding='utf-8', errors='ignore')
+            
+            # Replace '.' with NaN (GEOPIXE uses '.' as empty cell marker)
+            df = df.replace('.', np.nan)
+            df = df.replace('', np.nan)
+            
+            # Check if first column is mostly non-numeric (likely row labels)
+            if len(df) > 0 and len(df.columns) > 0:
+                first_col_values = df.iloc[:, 0].astype(str)
+                # Count how many values in first column are numeric (after converting '.' to NaN)
+                first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors='coerce').notna().sum()
+                total_rows = len(df)
+                
+                # If first column is mostly non-numeric or all NaN, it's likely row labels
+                if total_rows > 0 and (first_col_numeric < total_rows * 0.3 or df.iloc[:, 0].isna().sum() > total_rows * 0.5):
+                    # First column is labels, extract data starting from column 1
+                    data_df = df.iloc[:, 1:]
+                else:
+                    # Check if first column starts with '.' (GEOPIXE empty marker)
+                    # If so, treat it as row labels
+                    first_val = str(df.iloc[0, 0]) if len(df) > 0 else ''
+                    if first_val == '.' or first_val == 'nan':
+                        data_df = df.iloc[:, 1:]
+                    else:
+                        data_df = df
+                
+                # Convert to numeric, coercing errors to NaN
+                data_df = data_df.apply(pd.to_numeric, errors='coerce')
+                
+                # Drop rows and columns that are all NaN
+                data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
+                
+                # Convert to numpy array
+                matrix = data_df.to_numpy()
+                
+                # Validate that we have a reasonable matrix
+                if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
+                    return matrix
+        except Exception:
+            pass
+        
+        # Strategy 2: Try reading with header detection
+        try:
+            df_with_header = pd.read_csv(filepath, header=0, encoding='utf-8', errors='ignore')
+            df_with_header = df_with_header.replace('.', np.nan)
+            df_with_header = df_with_header.replace('', np.nan)
+            
+            if len(df_with_header) > 0 and len(df_with_header.columns) > 0:
+                first_col_numeric = pd.to_numeric(df_with_header.iloc[:, 0], errors='coerce').notna().sum()
+                total_rows = len(df_with_header)
+                
+                if total_rows > 0 and first_col_numeric < total_rows * 0.5:
+                    data_df = df_with_header.iloc[:, 1:]
+                else:
+                    data_df = df_with_header
+                
+                data_df = data_df.apply(pd.to_numeric, errors='coerce')
+                data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
+                matrix = data_df.to_numpy()
+                
+                if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
+                    return matrix
+        except Exception:
+            pass
+        
+        # Strategy 3: Try reading with skiprows to handle metadata rows at the top
+        for skip_rows in range(1, 6):
+            try:
+                df = pd.read_csv(filepath, header=None, skiprows=skip_rows, encoding='utf-8', errors='ignore')
+                df = df.replace('.', np.nan)
+                df = df.replace('', np.nan)
+                
+                # Check first column
+                if len(df) > 0 and len(df.columns) > 0:
+                    first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors='coerce').notna().sum()
+                    total_rows = len(df)
+                    
+                    if total_rows > 0 and first_col_numeric < total_rows * 0.3:
+                        data_df = df.iloc[:, 1:]
+                    else:
+                        first_val = str(df.iloc[0, 0]) if len(df) > 0 else ''
+                        if first_val == '.' or first_val == 'nan':
+                            data_df = df.iloc[:, 1:]
+                        else:
+                            data_df = df
+                    
+                    data_df = data_df.apply(pd.to_numeric, errors='coerce')
+                    data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
+                    matrix = data_df.to_numpy()
+                    
+                    if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
+                        return matrix
+            except Exception:
+                continue
+        
+        # If all strategies fail, return None
+        return None
+    
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
@@ -382,9 +501,23 @@ class MuadDataViewer:
         if not path:
             return
         try:
-            df = pd.read_excel(path, header=None) if path.endswith('.xlsx') else pd.read_csv(path, header=None)
-            df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-            mat = df.to_numpy()
+            if path.endswith('.csv'):
+                # Use GEOPIXE parser for CSV files
+                mat = self.parse_geopixe_csv(path)
+                if mat is None:
+                    # Try to get more info about the file for better error message
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            first_lines = [f.readline().strip() for _ in range(5)]
+                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
+                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
+                    except:
+                        raise ValueError("Failed to parse CSV file. Please check the file format.")
+            else:
+                # Excel files use the original method
+                df = pd.read_excel(path, header=None)
+                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
+                mat = df.to_numpy()
             self.zstack_slices.append(mat)
             self.zstack_offsets.append((0, 0))
             self.zstack_file_labels.append(os.path.basename(path))
@@ -1645,9 +1778,23 @@ class MuadDataViewer:
         if not path:
             return
         try:
-            df = pd.read_excel(path, header=None) if path.endswith('.xlsx') else pd.read_csv(path, header=None)
-            df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-            mat = df.to_numpy()
+            if path.endswith('.csv'):
+                # Use GEOPIXE parser for CSV files
+                mat = self.parse_geopixe_csv(path)
+                if mat is None:
+                    # Try to get more info about the file for better error message
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            first_lines = [f.readline().strip() for _ in range(5)]
+                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
+                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
+                    except:
+                        raise ValueError("Failed to parse CSV file. Please check the file format.")
+            else:
+                # Excel files use the original method
+                df = pd.read_excel(path, header=None)
+                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
+                mat = df.to_numpy()
             self.single_matrix = mat
             # Update min/max values and sliders
             min_val = np.nanmin(mat)
@@ -1791,9 +1938,23 @@ class MuadDataViewer:
         if not path:
             return
         try:
-            df = pd.read_excel(path, header=None) if path.endswith('.xlsx') else pd.read_csv(path, header=None)
-            df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-            mat = df.to_numpy()
+            if path.endswith('.csv'):
+                # Use GEOPIXE parser for CSV files
+                mat = self.parse_geopixe_csv(path)
+                if mat is None:
+                    # Try to get more info about the file for better error message
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            first_lines = [f.readline().strip() for _ in range(5)]
+                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
+                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
+                    except:
+                        raise ValueError("Failed to parse CSV file. Please check the file format.")
+            else:
+                # Excel files use the original method
+                df = pd.read_excel(path, header=None)
+                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
+                mat = df.to_numpy()
             self.rgb_data[channel] = mat
             file_name = os.path.basename(path)
             
