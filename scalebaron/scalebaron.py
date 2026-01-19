@@ -21,6 +21,8 @@ import time
 from PIL import Image, ImageTk
 import shutil
 import pandas as pd
+import base64
+import io
 
 class CompositeApp:
     
@@ -469,7 +471,10 @@ class CompositeApp:
         self.preview_container.bind("<Configure>", self.on_resize)
 
     def load_button_icons(self):
-        """Load custom button icons from the icons folder if they exist."""
+        """
+        Load custom button icons from the icons folder if they exist.
+        Falls back to embedded base64-encoded icons if external files are not found.
+        """
         icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
         icon_files = {
             'summarize': 'summarize.png',
@@ -480,36 +485,69 @@ class CompositeApp:
             'progress': 'progress.png'
         }
         
+        # Try to load embedded icons as fallback
+        try:
+            # Try relative import first (when used as package)
+            try:
+                from . import embedded_icons
+                embedded_icons_dict = embedded_icons.EMBEDDED_ICONS
+            except ImportError:
+                # Try absolute import (when run directly)
+                import embedded_icons
+                embedded_icons_dict = embedded_icons.EMBEDDED_ICONS
+        except (ImportError, AttributeError):
+            # If embedded_icons module doesn't exist, use empty dict
+            embedded_icons_dict = {}
+        
+        def load_icon_from_data(icon_data, source_name):
+            """Load icon from image data (either file path or base64 string)."""
+            try:
+                if isinstance(icon_data, str) and len(icon_data) > 100 and not os.path.exists(icon_data):
+                    # Base64 string (from embedded_icons)
+                    icon_bytes = base64.b64decode(icon_data)
+                    icon_img = Image.open(io.BytesIO(icon_bytes))
+                else:
+                    # File path
+                    icon_img = Image.open(icon_data)
+                
+                # Resize to 32x32 (larger icons for better visibility)
+                if icon_img.size[0] > 32 or icon_img.size[1] > 32:
+                    icon_img = icon_img.resize((32, 32), Image.LANCZOS)
+                elif icon_img.size[0] < 32 or icon_img.size[1] < 32:
+                    # Upscale smaller icons
+                    icon_img = icon_img.resize((32, 32), Image.LANCZOS)
+                
+                # Convert to PhotoImage for Tkinter
+                return ImageTk.PhotoImage(icon_img)
+            except Exception as e:
+                # Silently fail - will use Unicode fallback
+                return None
+        
         for key, filename in icon_files.items():
+            icon_loaded = False
+            
+            # First, try to load from external file
             icon_path = os.path.join(icons_dir, filename)
             # Special case: also check for 'label.png' if 'add_label.png' not found
             if key == 'add_label' and not os.path.exists(icon_path):
                 alt_path = os.path.join(icons_dir, 'label.png')
                 if os.path.exists(alt_path):
                     icon_path = alt_path
+            
             if os.path.exists(icon_path):
-                try:
-                    # Load with PIL to handle transparency and resize if needed
-                    icon_img = Image.open(icon_path)
-                    # Resize to 32x32 (larger icons for better visibility)
-                    if icon_img.size[0] > 32 or icon_img.size[1] > 32:
-                        icon_img = icon_img.resize((32, 32), Image.LANCZOS)
-                    elif icon_img.size[0] < 32 or icon_img.size[1] < 32:
-                        # Upscale smaller icons
-                        icon_img = icon_img.resize((32, 32), Image.LANCZOS)
-                    
-                    # Convert to PhotoImage for Tkinter
-                    self.button_icons[key] = ImageTk.PhotoImage(icon_img)
-                    # Use print since log widget doesn't exist yet
-                    print(f"✅ Loaded icon: {filename}")
-                except Exception as e:
-                    error_msg = f"⚠️ Could not load icon {filename}: {e}"
-                    print(error_msg)
-                    import traceback
-                    traceback.print_exc()
-            else:
-                # Icon not found - will use Unicode/text fallback
-                print(f"ℹ️ Icon not found: {filename} (using Unicode fallback)")
+                photo_image = load_icon_from_data(icon_path, filename)
+                if photo_image:
+                    self.button_icons[key] = photo_image
+                    icon_loaded = True
+            
+            # If external file not found or failed, try embedded icon
+            if not icon_loaded and key in embedded_icons_dict:
+                photo_image = load_icon_from_data(embedded_icons_dict[key], f"embedded {key}")
+                if photo_image:
+                    self.button_icons[key] = photo_image
+                    icon_loaded = True
+            
+            # If icon not loaded, will silently use Unicode/text fallback
 
     def select_input_folder(self):
         folder_selected = filedialog.askdirectory(initialdir=self.input_dir or ".", title="Select Input Directory")
@@ -1204,7 +1242,6 @@ class CompositeApp:
             self.select_output_folder()
 
         self.set_status("Busy")
-        self.log_print("Status: Busy - Calculating statistics...")
         element = self.element.get()
         # Search for files with old format (ppm/CPS) and new format (raw, no unit)
         pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
@@ -1231,6 +1268,24 @@ class CompositeApp:
                     # Progress table will show this information
             except Exception as e:
                 self.log_print(f"⚠️ Could not read existing statistics: {e}")
+        
+        # Determine if we need to calculate statistics
+        # Get list of samples from files
+        samples_from_files = set()
+        for f in files:
+            parsed = self.parse_matrix_filename(f)
+            if parsed:
+                sample, parsed_element, _ = parsed
+                if parsed_element == element:
+                    samples_from_files.add(sample)
+        
+        # Check if all samples already have statistics
+        all_samples_exist = existing_samples and samples_from_files.issubset(existing_samples)
+        
+        if all_samples_exist:
+            self.log_print("Status: Busy - Loading matrices (statistics already exist, skipping calculation)...")
+        else:
+            self.log_print("Status: Busy - Loading matrices and calculating statistics...")
 
         self.matrices = []
         self.labels = []
@@ -1311,20 +1366,26 @@ class CompositeApp:
             
             # Combine with existing
             stats_df = pd.concat([existing_stats_df, new_stats_df], ignore_index=True)
+            
+            # Round statistics and save
+            stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
+            os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+            stats_df.to_csv(stats_path, index=False)
         elif existing_stats_df is not None:
-            # No new samples, use existing
+            # No new samples, use existing (don't need to recalculate or save)
             stats_df = existing_stats_df
+            self.log_print(f"✓ Using existing statistics for {len(existing_samples)} sample(s)")
         else:
             # No existing stats, create new
             percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
             mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
-
-        # Round statistics and save
-        stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
-        os.makedirs(os.path.dirname(stats_path), exist_ok=True)
-        stats_df.to_csv(stats_path, index=False)
+            
+            # Round statistics and save
+            stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
+            os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+            stats_df.to_csv(stats_path, index=False)
         
         # Update statistics table display
         self.update_statistics_table(stats_df)
@@ -1672,8 +1733,8 @@ class CompositeApp:
             elif self.sample_name_font_size.get() == "Large":
                 font_size = 16
 
-            im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal')
-            ax.set_aspect('equal')
+            im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
+            ax.set_aspect('auto')
             ax.set_title(f"{label}", color=text_color, fontsize=font_size)
             if self.use_custom_pixel_sizes.get():
                 pixel_label = f"{int(round(pixel_size))} µm/px"
@@ -1706,7 +1767,7 @@ class CompositeApp:
                 masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
                 
                 # Plot with transparency for NaN values
-                subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal')
+                subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
                 subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
                 subplot_ax.axis('off')
                 subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight', transparent=True)

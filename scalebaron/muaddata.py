@@ -1825,7 +1825,7 @@ class MuadDataViewer:
         vmin = self.single_min.get()
         vmax = self.single_max.get()
         self.single_ax.clear()
-        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax)
+        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
         self.single_ax.axis('off')
         
         # Handle colorbar creation/removal
@@ -2401,7 +2401,7 @@ class MuadDataViewer:
         else:
             vmin, vmax = 0, 1
         
-        im = ax.imshow(ratio, cmap='RdYlBu_r', vmin=vmin, vmax=vmax)
+        im = ax.imshow(ratio, cmap='RdYlBu_r', vmin=vmin, vmax=vmax, aspect='auto')
         ax.axis('off')
         
         # Add colorbar
