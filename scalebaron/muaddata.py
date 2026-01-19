@@ -807,7 +807,15 @@ class MuadDataViewer:
         self.single_figure, self.single_ax = plt.subplots()
         self.single_ax.axis('off')
         self.single_canvas = FigureCanvasTkAgg(self.single_figure, master=display_frame)
-        self.single_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas_widget = self.single_canvas.get_tk_widget()
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
+        
+        # Bind resize event to maintain aspect ratio
+        def on_canvas_configure(event):
+            if self.single_matrix is not None:
+                self._update_figure_aspect_ratio()
+        
+        canvas_widget.bind('<Configure>', on_canvas_configure)
 
     def set_max_slider_limit(self):
         """Set the maximum value of the max slider from the entry box."""
@@ -1878,7 +1886,57 @@ class MuadDataViewer:
         
         if update_layout:
             self.single_figure.tight_layout()
+        self._update_figure_aspect_ratio()
         self.single_canvas.draw()
+    
+    def _update_figure_aspect_ratio(self):
+        """Update figure size to maintain aspect ratio of the matrix data."""
+        if self.single_matrix is None:
+            return
+        
+        # Get data aspect ratio
+        h, w = self.single_matrix.shape
+        data_aspect = w / h
+        
+        # Get available canvas size
+        canvas_widget = self.single_canvas.get_tk_widget()
+        canvas_width = canvas_widget.winfo_width()
+        canvas_height = canvas_widget.winfo_height()
+        
+        # Skip if canvas hasn't been rendered yet
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+        
+        # Account for colorbar if present
+        colorbar_width = 0
+        if hasattr(self, '_single_colorbar') and self._single_colorbar is not None:
+            colorbar_width = 80  # Approximate colorbar width in pixels
+        
+        # Account for figure padding (tight_layout adds some padding)
+        padding = 40  # Approximate padding in pixels
+        available_width = canvas_width - colorbar_width - padding
+        available_height = canvas_height - padding
+        
+        # Calculate figure size in inches (using DPI from figure)
+        dpi = self.single_figure.dpi
+        
+        # Determine if we should fit to width or height
+        canvas_aspect = available_width / available_height
+        
+        if canvas_aspect > data_aspect:
+            # Canvas is wider than data - fit to height
+            fig_height = available_height / dpi
+            fig_width = fig_height * data_aspect
+        else:
+            # Canvas is taller than data - fit to width
+            fig_width = available_width / dpi
+            fig_height = fig_width / data_aspect
+        
+        # Set figure size (minimum size to prevent too small)
+        fig_width = max(fig_width, 2.0)  # Minimum 2 inches
+        fig_height = max(fig_height, 2.0)  # Minimum 2 inches
+        
+        self.single_figure.set_size_inches(fig_width, fig_height, forward=False)
     
     def draw_polygon_overlays(self):
         """Draw all polygon selections on the map."""

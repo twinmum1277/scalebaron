@@ -431,6 +431,11 @@ class CompositeApp:
             self.add_label_btn = ttk.Button(action_frame, text="🏷️", command=self.add_element_label, width=1)
         self.add_label_btn.pack(pady=(0, 10))
         
+        # Save Composite Matrix button (for muaddata)
+        ttk.Label(action_frame, text="5a. Save Composite Matrix (for Muad'Data)", style="Hint.TLabel").pack(pady=(5, 0))
+        save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
+        save_matrix_btn.pack(pady=(0, 5))
+        
         # Save Composite button
         ttk.Label(action_frame, text="5. Save Composite", style="Hint.TLabel").pack(pady=(5, 0))
         save_icon = self.button_icons.get('save')
@@ -1631,6 +1636,102 @@ class CompositeApp:
             self.set_status("Idle")
             self.log_print(f"❌ Error generating preview: {e}")
 
+    def save_composite_matrix(self):
+        """Save a composite matrix file that can be opened in muaddata for polygon selection."""
+        if not self.matrices:
+            messagebox.showerror("Error", "No data loaded. Please load data first.")
+            return
+        
+        self.set_status("Busy")
+        self.log_print("Status: Busy - Creating composite matrix...")
+        
+        element = self.element.get()
+        rows = min(self.num_rows.get(), len(self.matrices))
+        cols = math.ceil(len(self.matrices) / rows)
+        
+        # Find maximum dimensions
+        max_height = max(m.shape[0] for m in self.matrices)
+        max_width = max(m.shape[1] for m in self.matrices)
+        
+        # Pad all matrices to the same size (pad with NaN)
+        padded_matrices = []
+        for matrix in self.matrices:
+            h, w = matrix.shape
+            pad_h = max_height - h
+            pad_w = max_width - w
+            # Pad on bottom and right with NaN
+            padded = np.pad(matrix, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=np.nan)
+            padded_matrices.append(padded)
+        
+        # Create separator (row and column of NaN)
+        separator_row = np.full((1, max_width), np.nan)
+        separator_col = np.full((max_height, 1), np.nan)
+        
+        # Arrange matrices in grid with separators
+        composite_rows = []
+        for r in range(rows):
+            row_matrices = []
+            for c in range(cols):
+                idx = r * cols + c
+                if idx < len(padded_matrices):
+                    row_matrices.append(padded_matrices[idx])
+                else:
+                    # Empty cell - fill with NaN
+                    row_matrices.append(np.full((max_height, max_width), np.nan))
+                # Add column separator between matrices (except last)
+                if c < cols - 1:
+                    row_matrices.append(separator_col)
+            
+            # Combine matrices in this row horizontally
+            if row_matrices:
+                row_composite = np.hstack(row_matrices)
+                composite_rows.append(row_composite)
+                # Add row separator between rows (except last)
+                if r < rows - 1:
+                    separator_row_full = np.full((1, row_composite.shape[1]), np.nan)
+                    composite_rows.append(separator_row_full)
+        
+        # Combine all rows vertically
+        composite_matrix = np.vstack(composite_rows) if composite_rows else np.array([])
+        
+        # Ask user for save location
+        default_name = f"{element}_composite_matrix.xlsx"
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv")
+            ],
+            initialfile=default_name,
+            initialdir=self.output_dir if self.output_dir else "."
+        )
+        
+        if save_path:
+            try:
+                if save_path.endswith('.xlsx'):
+                    df = pd.DataFrame(composite_matrix)
+                    df.to_excel(save_path, header=False, index=False)
+                elif save_path.endswith('.csv'):
+                    df = pd.DataFrame(composite_matrix)
+                    df.to_csv(save_path, header=False, index=False)
+                
+                self.log_print(f"✓ Composite matrix saved: {os.path.basename(save_path)}")
+                self.log_print(f"  Shape: {composite_matrix.shape} (arranged as {rows} rows × {cols} cols)")
+                self.log_print(f"  You can now open this file in Muad'Data for polygon selection!")
+                messagebox.showinfo("Saved", 
+                                  f"Composite matrix saved successfully!\n\n"
+                                  f"File: {os.path.basename(save_path)}\n"
+                                  f"Shape: {composite_matrix.shape}\n"
+                                  f"Layout: {rows} rows × {cols} columns\n\n"
+                                  f"You can now open this file in Muad'Data's\n"
+                                  f"Element Viewer tab for polygon selection.")
+                
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save composite matrix:\n{str(e)}")
+                self.log_print(f"❌ Error saving composite matrix: {e}")
+        
+        self.set_status("Idle")
+    
     def save_composite(self):
         self.set_status("Busy")
         self.log_print("Status: Busy - Saving composite...")
