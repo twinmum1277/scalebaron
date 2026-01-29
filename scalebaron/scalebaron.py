@@ -90,7 +90,7 @@ class CompositeApp:
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
         self.element = tk.StringVar()
-        self.sample_name_font_size = tk.StringVar(value="n/a")  # Default to "n/a"
+        self.sample_name_font_size = tk.StringVar(value="Medium")  # None, Small, Medium, Large, X-Large
         self.element_label_font_size = tk.IntVar(value=16)  # Font size for element label (default 16)
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max, constrained to 2 decimal places
         self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
@@ -241,18 +241,6 @@ class CompositeApp:
                   bg="#4CAF50", fg="black", width=1, height=3)
         batch_button.pack(pady=(0, 10))
         
-        # Progress table button
-        ttk.Label(button_frame, text="View Progress Table", style="Hint.TLabel").pack(pady=(0, 2))
-        progress_icon = self.button_icons.get('progress')
-        if progress_icon:
-            progress_btn = tk.Button(button_frame, image=progress_icon, command=self.show_progress_table_window,
-                                    padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                    activebackground='#4CAF50')
-            progress_btn.image = progress_icon
-        else:
-            progress_btn = ttk.Button(button_frame, text="📊", command=self.show_progress_table_window, width=1)
-        progress_btn.pack(pady=(0, 0))
-        
         # Progress Log at bottom of control panel
         log_group = ttk.LabelFrame(left_frame, text="Status Log", padding=5)
         log_group.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
@@ -260,8 +248,8 @@ class CompositeApp:
         log_frame = ttk.Frame(log_group)
         log_frame.pack(fill=tk.BOTH, expand=True)
         
-        custom_font = font.Font(family="Arial", size=11, slant="roman")
-        self.log = tk.Text(log_frame, height=4, width=30, wrap="word", font=custom_font)
+        custom_font = font.Font(family="Arial", size=14, slant="roman")
+        self.log = tk.Text(log_frame, height=12, width=30, wrap="word", font=custom_font)
         log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scrollbar.set)
         
@@ -389,9 +377,9 @@ class CompositeApp:
         font_frame.columnconfigure(0, weight=1)
         font_frame.columnconfigure(1, weight=0, minsize=80)
         
-        # Sample name font size
+        # Sample name font size (None = no labels on composite subplots; Small/Medium/Large/X-Large = sizes)
         ttk.Label(font_frame, text="Sample Name Font:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["n/a", "Small", "Medium", "Large"], width=8)
+        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["None", "Small", "Medium", "Large", "X-Large"], width=8)
         self.sample_name_font_size_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         
         # Element label font size
@@ -408,7 +396,7 @@ class CompositeApp:
         action_frame.pack(fill=tk.X, pady=10)
         
         # Preview button
-        ttk.Label(action_frame, text="3. Preview composite", style="Hint.TLabel").pack(pady=(5, 0))
+        ttk.Label(action_frame, text="Preview composite", style="Hint.TLabel").pack(pady=(5, 0))
         preview_icon = self.button_icons.get('preview')
         if preview_icon:
             self.preview_btn = tk.Button(action_frame, image=preview_icon, command=self.preview_composite,
@@ -420,7 +408,7 @@ class CompositeApp:
         self.preview_btn.pack(pady=(0, 10))
         
         # Add Element Label button
-        ttk.Label(action_frame, text="4. Add Element Label (optional)", style="Hint.TLabel").pack(pady=(5, 0))
+        ttk.Label(action_frame, text="Add Element Label (optional)", style="Hint.TLabel").pack(pady=(5, 0))
         add_label_icon = self.button_icons.get('add_label')
         if add_label_icon:
             self.add_label_btn = tk.Button(action_frame, image=add_label_icon, command=self.add_element_label,
@@ -431,13 +419,8 @@ class CompositeApp:
             self.add_label_btn = ttk.Button(action_frame, text="🏷️", command=self.add_element_label, width=1)
         self.add_label_btn.pack(pady=(0, 10))
         
-        # Save Composite Matrix button (for muaddata)
-        ttk.Label(action_frame, text="5a. Save Composite Matrix (for Muad'Data)", style="Hint.TLabel").pack(pady=(5, 0))
-        save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
-        save_matrix_btn.pack(pady=(0, 5))
-        
         # Save Composite button
-        ttk.Label(action_frame, text="5. Save Composite", style="Hint.TLabel").pack(pady=(5, 0))
+        ttk.Label(action_frame, text="Save Composite", style="Hint.TLabel").pack(pady=(5, 0))
         save_icon = self.button_icons.get('save')
         if save_icon:
             self.save_btn = tk.Button(action_frame, image=save_icon, command=self.save_composite,
@@ -448,6 +431,11 @@ class CompositeApp:
             self.save_btn = ttk.Button(action_frame, text="💾", command=self.save_composite, width=1)
         self.save_btn.pack(pady=(0, 10))
         
+        # Save Composite Matrix button (for Muad'Data)
+        ttk.Label(action_frame, text="Save Composite Matrix (for Muad'Data)", style="Hint.TLabel").pack(pady=(5, 0))
+        save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
+        save_matrix_btn.pack(pady=(0, 5))
+        
         # Progress Log at bottom of control panel
         log_group_preview = ttk.LabelFrame(control_frame, text="Status Log", padding=5)
         log_group_preview.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
@@ -455,8 +443,8 @@ class CompositeApp:
         log_frame_preview = ttk.Frame(log_group_preview)
         log_frame_preview.pack(fill=tk.BOTH, expand=True)
         
-        custom_font_preview = font.Font(family="Arial", size=11, slant="roman")
-        self.log_preview = tk.Text(log_frame_preview, height=4, width=30, wrap="word", font=custom_font_preview)
+        custom_font_preview = font.Font(family="Arial", size=14, slant="roman")
+        self.log_preview = tk.Text(log_frame_preview, height=12, width=30, wrap="word", font=custom_font_preview)
         log_scrollbar_preview = ttk.Scrollbar(log_frame_preview, orient=tk.VERTICAL, command=self.log_preview.yview)
         self.log_preview.configure(yscrollcommand=log_scrollbar_preview.set)
         
@@ -1294,6 +1282,7 @@ class CompositeApp:
 
         self.matrices = []
         self.labels = []
+        self.current_element_unit = None  # ppm, CPS, or raw (for color bar label)
         self.pixel_sizes_by_sample = {}
         percentiles = []
         iqrs = []
@@ -1306,11 +1295,13 @@ class CompositeApp:
         for f in files:
             parsed = self.parse_matrix_filename(f)
             if parsed:
-                sample, parsed_element, _ = parsed
+                sample, parsed_element, unit_type = parsed
                 # Verify the element matches (safety check)
                 if parsed_element != element:
                     continue
                 if samples_to_load is None or sample in samples_to_load:
+                    if self.current_element_unit is None:
+                        self.current_element_unit = unit_type
                     # Check if this sample is new
                     is_new = sample not in existing_samples
                     
@@ -1796,7 +1787,18 @@ class CompositeApp:
 
         rows = min(self.num_rows.get(), len(self.matrices))  # Ensure rows don't exceed number of samples
         cols = math.ceil(len(self.matrices) / rows)
-        fig, axs = plt.subplots(rows, cols + 1, figsize=(4 * cols + 1, 4 * rows), gridspec_kw={'width_ratios': [1] * cols + [0.2]})
+        fig = plt.figure(figsize=(4 * cols + 1, 4 * rows))
+        gs = fig.add_gridspec(rows, cols + 1, width_ratios=[1] * cols + [0.2])
+        axs = np.empty((rows, cols + 1), dtype=object)
+        for r in range(rows):
+            for c in range(cols):
+                axs[r, c] = fig.add_subplot(gs[r, c])
+        for r in range(rows - 1):
+            axs[r, cols] = fig.add_subplot(gs[r, cols])
+        inner_gs = gs[rows - 1, cols].subgridspec(2, 1, height_ratios=[3.5, 1], hspace=0.15)
+        color_bar_ax = fig.add_subplot(inner_gs[0, 0])
+        scale_bar_ax = fig.add_subplot(inner_gs[1, 0])
+        axs[rows - 1, cols] = color_bar_ax
         cmap = matplotlib.colormaps.get_cmap(self.color_scheme.get())
 
         scale_max = self.scale_max.get()
@@ -1820,37 +1822,46 @@ class CompositeApp:
             if preview:
                 self.log_print(f"   📊 Generating subplot {i+1}/{len(self.labels)}: {label}")
             r, c = i // cols, i % cols
-            ax = axs[r, c] if rows > 1 else axs[c]
+            ax = axs[r, c]
 
             # Get the pixel size for this sample
             pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
 
-            # Determine font size based on selection
+            # Determine font size based on selection (None = no subplot labels)
             font_size = None
-            if self.sample_name_font_size.get() == "Small":
-                font_size = 8
-            elif self.sample_name_font_size.get() == "Medium":
-                font_size = 12
-            elif self.sample_name_font_size.get() == "Large":
-                font_size = 16
+            show_subplot_label = self.sample_name_font_size.get() != "None"
+            if show_subplot_label:
+                if self.sample_name_font_size.get() == "Small":
+                    font_size = 8
+                elif self.sample_name_font_size.get() == "Medium":
+                    font_size = 12
+                elif self.sample_name_font_size.get() == "Large":
+                    font_size = 16
+                elif self.sample_name_font_size.get() == "X-Large":
+                    font_size = 20
+                else:
+                    font_size = 12
 
             im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
             ax.set_aspect('auto')
-            ax.set_title(f"{label}", color=text_color, fontsize=font_size)
-            if self.use_custom_pixel_sizes.get():
-                pixel_label = f"{int(round(pixel_size))} µm/px"
-                subtitle_size = (font_size - 2) if font_size else 9
-                subtitle_size = max(subtitle_size, 8)
-                ax.text(
-                    0.5,
-                    -0.08,
-                    pixel_label,
-                    transform=ax.transAxes,
-                    ha='center',
-                    va='top',
-                    color=text_color,
-                    fontsize=subtitle_size
-                )
+            if show_subplot_label:
+                ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+                if self.use_custom_pixel_sizes.get():
+                    pixel_label = f"{int(round(pixel_size))} µm/px"
+                    subtitle_size = (font_size - 2) if font_size else 9
+                    subtitle_size = max(subtitle_size, 8)
+                    ax.text(
+                        0.5,
+                        -0.08,
+                        pixel_label,
+                        transform=ax.transAxes,
+                        ha='center',
+                        va='top',
+                        color=text_color,
+                        fontsize=subtitle_size
+                    )
+            else:
+                ax.set_title("", color=text_color)
             ax.axis('off')
             ax.set_facecolor(bg_color)
 
@@ -1869,7 +1880,10 @@ class CompositeApp:
                 
                 # Plot with transparency for NaN values
                 subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
-                subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+                if show_subplot_label:
+                    subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+                else:
+                    subplot_ax.set_title("", color=text_color)
                 subplot_ax.axis('off')
                 subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight', transparent=True)
                 plt.close(subplot_fig)
@@ -1888,35 +1902,28 @@ class CompositeApp:
             iqrs.append((label, iqr))
             means.append((label, mean))
 
-        last_ax = axs[-1, -1] if rows > 1 else axs[-1]
-        last_ax.axis('off')
-        last_ax.set_facecolor(bg_color)
+        # Last image axes (for transform only; scale bar is drawn in right column)
+        last_idx = len(matrices_to_use) - 1
+        last_image_ax = axs[last_idx // cols, last_idx % cols]
 
-        # Create two inset axes for color bar and scale bar
-        color_ax = inset_axes(last_ax, width="100%", height="100%", loc='upper left',
-                              bbox_to_anchor=(0, 0.5, 0.5, 0.5), 
-                              bbox_transform=last_ax.transAxes)
-        color_ax.set_facecolor(bg_color)
-        # Shrink inset height to leave less space under colorbar
-        scale_ax = inset_axes(
-            last_ax, width="100%", height="100%", loc='lower left',
-            bbox_to_anchor=(0, 0, 0.5, 0.35),  # reduced height
-            bbox_transform=last_ax.transAxes
-        )
+        color_bar_ax.set_facecolor(bg_color)
+        # Do not call axis('off') here so color bar tick labels (units) remain visible
 
-        scale_ax.set_facecolor(bg_color)
-
-        # Add color bar
-        cbar = plt.colorbar(im, cax=color_ax, orientation='vertical')
-        cbar.ax.yaxis.set_tick_params(color=text_color)
+        # Add color bar to its dedicated axes (top of right column)
+        cbar = plt.colorbar(im, cax=color_bar_ax, orientation='vertical')
+        cbar.ax.yaxis.set_tick_params(color=text_color, labelsize=9)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
-        # Set color for scientific notation offset label (e.g., "1e7")
         offset_text = cbar.ax.yaxis.get_offset_text()
         if offset_text:
             offset_text.set_color(text_color)
+        # Units label above color bar (ppm, CPS, or counts)
+        if getattr(self, 'current_element_unit', None):
+            u = self.current_element_unit
+            units_label = 'ppm' if u == 'ppm' else ('CPS' if u == 'CPS' else 'counts')
+            cbar.set_label(units_label, color=text_color, fontsize=10)
 
-        # Add scale bar using a representative pixel size
+        # Scale bar in right column (below color bar): length from last image's data scale so it stays accurate
         if self.use_custom_pixel_sizes.get() and self.labels:
             reference_label = self.labels[0]
             pixel_size_um = self.pixel_sizes_by_sample.get(reference_label, self.pixel_size.get())
@@ -1926,46 +1933,39 @@ class CompositeApp:
             pixel_size_um = self.pixel_size.get()
             scale_bar_caption = None
 
-        scale_bar_um = self.scale_bar_length_um.get()  # e.g., 500
-
-        
-        # Convert to pixels
+        scale_bar_um = self.scale_bar_length_um.get()
         if pixel_size_um <= 0:
             scale_bar_px = 0
         else:
             scale_bar_px = max(1, int(round(scale_bar_um / pixel_size_um)))
 
-        # Keep scale_ax data limits compact
-        scale_ax.set_xlim(0, scale_bar_px + 20)
-        scale_ax.set_ylim(0, 25)  # lower max = tighter spacing
-        scale_ax.axis('off')
+        # Length in figure coords so the bar is accurate relative to the image
+        p0_display = last_image_ax.transData.transform((0, 0))
+        p1_display = last_image_ax.transData.transform((scale_bar_px, 0))
+        p0_fig = fig.transFigure.inverted().transform(p0_display)
+        p1_fig = fig.transFigure.inverted().transform(p1_display)
+        bar_length_fig = p1_fig[0] - p0_fig[0]
 
-        # Redefine layout
-        x_start = 10
-        x_end = x_start + scale_bar_px
-        y_pos = 8  # lower bar
-
-        # Draw bar
-        scale_ax.hlines(y=y_pos, xmin=x_start, xmax=x_end, colors='white', linewidth=3)
-
-        # Centered label just above
+        scale_bar_ax.set_facecolor(bg_color)
+        scale_bar_ax.axis('off')
+        pos = scale_bar_ax.get_position()
+        x_center_fig = pos.x0 + pos.width * 0.5
+        y_fig = pos.y0 + pos.height * 0.5
+        x_start_fig = x_center_fig - bar_length_fig * 0.5
+        x_end_fig = x_center_fig + bar_length_fig * 0.5
+        scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure, colors='white', linewidth=3)
         label_lines = [f"{scale_bar_um:.0f} µm"]
         if scale_bar_caption:
             label_lines.append(scale_bar_caption)
-        scale_ax.text(
-            (x_start + x_end) / 2,
-            y_pos + 4,  # tighter vertical gap
-            "\n".join(label_lines),
-            color='white',
-            fontsize=8,
-            ha='center',
-            va='bottom'
-        )
+        scale_bar_ax.text(0.5, 0.25, "\n".join(label_lines), transform=scale_bar_ax.transAxes,
+                          color=text_color, fontsize=8, ha='center', va='top')
+
         
-        # Set background color for all axes
-        for ax in np.atleast_1d(axs).flat:
+        # Set background color and hide axes for image cells only (keep color bar labels visible)
+        for ax in axs.flat:
             ax.set_facecolor(bg_color)
-            ax.axis('off')
+            if ax is not color_bar_ax:
+                ax.axis('off')
         
         # Create standalone colorbar figure
         colorbar_fig, colorbar_ax = plt.subplots(figsize=(1, 4))
@@ -1983,6 +1983,10 @@ class CompositeApp:
         export_offset_text = export_cbar.ax.yaxis.get_offset_text()
         if export_offset_text:
             export_offset_text.set_color(text_color)
+        if getattr(self, 'current_element_unit', None):
+            u = self.current_element_unit
+            units_label = 'ppm' if u == 'ppm' else ('CPS' if u == 'CPS' else 'counts')
+            export_cbar.set_label(units_label, color=text_color, fontsize=10)
 
         # Save
         colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")

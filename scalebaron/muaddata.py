@@ -17,6 +17,7 @@ except ImportError:
     # Fallback mode calculation without scipy
 import os
 import re
+import json
 
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
@@ -283,6 +284,7 @@ class MuadDataViewer:
         self.scalebar_color = '#ffffff'  # Default to white for good contrast
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
+        self.single_file_path = None   # Store full path to loaded file (for polygon persistence)
         self._single_colorbar = None   # Store the colorbar object for removal
 
         # Add a variable for the user-settable max slider value
@@ -807,15 +809,7 @@ class MuadDataViewer:
         self.single_figure, self.single_ax = plt.subplots()
         self.single_ax.axis('off')
         self.single_canvas = FigureCanvasTkAgg(self.single_figure, master=display_frame)
-        canvas_widget = self.single_canvas.get_tk_widget()
-        canvas_widget.pack(fill=tk.BOTH, expand=True)
-        
-        # Bind resize event to maintain aspect ratio
-        def on_canvas_configure(event):
-            if self.single_matrix is not None:
-                self._update_figure_aspect_ratio()
-        
-        canvas_widget.bind('<Configure>', on_canvas_configure)
+        self.single_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def set_max_slider_limit(self):
         """Set the maximum value of the max slider from the entry box."""
@@ -1215,7 +1209,14 @@ class MuadDataViewer:
             return
         
         # Handle double-click to complete polygon
+        # Note: double-click also triggers a single-click event, so we need to handle it carefully
         if event.dblclick:
+            # Add the vertex first (if not already added by single-click)
+            # Check if this vertex is already the last one (to avoid duplicates)
+            if len(self.polygon_vertices) == 0 or self.polygon_vertices[-1] != (x, y):
+                self.polygon_vertices.append((x, y))
+            
+            # Now complete if we have enough vertices
             if len(self.polygon_vertices) >= 3:
                 self.complete_polygon()
             return
@@ -1269,6 +1270,9 @@ class MuadDataViewer:
             'stats': stats_dict
         }
         self.polygon_data.append(polygon_info)
+        
+        # Auto-save polygons
+        self.save_polygons_for_file()
         
         # Clear current vertices and deactivate mode
         self.polygon_vertices = []
@@ -1564,11 +1568,135 @@ class MuadDataViewer:
             self.polygon_vertices = []
             if self.polygon_active:
                 self.deactivate_polygon_mode()
+            
+            # Auto-save (empty polygons)
+            self.save_polygons_for_file()
+            
             self.view_single_map()
             if self.polygon_results_table:
                 self.update_polygon_results_table()
             messagebox.showinfo("Cleared", "All polygon regions have been cleared.")
 
+    def get_polygon_file_path(self):
+        """Get the path to the polygon JSON file for the current matrix file."""
+        if not self.single_file_path:
+            return None
+        # Create polygon file path: same directory, same name, with _polygons.json extension
+        base_path = os.path.splitext(self.single_file_path)[0]
+        return f"{base_path}_polygons.json"
+    
+    def save_polygons_for_file(self):
+        """Auto-save polygons to JSON file associated with current matrix file."""
+        if not self.single_file_path:
+            return
+        
+        polygon_file = self.get_polygon_file_path()
+        if not polygon_file:
+            return
+        
+        try:
+            # Prepare data for JSON serialization
+            # Convert numpy arrays to lists and handle color conversion
+            json_data = []
+            for poly_data in self.polygon_data:
+                # Convert vertices (list of tuples) to list of lists
+                vertices = [[float(v[0]), float(v[1])] for v in poly_data['vertices']]
+                
+                # Convert color (may be numpy array or tuple) to list
+                color = poly_data['color']
+                if isinstance(color, np.ndarray):
+                    color = color.tolist()
+                elif isinstance(color, tuple):
+                    color = list(color)
+                
+                json_data.append({
+                    'name': poly_data['name'],
+                    'vertices': vertices,
+                    'color': color,
+                    # Note: stats are not saved, they'll be recalculated on load
+                })
+            
+            # Save to JSON file
+            with open(polygon_file, 'w') as f:
+                json.dump(json_data, f, indent=2)
+        except Exception as e:
+            # Silently fail - don't interrupt user workflow
+            pass
+    
+    def load_polygons_for_file(self):
+        """Auto-load polygons from JSON file associated with current matrix file."""
+        if not self.single_file_path or self.single_matrix is None:
+            return
+        
+        polygon_file = self.get_polygon_file_path()
+        if not polygon_file or not os.path.exists(polygon_file):
+            # No saved polygons for this file
+            return
+        
+        try:
+            with open(polygon_file, 'r') as f:
+                json_data = json.load(f)
+            
+            # Clear existing polygons
+            self.polygon_data = []
+            self.polygon_patches = []
+            
+            # Get matrix dimensions for validation
+            h, w = self.single_matrix.shape
+            
+            # Load polygons and validate they're within bounds
+            loaded_count = 0
+            skipped_count = 0
+            
+            for poly_json in json_data:
+                vertices = [(float(v[0]), float(v[1])) for v in poly_json['vertices']]
+                
+                # Validate vertices are within matrix bounds
+                valid = True
+                for x, y in vertices:
+                    if x < 0 or x >= w or y < 0 or y >= h:
+                        valid = False
+                        break
+                
+                if not valid:
+                    skipped_count += 1
+                    continue
+                
+                # Convert color back to appropriate format
+                color = poly_json['color']
+                if isinstance(color, list):
+                    if len(color) == 4:  # RGBA
+                        color = tuple(color)
+                    elif len(color) == 3:  # RGB
+                        color = tuple(color)
+                
+                # Recalculate statistics with current matrix data
+                stats_dict = self.calculate_polygon_statistics(vertices)
+                
+                polygon_info = {
+                    'name': poly_json['name'],
+                    'vertices': vertices,
+                    'color': color,
+                    'stats': stats_dict
+                }
+                self.polygon_data.append(polygon_info)
+                loaded_count += 1
+            
+            # Update color index to avoid color conflicts
+            if loaded_count > 0:
+                self.polygon_color_index = len(self.polygon_data) % len(self.polygon_colors)
+            
+            # Update display if polygons were loaded
+            if loaded_count > 0:
+                self.view_single_map()
+                if skipped_count > 0:
+                    messagebox.showinfo("Polygons Loaded", 
+                                      f"Loaded {loaded_count} polygon region(s).\n"
+                                      f"{skipped_count} polygon(s) skipped (out of bounds).")
+        except Exception as e:
+            # Silently fail - don't interrupt user workflow
+            pass
+    
     # --- End Polygon Selection Functionality ---
 
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
@@ -1817,12 +1945,18 @@ class MuadDataViewer:
             self.max_slider_limit.set(round(max_val))
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
+            self.single_file_path = path  # Store full path for polygon persistence
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
+            
+            # Load polygons associated with this file
+            self.load_polygons_for_file()
+            
             self.view_single_map()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load matrix file:\n{e}")
             self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
+            self.single_file_path = None
 
     def view_single_map(self, update_layout=True):
         if self.single_matrix is None:
@@ -1886,57 +2020,7 @@ class MuadDataViewer:
         
         if update_layout:
             self.single_figure.tight_layout()
-        self._update_figure_aspect_ratio()
         self.single_canvas.draw()
-    
-    def _update_figure_aspect_ratio(self):
-        """Update figure size to maintain aspect ratio of the matrix data."""
-        if self.single_matrix is None:
-            return
-        
-        # Get data aspect ratio
-        h, w = self.single_matrix.shape
-        data_aspect = w / h
-        
-        # Get available canvas size
-        canvas_widget = self.single_canvas.get_tk_widget()
-        canvas_width = canvas_widget.winfo_width()
-        canvas_height = canvas_widget.winfo_height()
-        
-        # Skip if canvas hasn't been rendered yet
-        if canvas_width <= 1 or canvas_height <= 1:
-            return
-        
-        # Account for colorbar if present
-        colorbar_width = 0
-        if hasattr(self, '_single_colorbar') and self._single_colorbar is not None:
-            colorbar_width = 80  # Approximate colorbar width in pixels
-        
-        # Account for figure padding (tight_layout adds some padding)
-        padding = 40  # Approximate padding in pixels
-        available_width = canvas_width - colorbar_width - padding
-        available_height = canvas_height - padding
-        
-        # Calculate figure size in inches (using DPI from figure)
-        dpi = self.single_figure.dpi
-        
-        # Determine if we should fit to width or height
-        canvas_aspect = available_width / available_height
-        
-        if canvas_aspect > data_aspect:
-            # Canvas is wider than data - fit to height
-            fig_height = available_height / dpi
-            fig_width = fig_height * data_aspect
-        else:
-            # Canvas is taller than data - fit to width
-            fig_width = available_width / dpi
-            fig_height = fig_width / data_aspect
-        
-        # Set figure size (minimum size to prevent too small)
-        fig_width = max(fig_width, 2.0)  # Minimum 2 inches
-        fig_height = max(fig_height, 2.0)  # Minimum 2 inches
-        
-        self.single_figure.set_size_inches(fig_width, fig_height, forward=False)
     
     def draw_polygon_overlays(self):
         """Draw all polygon selections on the map."""
@@ -1975,14 +2059,19 @@ class MuadDataViewer:
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
             # Draw vertices as markers
-            if len(self.polygon_vertices) > 0:
-                x_coords = [v[0] for v in self.polygon_vertices]
-                y_coords = [v[1] for v in self.polygon_vertices]
-                self.single_ax.plot(x_coords, y_coords, 'wo', markersize=8, markeredgecolor='black', markeredgewidth=1)
+            x_coords = [v[0] for v in self.polygon_vertices]
+            y_coords = [v[1] for v in self.polygon_vertices]
+            self.single_ax.plot(x_coords, y_coords, 'wo', markersize=8, markeredgecolor='black', markeredgewidth=1)
+            
+            # Draw lines between vertices
+            if len(self.polygon_vertices) > 1:
                 self.single_ax.plot(x_coords, y_coords, 'w-', linewidth=2, alpha=0.5)
             
-            # Draw line to current mouse position would require mouse move tracking
-            # For now, just show the vertices and connecting lines
+            # Draw closing line back to first vertex if we have 3+ vertices (to show it will close)
+            if len(self.polygon_vertices) >= 3:
+                first_x, first_y = self.polygon_vertices[0]
+                last_x, last_y = self.polygon_vertices[-1]
+                self.single_ax.plot([last_x, first_x], [last_y, first_y], 'w--', linewidth=2, alpha=0.5, linestyle='dashed')
 
     def save_single_image(self):
         if self.single_matrix is None:
