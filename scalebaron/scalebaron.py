@@ -56,24 +56,26 @@ class CompositeApp:
     def parse_matrix_filename(self, filename):
         """
         Parse matrix filename to extract sample name, element, and unit type.
-        Supports two formats:
+        Supports:
         1. Old format: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
+           Element: 1-2 letters + 1-3 digits (e.g. Mo98, Ca44) OR summed channel TotalXxx (e.g. TotalMo).
         2. New format (Iolite raw CPS): {sample} {element} matrix.xlsx
         
         Returns: (sample, element, unit_type) or None if no match
         unit_type will be 'ppm', 'CPS', or 'raw' (for new format)
         """
         basename = os.path.basename(filename)
+        # Element: standard [A-Za-z]{1,2}\d{1,3} or summed Total[A-Za-z]+ (e.g. TotalMo_ppm)
+        elem_pattern = r"[A-Za-z]{1,2}\d{1,3}|Total[A-Za-z]+"
         
         # Try old format first: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-        match = re.match(r"(.+?)[ _]([A-Za-z]{1,2}\d{1,3})_(ppm|CPS) matrix\.xlsx", basename)
+        match = re.match(rf"(.+?)[ _]({elem_pattern})_(ppm|CPS) matrix\.xlsx", basename)
         if match:
             sample, element, unit_type = match.groups()
             return (sample, element, unit_type)
         
         # Try new format: {sample} {element} matrix.xlsx
-        # This matches filenames like "LVG D4 0.6 Se80 matrix.xlsx" or "sample Li7 matrix.xlsx"
-        match = re.match(r"(.+?) ([A-Za-z]{1,2}\d{1,3}) matrix\.xlsx", basename)
+        match = re.match(rf"(.+?) ({elem_pattern}) matrix\.xlsx", basename)
         if match:
             sample, element = match.groups()
             return (sample, element, 'raw')
@@ -231,15 +233,24 @@ class CompositeApp:
         ttk.Label(button_frame, text="Batch Processing", style="Hint.TLabel").pack(pady=(0, 2))
         batch_icon = self.button_icons.get('batch')
         if batch_icon:
-            batch_button = tk.Button(button_frame, image=batch_icon,
+            self.batch_btn = tk.Button(button_frame, image=batch_icon,
                   command=self.batch_process_all_elements,
                   padx=2, pady=8, bg="#4CAF50", fg="black", relief='raised',
                   activebackground='#45a049')
-            batch_button.image = batch_icon
+            self.batch_btn.image = batch_icon
         else:
-            batch_button = tk.Button(button_frame, text="⚡", command=self.batch_process_all_elements, 
+            self.batch_btn = tk.Button(button_frame, text="⚡", command=self.batch_process_all_elements, 
                   bg="#4CAF50", fg="black", width=1, height=3)
-        batch_button.pack(pady=(0, 10))
+        self.batch_btn.pack(pady=(0, 5))
+        
+        # Batch progress bar (visible during batch; updates in real time with Status Log)
+        self.batch_progress_frame = ttk.Frame(button_frame)
+        self.batch_progress_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(self.batch_progress_frame, text="Batch progress:", style="Hint.TLabel").pack(anchor="w")
+        self.batch_progress_bar = ttk.Progressbar(self.batch_progress_frame, mode='determinate', maximum=100, value=0)
+        self.batch_progress_bar.pack(fill=tk.X, pady=(2, 2))
+        self.batch_progress_label = ttk.Label(self.batch_progress_frame, text="", style="Hint.TLabel")
+        self.batch_progress_label.pack(anchor="w")
         
         # Progress Log at bottom of control panel
         log_group = ttk.LabelFrame(left_frame, text="Status Log", padding=5)
@@ -1002,55 +1013,88 @@ class CompositeApp:
         if not result:
             return
         
-        # Process each element
-        self.log_print(f"\n🚀 Starting batch processing of {num_elements} element(s)...")
-        successful = 0
-        failed = []
+        # Show progress bar and disable batch button so UI updates during run
+        self._batch_running = True
+        if hasattr(self, 'batch_btn'):
+            self.batch_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'batch_progress_bar'):
+            self.batch_progress_bar['value'] = 0
+            self.batch_progress_bar['maximum'] = 100
+        if hasattr(self, 'batch_progress_label'):
+            self.batch_progress_label.config(text="Starting...")
+        self.master.update()
         
-        for idx, elem in enumerate(sorted_elements, 1):
-            try:
-                self.log_print(f"\n[{idx}/{num_elements}] Processing {elem}...")
-                
-                # Set the element
-                self.element.set(elem)
-                self.master.update_idletasks()  # Update GUI
-                
-                # Load data (this sets scale_max automatically to 99th percentile)
-                self.load_data()
-                
-                # Check if data was loaded successfully
-                if not self.matrices:
-                    self.log_print(f"⚠️  No data loaded for {elem}, skipping...")
-                    failed.append((elem, "No data found"))
+        try:
+            # Process each element
+            self.log_print(f"\n🚀 Starting batch processing of {num_elements} element(s)...")
+            successful = 0
+            failed = []
+            
+            for idx, elem in enumerate(sorted_elements, 1):
+                try:
+                    # Update progress bar and label so user sees live progress
+                    if hasattr(self, 'batch_progress_bar'):
+                        self.batch_progress_bar['value'] = (idx - 1) / num_elements * 100
+                    if hasattr(self, 'batch_progress_label'):
+                        self.batch_progress_label.config(text=f"Element {idx} of {num_elements}: {elem}")
+                    self.master.update()
+                    
+                    self.log_print(f"\n[{idx}/{num_elements}] Processing {elem}...")
+                    
+                    # Set the element
+                    self.element.set(elem)
+                    self.master.update()
+                    
+                    # Load data (this sets scale_max automatically to 99th percentile)
+                    self.load_data()
+                    
+                    # Check if data was loaded successfully
+                    if not self.matrices:
+                        self.log_print(f"⚠️  No data loaded for {elem}, skipping...")
+                        failed.append((elem, "No data found"))
+                        continue
+                    
+                    # Generate and save composite directly (no preview)
+                    self.log_print(f"  Generating composite for {elem}...")
+                    self.generate_composite(preview=False)
+                    
+                    successful += 1
+                    self.log_print(f"✅ Completed {elem} ({idx}/{num_elements})")
+                    
+                    # Move progress bar to completed for this element
+                    if hasattr(self, 'batch_progress_bar'):
+                        self.batch_progress_bar['value'] = idx / num_elements * 100
+                    self.master.update()
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    self.log_print(f"❌ Error processing {elem}: {error_msg}")
+                    failed.append((elem, error_msg))
+                    import traceback
+                    self.log_print(traceback.format_exc())
+                    if hasattr(self, 'batch_progress_bar'):
+                        self.batch_progress_bar['value'] = idx / num_elements * 100
+                    self.master.update()
                     continue
-                
-                # Generate and save composite directly (no preview)
-                self.log_print(f"  Generating composite for {elem}...")
-                self.generate_composite(preview=False)
-                
-                successful += 1
-                self.log_print(f"✅ Completed {elem} ({idx}/{num_elements})")
-                
-                # Update GUI to show progress
-                self.master.update_idletasks()
-                
-            except Exception as e:
-                error_msg = str(e)
-                self.log_print(f"❌ Error processing {elem}: {error_msg}")
-                failed.append((elem, error_msg))
-                import traceback
-                self.log_print(traceback.format_exc())
-                continue
-        
-        # Summary
-        self.log_print(f"\n{'='*50}")
-        self.log_print(f"Batch processing complete!")
-        self.log_print(f"✅ Successful: {successful}/{num_elements}")
-        if failed:
-            self.log_print(f"❌ Failed: {len(failed)}")
-            for elem, reason in failed:
-                self.log_print(f"   - {elem}: {reason}")
-        self.log_print(f"{'='*50}")
+
+            # Summary (after loop completes)
+            self.log_print(f"\n{'='*50}")
+            self.log_print(f"Batch processing complete!")
+            self.log_print(f"✅ Successful: {successful}/{num_elements}")
+            if failed:
+                self.log_print(f"❌ Failed: {len(failed)}")
+                for elem, reason in failed:
+                    self.log_print(f"   - {elem}: {reason}")
+            self.log_print(f"{'='*50}")
+        finally:
+            self._batch_running = False
+            if hasattr(self, 'batch_btn'):
+                self.batch_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar['value'] = 100
+            if hasattr(self, 'batch_progress_label'):
+                self.batch_progress_label.config(text="Complete")
+            self.master.update()
         
         # Show completion message
         if failed:
@@ -1125,8 +1169,11 @@ class CompositeApp:
         write_to_log(self.log if hasattr(self, 'log') else None)
         write_to_log(self.log_preview if hasattr(self, 'log_preview') else None)
         
-        # Update GUI in real-time for better user feedback
-        self.master.update_idletasks()
+        # During batch, process events so Status Log and progress bar update in real time
+        if getattr(self, '_batch_running', False):
+            self.master.update()
+        else:
+            self.master.update_idletasks()
     
     def set_status(self, status):
         """Set the application status (Idle, Busy, Finishing)."""

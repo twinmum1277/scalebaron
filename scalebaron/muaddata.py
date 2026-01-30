@@ -125,24 +125,26 @@ class MuadDataViewer:
     def parse_matrix_filename(self, filename):
         """
         Parse matrix filename to extract sample name, element, and unit type.
-        Supports two formats:
+        Supports:
         1. Old format: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
+           Element: 1-2 letters + 1-3 digits (e.g. Mo98, Ca44) OR summed channel TotalXxx (e.g. TotalMo).
         2. New format (Iolite raw counts): {sample} {element} matrix.xlsx
         
         Returns: (sample, element, unit_type) or None if no match
         unit_type will be 'ppm', 'CPS', or 'raw' (for new format)
         """
         basename = os.path.basename(filename)
+        # Element: standard [A-Za-z]{1,2}\d{1,3} or summed Total[A-Za-z]+ (e.g. TotalMo_ppm)
+        elem_pattern = r"[A-Za-z]{1,2}\d{1,3}|Total[A-Za-z]+"
         
         # Try old format first: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-        match = re.match(r"(.+?)[ _]([A-Za-z]{1,2}\d{1,3})_(ppm|CPS) matrix\.xlsx", basename)
+        match = re.match(rf"(.+?)[ _]({elem_pattern})_(ppm|CPS) matrix\.xlsx", basename)
         if match:
             sample, element, unit_type = match.groups()
             return (sample, element, unit_type)
         
         # Try new format: {sample} {element} matrix.xlsx
-        # This matches filenames like "LVG D4 0.6 Se80 matrix.xlsx" or "sample Li7 matrix.xlsx"
-        match = re.match(r"(.+?) ([A-Za-z]{1,2}\d{1,3}) matrix\.xlsx", basename)
+        match = re.match(rf"(.+?) ({elem_pattern}) matrix\.xlsx", basename)
         if match:
             sample, element = match.groups()
             return (sample, element, 'raw')
