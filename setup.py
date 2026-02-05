@@ -1,10 +1,10 @@
 from setuptools import setup
+from pathlib import Path
 
-with open('requirements.txt') as f:
-    requirements = f.read().splitlines()
+this_dir = Path(__file__).parent
+requirements = (this_dir / "requirements.txt").read_text().splitlines()
 
-with open('README.md', 'r') as f:
-    long_description = f.read()
+long_description = (this_dir / "README.md").read_text(encoding="utf-8")
 
 setup(
     name='scalebaron',
