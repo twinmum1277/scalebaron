@@ -89,6 +89,7 @@ class CompositeApp:
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
         self.num_rows = tk.IntVar(value=5)
+        self.use_best_layout = tk.BooleanVar(value=False)  # Auto rows to minimize empty cells
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
         self.element = tk.StringVar()
@@ -362,6 +363,9 @@ class CompositeApp:
         ttk.Label(layout_frame, text="Rows:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=8)
         rows_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        
+        # Use best layout (auto rows to minimize blank cells; same as batch)
+        ttk.Checkbutton(layout_frame, text="Use best layout (auto rows)", variable=self.use_best_layout).grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2)
         
         # Display controls
         display_frame = ttk.LabelFrame(control_frame, text="Display", padding=10)
@@ -1054,9 +1058,10 @@ class CompositeApp:
                         failed.append((elem, "No data found"))
                         continue
                     
-                    # Generate and save composite directly (no preview)
+                    # Generate and save composite directly (no preview); use best layout (no extra blank rows)
                     self.log_print(f"  Generating composite for {elem}...")
-                    self.generate_composite(preview=False)
+                    best_rows = self._best_composite_rows(len(self.matrices))
+                    self.generate_composite(preview=False, override_rows=best_rows)
                     
                     successful += 1
                     self.log_print(f"✅ Completed {elem} ({idx}/{num_elements})")
@@ -1684,8 +1689,12 @@ class CompositeApp:
         self.log_print("Status: Busy - Creating composite matrix...")
         
         element = self.element.get()
-        rows = min(self.num_rows.get(), len(self.matrices))
-        cols = math.ceil(len(self.matrices) / rows)
+        n = len(self.matrices)
+        if getattr(self, 'use_best_layout', None) and self.use_best_layout.get():
+            rows = self._best_composite_rows(n)
+        else:
+            rows = min(self.num_rows.get(), n)
+        cols = math.ceil(n / rows)
         
         # Find maximum dimensions
         max_height = max(m.shape[0] for m in self.matrices)
@@ -1813,7 +1822,26 @@ class CompositeApp:
         else:
             self.generate_composite(preview=False)
 
-    def generate_composite(self, preview=False):
+    def _best_composite_rows(self, n):
+        """Return the number of rows that minimizes empty cells, then favors a square-ish grid."""
+        if n <= 0:
+            return 1
+        if n == 1:
+            return 1
+        best_rows = 1
+        best_empty = n - 1
+        best_diff = n - 1  # |rows - cols|
+        for r in range(1, n + 1):
+            c = math.ceil(n / r)
+            empty = r * c - n
+            diff = abs(r - c)
+            if empty < best_empty or (empty == best_empty and diff < best_diff):
+                best_empty = empty
+                best_diff = diff
+                best_rows = r
+        return best_rows
+
+    def generate_composite(self, preview=False, override_rows=None):
         if not self.matrices:
             self.log_print("⚠️ No data loaded.")
             return
@@ -1832,8 +1860,14 @@ class CompositeApp:
         else:
             matrices_to_use = self.matrices
 
-        rows = min(self.num_rows.get(), len(self.matrices))  # Ensure rows don't exceed number of samples
-        cols = math.ceil(len(self.matrices) / rows)
+        n = len(self.matrices)
+        if override_rows is not None:
+            rows = max(1, min(override_rows, n))
+        elif getattr(self, 'use_best_layout', None) and self.use_best_layout.get():
+            rows = self._best_composite_rows(n)
+        else:
+            rows = min(self.num_rows.get(), n)
+        cols = math.ceil(n / rows)
         fig = plt.figure(figsize=(4 * cols + 1, 4 * rows))
         gs = fig.add_gridspec(rows, cols + 1, width_ratios=[1] * cols + [0.2])
         axs = np.empty((rows, cols + 1), dtype=object)

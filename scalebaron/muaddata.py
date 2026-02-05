@@ -326,6 +326,11 @@ class MuadDataViewer:
         self.file_root_label = None
         self.normalize_var = tk.IntVar()
 
+        # Spatial scale bar for RGB overlay
+        self.rgb_pixel_size = tk.DoubleVar(value=1.0)
+        self.rgb_scale_length = tk.IntVar(value=100)  # whole µm only
+        self.rgb_show_scalebar = tk.BooleanVar(value=True)
+
         # Responsive colorbar for RGB overlay
         self.rgb_colorbar_figure = None
         self.rgb_colorbar_ax = None
@@ -1762,6 +1767,19 @@ class MuadDataViewer:
             cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
 
         tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
+
+        # Spatial scale bar for RGB overlay
+        tk.Label(control_frame, text="Spatial scale bar", font=("Arial", 13, "bold")).pack(anchor='w', pady=(10, 2))
+        scalebar_row1 = tk.Frame(control_frame)
+        scalebar_row1.pack(fill=tk.X)
+        tk.Label(scalebar_row1, text="Pixel size (µm/px):", font=("Arial", 11)).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Entry(scalebar_row1, textvariable=self.rgb_pixel_size, width=8, font=("Arial", 11)).pack(side=tk.LEFT)
+        scalebar_row2 = tk.Frame(control_frame)
+        scalebar_row2.pack(fill=tk.X, pady=(2, 2))
+        tk.Label(scalebar_row2, text="Scale bar length (µm):", font=("Arial", 11)).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Entry(scalebar_row2, textvariable=self.rgb_scale_length, width=8, font=("Arial", 11)).pack(side=tk.LEFT)
+        tk.Checkbutton(control_frame, text="Show scale bar", variable=self.rgb_show_scalebar, font=("Arial", 11)).pack(anchor='w', pady=(0, 5))
+
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save RGB Image", command=self.save_rgb_image, font=("Arial", 13)).pack(fill=tk.X)
         tk.Button(control_frame, text="Clear Data", command=self.clear_rgb_data, font=("Arial", 13), bg="#f44336", fg="black").pack(fill=tk.X, pady=(6, 0))
@@ -1803,9 +1821,14 @@ class MuadDataViewer:
         self.rgb_colorbar_canvas.get_tk_widget().configure(bg="black", highlightthickness=0, bd=0)
         self.rgb_colorbar_canvas.get_tk_widget().pack(fill=tk.X, expand=True)
 
-        self.rgb_figure, self.rgb_ax = plt.subplots(facecolor='black')
+        self.rgb_figure = plt.figure(facecolor='black')
+        gs_rgb = self.rgb_figure.add_gridspec(1, 2, width_ratios=[1, 0.15], wspace=0.02)
+        self.rgb_ax = self.rgb_figure.add_subplot(gs_rgb[0, 0])
+        self.rgb_scale_bar_ax = self.rgb_figure.add_subplot(gs_rgb[0, 1])
         self.rgb_ax.set_facecolor('black')
         self.rgb_ax.axis('off')
+        self.rgb_scale_bar_ax.set_facecolor('black')
+        self.rgb_scale_bar_ax.axis('off')
         self.rgb_canvas = FigureCanvasTkAgg(self.rgb_figure, master=display_frame)
         self.rgb_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -1851,8 +1874,12 @@ class MuadDataViewer:
             self.rgb_ax.clear()
             self.rgb_ax.axis('off')
             self.rgb_ax.set_facecolor('black')
-            if hasattr(self, 'rgb_canvas'):
-                self.rgb_canvas.draw()
+        if hasattr(self, 'rgb_scale_bar_ax') and self.rgb_scale_bar_ax is not None:
+            self.rgb_scale_bar_ax.clear()
+            self.rgb_scale_bar_ax.axis('off')
+            self.rgb_scale_bar_ax.set_facecolor('black')
+        if hasattr(self, 'rgb_canvas'):
+            self.rgb_canvas.draw()
         if hasattr(self, 'rgb_colorbar_ax') and self.rgb_colorbar_ax is not None:
             self.rgb_colorbar_ax.clear()
             self.rgb_colorbar_ax.axis('off')
@@ -2180,6 +2207,32 @@ class MuadDataViewer:
         self.rgb_ax.clear()
         self.rgb_ax.imshow(rgb)
         self.rgb_ax.axis('off')
+        # Scale bar in dedicated non-data axes (right column); length from image transform so it stays accurate
+        self.rgb_scale_bar_ax.clear()
+        self.rgb_scale_bar_ax.set_facecolor('black')
+        self.rgb_scale_bar_ax.axis('off')
+        if self.rgb_show_scalebar.get():
+            pixel_size_um = self.rgb_pixel_size.get()
+            scale_bar_um = int(self.rgb_scale_length.get())
+            if pixel_size_um > 0:
+                scale_bar_px = max(1, int(round(scale_bar_um / pixel_size_um)))
+            else:
+                scale_bar_px = 1
+            # Bar length in figure coords from image axes transform
+            p0_display = self.rgb_ax.transData.transform((0, 0))
+            p1_display = self.rgb_ax.transData.transform((scale_bar_px, 0))
+            p0_fig = self.rgb_figure.transFigure.inverted().transform(p0_display)
+            p1_fig = self.rgb_figure.transFigure.inverted().transform(p1_display)
+            bar_length_fig = p1_fig[0] - p0_fig[0]
+            pos = self.rgb_scale_bar_ax.get_position()
+            x_center_fig = pos.x0 + pos.width * 0.5
+            y_fig = pos.y0 + pos.height * 0.5
+            x_start_fig = x_center_fig - bar_length_fig * 0.5
+            x_end_fig = x_center_fig + bar_length_fig * 0.5
+            self.rgb_scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=self.rgb_figure.transFigure,
+                                        colors='white', linewidth=3)
+            self.rgb_scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=self.rgb_scale_bar_ax.transAxes,
+                                      color='white', fontsize=9, ha='center', va='top')
         self.rgb_figure.tight_layout()
         self.rgb_canvas.draw()
         # Draw responsive colorbar
@@ -2198,7 +2251,7 @@ class MuadDataViewer:
         self.rgb_colorbar_ax.clear()
         self.rgb_colorbar_ax.axis('off')
         if len(loaded) == 3:
-            # Draw a triangle with each vertex colored
+            # Draw a triangle with each vertex colored (3-channel = triangle)
             triangle = np.zeros((120, 240, 3), dtype=float)
             # Get RGB for each color
             rgb_vals = []
@@ -2225,21 +2278,23 @@ class MuadDataViewer:
                     if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
                         color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
                         triangle[y, x, :] = color
-            self.rgb_colorbar_ax.imshow(triangle, origin='upper', extent=[0, 1, 0, 1])
-            # Draw triangle outline
-            self.rgb_colorbar_ax.plot([v0[0]/240, v1[0]/240], [1-v0[1]/120, 1-v1[1]/120], color='k', lw=1)
-            self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [1-v1[1]/120, 1-v2[1]/120], color='k', lw=1)
-            self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [1-v2[1]/120, 1-v0[1]/120], color='k', lw=1)
+            # Extent matches array aspect (240×120) so triangle isn't stretched
+            self.rgb_colorbar_ax.imshow(triangle, origin='upper', extent=[0, 1, 0, 0.5], aspect='equal')
+            # Draw triangle outline (in same data coords: x 0-1, y 0-0.5)
+            self.rgb_colorbar_ax.plot([v0[0]/240, v1[0]/240], [0.5 - v0[1]/120*0.5, 0.5 - v1[1]/120*0.5], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [0.5 - v1[1]/120*0.5, 0.5 - v2[1]/120*0.5], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [0.5 - v2[1]/120*0.5, 0.5 - v0[1]/120*0.5], color='k', lw=1)
             # Place labels at vertices
-            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.05, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(v1[0]/240+0.04, 1-v1[1]/120, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(v2[0]/240-0.04, 1-v2[1]/120, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.set_xlim(0, 1)
-            self.rgb_colorbar_ax.set_ylim(0, 1)
+            self.rgb_colorbar_ax.text(v0[0]/240, 0.5 - v0[1]/120*0.5 - 0.03, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(v1[0]/240+0.03, 0.5 - v1[1]/120*0.5, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(v2[0]/240-0.03, 0.5 - v2[1]/120*0.5, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.set_aspect('equal')
+            self.rgb_colorbar_ax.set_xlim(-0.1, 1.1)
+            self.rgb_colorbar_ax.set_ylim(-0.1, 0.6)
         elif len(loaded) == 2:
-            # Draw a horizontal gradient bar between the two colors
+            # Draw a horizontal gradient bar (rectangle: wider than tall, not square)
             width = 240
-            height = 30
+            height = 40
             grad = np.zeros((height, width, 3), dtype=float)
             rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
             rgb1 = [int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0]
@@ -2247,18 +2302,19 @@ class MuadDataViewer:
                 frac = x / (width-1)
                 color = (1-frac)*np.array(rgb0) + frac*np.array(rgb1)
                 grad[:, x, :] = color
-            self.rgb_colorbar_ax.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+            # Extent: 1 unit wide, 0.25 tall so bar is rectangle (4:1) when aspect is equal
+            self.rgb_colorbar_ax.imshow(grad, origin='upper', extent=[0, 1, 0, 0.25], aspect='equal')
             # Draw bar outline
             self.rgb_colorbar_ax.plot([0, 1], [0, 0], color='k', lw=1)
-            self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
-            self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
-            self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
-            # Expand xlim to give more space for labels
+            self.rgb_colorbar_ax.plot([0, 1], [0.25, 0.25], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([0, 0], [0, 0.25], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([1, 1], [0, 0.25], color='k', lw=1)
+            self.rgb_colorbar_ax.set_aspect('equal')
             self.rgb_colorbar_ax.set_xlim(-0.25, 1.25)
-            self.rgb_colorbar_ax.set_ylim(0, 1.3)
-            # Place labels further apart to prevent overlap
-            self.rgb_colorbar_ax.text(-0.15, 1.15, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(1.15, 1.15, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.set_ylim(-0.05, 0.45)
+            # Labels above the bar
+            self.rgb_colorbar_ax.text(-0.15, 0.38, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(1.15, 0.38, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
         elif len(loaded) == 1:
             # Draw a single color bar
             width = 240
@@ -2331,17 +2387,36 @@ class MuadDataViewer:
                 colorbar_height = 1.5
                 total_height = base_height + colorbar_height
                 
-                # Create new figure with proper proportions for colorbar
-                fig = plt.figure(figsize=(fig_width, total_height), dpi=300)
-                gs = GridSpec(2, 1, figure=fig, height_ratios=[base_height, colorbar_height], hspace=0.05)
-                
-                # Main RGB plot (larger)
-                ax_main = fig.add_subplot(gs[0])
+                # Create new figure: image + scale bar column, then colorbar row
+                fig = plt.figure(figsize=(fig_width + fig_width * 0.15, total_height), dpi=300, facecolor='black')
+                gs = GridSpec(2, 2, figure=fig, height_ratios=[base_height, colorbar_height],
+                              width_ratios=[1, 0.15], hspace=0.05, wspace=0.02)
+                ax_main = fig.add_subplot(gs[0, 0])
+                scale_bar_ax = fig.add_subplot(gs[0, 1])
                 ax_main.imshow(img_array, aspect='equal', interpolation='nearest')
                 ax_main.axis('off')
-                
-                # Colorbar at bottom (smaller)
-                ax_cbar = fig.add_subplot(gs[1])
+                ax_main.set_facecolor('black')
+                scale_bar_ax.set_facecolor('black')
+                scale_bar_ax.axis('off')
+                if self.rgb_show_scalebar.get() and self.rgb_pixel_size.get() > 0:
+                    scale_bar_um = int(self.rgb_scale_length.get())
+                    scale_bar_px = max(1, int(round(scale_bar_um / self.rgb_pixel_size.get())))
+                    p0_display = ax_main.transData.transform((0, 0))
+                    p1_display = ax_main.transData.transform((scale_bar_px, 0))
+                    p0_fig = fig.transFigure.inverted().transform(p0_display)
+                    p1_fig = fig.transFigure.inverted().transform(p1_display)
+                    bar_length_fig = p1_fig[0] - p0_fig[0]
+                    pos = scale_bar_ax.get_position()
+                    x_center_fig = pos.x0 + pos.width * 0.5
+                    y_fig = pos.y0 + pos.height * 0.5
+                    x_start_fig = x_center_fig - bar_length_fig * 0.5
+                    x_end_fig = x_center_fig + bar_length_fig * 0.5
+                    scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure,
+                                       colors='white', linewidth=3)
+                    scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
+                                     color='white', fontsize=9, ha='center', va='top')
+                # Colorbar at bottom (spans both columns or just first)
+                ax_cbar = fig.add_subplot(gs[1, 0])
                 
                 # Determine which channels are loaded and draw colorbar
                 loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
@@ -2361,7 +2436,7 @@ class MuadDataViewer:
                 ax_cbar.axis('off')
                 
                 if len(loaded) == 3:
-                    # Draw triangle colorbar
+                    # Draw triangle colorbar (aspect so triangle isn't stretched)
                     triangle = np.zeros((100, 200, 3), dtype=float)
                     rgb_vals = []
                     for c in colors:
@@ -2384,17 +2459,20 @@ class MuadDataViewer:
                             if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
                                 color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
                                 triangle[y, x, :] = color
-                    ax_cbar.imshow(triangle, origin='upper', extent=[0, 1, 0, 1])
-                    ax_cbar.plot([v0[0]/200, v1[0]/200], [1-v0[1]/100, 1-v1[1]/100], color='k', lw=1)
-                    ax_cbar.plot([v1[0]/200, v2[0]/200], [1-v1[1]/100, 1-v2[1]/100], color='k', lw=1)
-                    ax_cbar.plot([v2[0]/200, v0[0]/200], [1-v2[1]/100, 1-v0[1]/100], color='k', lw=1)
-                    ax_cbar.text(v0[0]/200, 1-v0[1]/100-0.1, labels[0], color=colors[0], fontsize=8, ha='center', va='top', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(v1[0]/200+0.05, 1-v1[1]/100, labels[1], color=colors[1], fontsize=8, ha='left', va='center', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(v2[0]/200-0.05, 1-v2[1]/100, labels[2], color=colors[2], fontsize=8, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.imshow(triangle, origin='upper', extent=[0, 1, 0, 0.5], aspect='equal')
+                    ax_cbar.plot([v0[0]/200, v1[0]/200], [0.5 - v0[1]/100*0.5, 0.5 - v1[1]/100*0.5], color='k', lw=1)
+                    ax_cbar.plot([v1[0]/200, v2[0]/200], [0.5 - v1[1]/100*0.5, 0.5 - v2[1]/100*0.5], color='k', lw=1)
+                    ax_cbar.plot([v2[0]/200, v0[0]/200], [0.5 - v2[1]/100*0.5, 0.5 - v0[1]/100*0.5], color='k', lw=1)
+                    ax_cbar.text(v0[0]/200, 0.5 - v0[1]/100*0.5 - 0.03, labels[0], color=colors[0], fontsize=8, ha='center', va='top', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(v1[0]/200+0.03, 0.5 - v1[1]/100*0.5, labels[1], color=colors[1], fontsize=8, ha='left', va='center', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(v2[0]/200-0.03, 0.5 - v2[1]/100*0.5, labels[2], color=colors[2], fontsize=8, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.set_aspect('equal')
+                    ax_cbar.set_xlim(-0.1, 1.1)
+                    ax_cbar.set_ylim(-0.1, 0.6)
                 elif len(loaded) == 2:
-                    # Draw horizontal gradient bar
+                    # Draw horizontal gradient bar (rectangle: wider than tall)
                     width = 200
-                    height = 30
+                    height = 40
                     grad = np.zeros((height, width, 3), dtype=float)
                     rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
                     rgb1 = [int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0]
@@ -2402,17 +2480,16 @@ class MuadDataViewer:
                         frac = x / (width-1)
                         color = (1-frac)*np.array(rgb0) + frac*np.array(rgb1)
                         grad[:, x, :] = color
-                    ax_cbar.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+                    ax_cbar.imshow(grad, origin='upper', extent=[0, 1, 0, 0.25], aspect='equal')
                     ax_cbar.plot([0, 1], [0, 0], color='k', lw=1)
-                    ax_cbar.plot([0, 1], [1, 1], color='k', lw=1)
-                    ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
-                    ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
-                    # Expand xlim to give more space for labels (especially with two-line labels)
+                    ax_cbar.plot([0, 1], [0.25, 0.25], color='k', lw=1)
+                    ax_cbar.plot([0, 0], [0, 0.25], color='k', lw=1)
+                    ax_cbar.plot([1, 1], [0, 0.25], color='k', lw=1)
+                    ax_cbar.set_aspect('equal')
                     ax_cbar.set_xlim(-0.25, 1.25)
-                    ax_cbar.set_ylim(0, 1.3)
-                    # Position labels further apart to prevent overlap
-                    ax_cbar.text(-0.15, 1.15, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(1.15, 1.15, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.set_ylim(-0.05, 0.45)
+                    ax_cbar.text(-0.15, 0.38, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(1.15, 0.38, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
                 elif len(loaded) == 1:
                     # Draw single color bar
                     width = 200
@@ -2436,23 +2513,39 @@ class MuadDataViewer:
                 fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black')
                 plt.close(fig)
             else:
-                # Save without colorbar - preserve actual image dimensions
+                # Save without colorbar - image + scale bar in dedicated column
                 img_array = self.rgb_ax.get_images()[0].get_array()
                 img_height, img_width = img_array.shape[:2]
                 aspect_ratio = img_width / img_height
-                
-                # Calculate figure size to preserve aspect ratio
                 base_height = 10
                 fig_width = base_height * aspect_ratio
-                
-                # Create new figure with correct dimensions
-                fig = plt.figure(figsize=(fig_width, base_height), dpi=300, facecolor='black')
-                ax = fig.add_subplot(111)
+                fig = plt.figure(figsize=(fig_width * 1.15, base_height), dpi=300, facecolor='black')
+                gs = GridSpec(1, 2, figure=fig, width_ratios=[1, 0.15], wspace=0.02)
+                ax = fig.add_subplot(gs[0, 0])
+                scale_bar_ax = fig.add_subplot(gs[0, 1])
                 ax.imshow(img_array, aspect='equal', interpolation='nearest')
                 ax.axis('off')
                 ax.set_facecolor('black')
+                scale_bar_ax.set_facecolor('black')
+                scale_bar_ax.axis('off')
+                if self.rgb_show_scalebar.get() and self.rgb_pixel_size.get() > 0:
+                    scale_bar_um = int(self.rgb_scale_length.get())
+                    scale_bar_px = max(1, int(round(scale_bar_um / self.rgb_pixel_size.get())))
+                    p0_display = ax.transData.transform((0, 0))
+                    p1_display = ax.transData.transform((scale_bar_px, 0))
+                    p0_fig = fig.transFigure.inverted().transform(p0_display)
+                    p1_fig = fig.transFigure.inverted().transform(p1_display)
+                    bar_length_fig = p1_fig[0] - p0_fig[0]
+                    pos = scale_bar_ax.get_position()
+                    x_center_fig = pos.x0 + pos.width * 0.5
+                    y_fig = pos.y0 + pos.height * 0.5
+                    x_start_fig = x_center_fig - bar_length_fig * 0.5
+                    x_end_fig = x_center_fig + bar_length_fig * 0.5
+                    scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure,
+                                        colors='white', linewidth=3)
+                    scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
+                                     color='white', fontsize=9, ha='center', va='top')
                 fig.patch.set_facecolor('black')
-                
                 fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black', pad_inches=0)
                 plt.close(fig)
             
