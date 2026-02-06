@@ -378,6 +378,36 @@ class MuadDataViewer:
         self.build_rgb_tab()
         self.build_zstack_tab()
 
+    def _make_scrollable_control_panel(self, parent):
+        """Returns (container, inner_frame). Pack container on the left; put all controls in inner_frame.
+        On laptops/small windows the sidebar scrolls so no controls are hidden."""
+        container = tk.Frame(parent)
+        canvas = tk.Canvas(container, highlightthickness=0)
+        scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+        inner = tk.Frame(canvas, padx=10, pady=10)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        def on_canvas_configure(event):
+            canvas.itemconfig(win_id, width=event.width)
+        canvas.bind("<Configure>", on_canvas_configure)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        def on_mousewheel(event):
+            # Linux: event.num 4/5; Windows: event.delta ±120; Mac: event.delta often ±1
+            if getattr(event, "num", None) == 5:
+                canvas.yview_scroll(1, "units")
+            elif getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-1, "units")
+            else:
+                delta = getattr(event, "delta", 0)
+                step = int(-1 * (delta / 120)) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                canvas.yview_scroll(step, "units")
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+        return container, inner
+
     def pad_slices_to_same_size(self, slices):
         """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
         if not slices:
@@ -422,8 +452,8 @@ class MuadDataViewer:
         return shifted
 
     def build_zstack_tab(self):
-        control_frame = tk.Frame(self.zstack_tab, padx=10, pady=10)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y)
+        control_container, control_frame = self._make_scrollable_control_panel(self.zstack_tab)
+        control_container.pack(side=tk.LEFT, fill=tk.Y)
 
         display_frame = tk.Frame(self.zstack_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -651,10 +681,11 @@ class MuadDataViewer:
             base_alpha = 0.6 if num <= 2 else max(0.25, 0.8/num)
             for idx, s in enumerate(slices):
                 alpha = base_alpha
-                im = self.zstack_ax.imshow(s, cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax, alpha=alpha)
+                im = self.zstack_ax.imshow(s, cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax, alpha=alpha, aspect='equal')
         else:
             # Show first slice only
-            im = self.zstack_ax.imshow(slices[0], cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax)
+            im = self.zstack_ax.imshow(slices[0], cmap=self.zstack_colormap.get(), vmin=vmin, vmax=vmax, aspect='equal')
+        self.zstack_ax.set_aspect('equal')
         # Reset layout to use full figure space when no colorbar
         self.zstack_figure.tight_layout()
         self.zstack_canvas.draw()
@@ -685,7 +716,8 @@ class MuadDataViewer:
             except Exception:
                 pass
             self._zstack_colorbar = None
-        im = self.zstack_ax.imshow(total, cmap=self.zstack_colormap.get(), vmin=self.zstack_min.get(), vmax=self.zstack_max.get())
+        im = self.zstack_ax.imshow(total, cmap=self.zstack_colormap.get(), vmin=self.zstack_min.get(), vmax=self.zstack_max.get(), aspect='equal')
+        self.zstack_ax.set_aspect('equal')
         self._zstack_colorbar = self.zstack_figure.colorbar(im, ax=self.zstack_ax, fraction=0.046, pad=0.04, shrink=0.4, label="Sum")
         self._zstack_colorbar.set_label("Sum", fontfamily='Arial', fontsize=14)
         self._zstack_colorbar.ax.tick_params(labelsize=12)
@@ -713,8 +745,8 @@ class MuadDataViewer:
             messagebox.showerror("Error", f"Failed to save summed matrix:\n{e}")
 
     def build_single_tab(self):
-        control_frame = tk.Frame(self.single_tab, padx=10, pady=10)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y)
+        control_container, control_frame = self._make_scrollable_control_panel(self.single_tab)
+        control_container.pack(side=tk.LEFT, fill=tk.Y)
 
         display_frame = tk.Frame(self.single_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -1709,8 +1741,8 @@ class MuadDataViewer:
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
     def build_rgb_tab(self):
-        control_frame = tk.Frame(self.rgb_tab, padx=10, pady=10)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y)
+        control_container, control_frame = self._make_scrollable_control_panel(self.rgb_tab)
+        control_container.pack(side=tk.LEFT, fill=tk.Y)
 
         display_frame = tk.Frame(self.rgb_tab, bg="black")
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -1996,7 +2028,8 @@ class MuadDataViewer:
         vmin = self.single_min.get()
         vmax = self.single_max.get()
         self.single_ax.clear()
-        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
+        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='equal')
+        self.single_ax.set_aspect('equal')
         self.single_ax.axis('off')
         
         # Handle colorbar creation/removal
@@ -2205,7 +2238,8 @@ class MuadDataViewer:
         black_mask = np.all(rgb == 0, axis=2)
         rgb[black_mask] = [0, 0, 0]
         self.rgb_ax.clear()
-        self.rgb_ax.imshow(rgb)
+        self.rgb_ax.imshow(rgb, aspect='equal')
+        self.rgb_ax.set_aspect('equal')
         self.rgb_ax.axis('off')
         # Scale bar in dedicated non-data axes (right column); length from image transform so it stays accurate
         self.rgb_scale_bar_ax.clear()
@@ -2643,7 +2677,8 @@ class MuadDataViewer:
         else:
             vmin, vmax = 0, 1
         
-        im = ax.imshow(ratio, cmap='RdYlBu_r', vmin=vmin, vmax=vmax, aspect='auto')
+        im = ax.imshow(ratio, cmap='RdYlBu_r', vmin=vmin, vmax=vmax, aspect='equal')
+        ax.set_aspect('equal')
         ax.axis('off')
         
         # Add colorbar
@@ -2747,6 +2782,7 @@ class MuadDataViewer:
 def main():
     root = tk.Tk()
     root.geometry("1100x850")
+    root.minsize(760, 620)  # Laptop-friendly; left panel scrolls so all controls stay reachable
     app = MuadDataViewer(root)
     root.mainloop()
 
