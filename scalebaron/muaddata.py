@@ -18,6 +18,11 @@ except ImportError:
 import os
 import re
 import json
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
@@ -47,17 +52,17 @@ class MathExpressionDialog:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Title
-        title_label = tk.Label(main_frame, text="Map Math - Mathematical Expression", font=("Arial", 14, "bold"))
+        title_label = tk.Label(main_frame, text="Map Math - Mathematical Expression", font=("TkDefaultFont", 14, "bold"))
         title_label.pack(pady=(0, 20))
         
         # Instructions
         instructions = tk.Label(main_frame, text="Enter a mathematical expression using 'x' as the variable.\nExample: x * 0.001 (to convert CPS to ppm)", 
-                              font=("Arial", 11), justify=tk.LEFT)
+                              font=("TkDefaultFont", 12), justify=tk.LEFT)
         instructions.pack(pady=(0, 15))
         
         # Expression entry
-        tk.Label(main_frame, text="Expression:", font=("Arial", 12)).pack(anchor='w')
-        self.expression_entry = tk.Entry(main_frame, font=("Arial", 12), width=50)
+        tk.Label(main_frame, text="Expression:", font=("TkDefaultFont", 12)).pack(anchor='w')
+        self.expression_entry = ttk.Entry(main_frame, font=("TkDefaultFont", 12), width=50)
         self.expression_entry.pack(fill=tk.X, pady=(5, 15))
         self.expression_entry.insert(0, "x * 0.001")
         self.expression_entry.focus()
@@ -66,7 +71,7 @@ class MathExpressionDialog:
         common_frame = tk.Frame(main_frame)
         common_frame.pack(fill=tk.X, pady=(0, 20))
         
-        tk.Label(common_frame, text="Common expressions:", font=("Arial", 11, "bold")).pack(anchor='w')
+        tk.Label(common_frame, text="Common expressions:", font=("TkDefaultFont", 12, "bold")).pack(anchor='w')
         
         # Common expression buttons
         common_expressions = [
@@ -77,8 +82,7 @@ class MathExpressionDialog:
         ]
         
         for label, expr in common_expressions:
-            btn = tk.Button(common_frame, text=label, command=lambda e=expr: self.expression_entry.delete(0, tk.END) or self.expression_entry.insert(0, e),
-                           font=("Arial", 10))
+            btn = ttk.Button(common_frame, text=label, command=lambda e=expr: self.expression_entry.delete(0, tk.END) or self.expression_entry.insert(0, e))
             btn.pack(side=tk.LEFT, padx=(0, 5), pady=2)
         
         # Buttons frame
@@ -87,12 +91,11 @@ class MathExpressionDialog:
         
         # Apply button
         apply_btn = tk.Button(button_frame, text="Apply Expression", command=self.apply_expression, 
-                             font=("Arial", 12, "bold"), bg="#4CAF50", fg="black", padx=20)
+                             font=("TkDefaultFont", 12, "bold"), bg="#4CAF50", fg="black", padx=0, pady=0)
         apply_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
         # Cancel button
-        cancel_btn = tk.Button(button_frame, text="Cancel", command=self.cancel, 
-                              font=("Arial", 12), padx=20)
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.cancel)
         cancel_btn.pack(side=tk.RIGHT)
         
         # Bind Enter key to apply
@@ -348,6 +351,13 @@ class MuadDataViewer:
         # Tabs
         self.tabs = ttk.Notebook(self.root)
         self.tabs.pack(fill=tk.BOTH, expand=True)
+        # Scalebaron-style: Hint.TLabel for hint text; Status.TLabel for status text; group labels bold; green action button
+        _style = ttk.Style()
+        _style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
+        _style.configure("Status.TLabel", foreground="#555555", font=("TkDefaultFont", 10, "italic"))
+        _style.configure("TLabelframe.Label", font=("TkDefaultFont", 12, "bold"))
+        _style.configure("Green.TButton", background="#4CAF50", foreground="black")
+        _style.map("Green.TButton", background=[("active", "#45a049")])
 
         self.single_tab = tk.Frame(self.tabs)
         self.rgb_tab = tk.Frame(self.tabs)
@@ -458,77 +468,73 @@ class MuadDataViewer:
         display_frame = tk.Frame(self.zstack_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        tk.Button(control_frame, text="Add Slice", command=self.zstack_add_slice, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
-        tk.Button(control_frame, text="Clear Slices", command=self.zstack_clear_slices, font=("Arial", 13)).pack(fill=tk.X, pady=(0, 6))
-
-        self.zstack_listbox = tk.Listbox(control_frame, height=6)
-        self.zstack_listbox.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
+        slices_group = ttk.LabelFrame(control_frame, text="Slices", padding=10)
+        slices_group.pack(fill=tk.X, pady=(0, 5))
+        btn_row = tk.Frame(slices_group)
+        btn_row.pack(fill=tk.X)
+        ttk.Button(btn_row, text="Add", command=self.zstack_add_slice, width=8).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row, text="Clear", command=self.zstack_clear_slices, width=8).pack(side=tk.LEFT)
+        self.zstack_listbox = tk.Listbox(slices_group, height=5, font=("TkDefaultFont", 12))
+        self.zstack_listbox.pack(fill=tk.X, pady=(4, 4))
         self.zstack_listbox.bind('<<ListboxSelect>>', lambda e: self.update_zstack_offset_label())
+        self.zstack_offset_label = tk.Label(slices_group, text="Offset (dy, dx): --, --", font=("TkDefaultFont", 9), foreground="gray")
+        self.zstack_offset_label.pack(anchor='w')
 
-        # Offset controls
-        self.zstack_offset_label = tk.Label(control_frame, text="Offset (dy, dx): --, --", font=("Arial", 11, "italic"))
-        self.zstack_offset_label.pack(pady=(0, 6))
-
-        nudge_frame = tk.Frame(control_frame)
-        nudge_frame.pack(pady=(0, 8))
-        up_btn = tk.Button(nudge_frame, text="↑", width=4, command=lambda: self.zstack_nudge_selected( -1,  0))
-        lf_btn = tk.Button(nudge_frame, text="←", width=4, command=lambda: self.zstack_nudge_selected(  0, -1))
-        dn_btn = tk.Button(nudge_frame, text="↓", width=4, command=lambda: self.zstack_nudge_selected(  1,  0))
-        rt_btn = tk.Button(nudge_frame, text="→", width=4, command=lambda: self.zstack_nudge_selected(  0,  1))
+        nudge_group = ttk.LabelFrame(control_frame, text="Nudge", padding=10)
+        nudge_group.pack(fill=tk.X, pady=(0, 5))
+        nudge_frame = tk.Frame(nudge_group)
+        nudge_frame.pack(pady=(0, 4))
+        up_btn = ttk.Button(nudge_frame, text="↑", width=3, command=lambda: self.zstack_nudge_selected( -1,  0))
+        lf_btn = ttk.Button(nudge_frame, text="←", width=3, command=lambda: self.zstack_nudge_selected(  0, -1))
+        dn_btn = ttk.Button(nudge_frame, text="↓", width=3, command=lambda: self.zstack_nudge_selected(  1,  0))
+        rt_btn = ttk.Button(nudge_frame, text="→", width=3, command=lambda: self.zstack_nudge_selected(  0,  1))
         up_btn.grid(row=0, column=1)
         lf_btn.grid(row=1, column=0)
         dn_btn.grid(row=1, column=1)
         rt_btn.grid(row=1, column=2)
+        step_frame = tk.Frame(nudge_group)
+        step_frame.pack(fill=tk.X)
+        tk.Label(step_frame, text="Step (px):", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+        self.zstack_step_spin = tk.Spinbox(step_frame, from_=1, to=100, increment=1, width=5, textvariable=self.zstack_nudge_step, font=("TkDefaultFont", 12))
+        self.zstack_step_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(step_frame, text="1", width=2, command=lambda: self.zstack_nudge_step.set(1)).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(step_frame, text="5", width=2, command=lambda: self.zstack_nudge_step.set(5)).pack(side=tk.LEFT)
+        ttk.Button(step_frame, text="10", width=2, command=lambda: self.zstack_nudge_step.set(10)).pack(side=tk.LEFT)
+        reset_frame = tk.Frame(nudge_group)
+        reset_frame.pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(reset_frame, text="Reset sel.", command=self.zstack_reset_selected_offset, width=8).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(reset_frame, text="Reset all", command=self.zstack_reset_all_offsets, width=8).pack(side=tk.LEFT)
 
-        # Nudge step selector
-        step_frame = tk.Frame(control_frame)
-        step_frame.pack(pady=(0, 8), anchor='w')
-        tk.Label(step_frame, text="Nudge step (px):", font=("Arial", 11)).pack(side=tk.LEFT)
-        self.zstack_step_spin = tk.Spinbox(step_frame, from_=1, to=100, increment=1, width=5, textvariable=self.zstack_nudge_step)
-        self.zstack_step_spin.pack(side=tk.LEFT, padx=(6, 0))
-        # Quick buttons for common steps
-        tk.Button(step_frame, text="1", width=3, command=lambda: self.zstack_nudge_step.set(1)).pack(side=tk.LEFT, padx=(6, 0))
-        tk.Button(step_frame, text="5", width=3, command=lambda: self.zstack_nudge_step.set(5)).pack(side=tk.LEFT)
-        tk.Button(step_frame, text="10", width=3, command=lambda: self.zstack_nudge_step.set(10)).pack(side=tk.LEFT)
-
-        reset_frame = tk.Frame(control_frame)
-        reset_frame.pack(pady=(0, 10))
-        tk.Button(reset_frame, text="Reset Selected", command=self.zstack_reset_selected_offset).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(reset_frame, text="Reset All", command=self.zstack_reset_all_offsets).pack(side=tk.LEFT)
-
-        tk.Label(control_frame, text="Colormap", font=("Arial", 13)).pack()
-        zcmap_menu = ttk.Combobox(control_frame, textvariable=self.zstack_colormap, values=plt.colormaps(), font=("Arial", 13))
-        zcmap_menu.pack(fill=tk.X)
-
-        # Min Value label with button
-        min_label_frame = tk.Frame(control_frame)
-        min_label_frame.pack(fill=tk.X, pady=(6, 0))
-        tk.Label(min_label_frame, text="Min Value", font=("Arial", 13)).pack(side=tk.LEFT)
-        tk.Button(min_label_frame, text="Set to 0", command=self.set_zstack_min_to_zero, font=("Arial", 9), width=8).pack(side=tk.RIGHT, padx=(5, 0))
-        self.zmin_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_min, font=("Arial", 13))
-        self.zmin_slider.pack(fill=tk.X)
+        colormap_group = ttk.LabelFrame(control_frame, text="Colormap & range", padding=10)
+        colormap_group.pack(fill=tk.X, pady=(0, 5))
+        zcmap_menu = ttk.Combobox(colormap_group, textvariable=self.zstack_colormap, values=plt.colormaps(), font=("TkDefaultFont", 12), width=12)
+        zcmap_menu.pack(fill=tk.X, pady=(0, 4))
+        min_label_frame = tk.Frame(colormap_group)
+        min_label_frame.pack(fill=tk.X)
+        tk.Label(min_label_frame, text="Min", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+        ttk.Button(min_label_frame, text="Set 0", command=self.set_zstack_min_to_zero, width=6).pack(side=tk.RIGHT, padx=(5, 0))
+        self.zmin_slider = tk.Scale(colormap_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_min, font=("TkDefaultFont", 12))
+        self.zmin_slider.pack(fill=tk.X, pady=(0, 2))
         self.zmin_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
-
-        tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
-        self.zmax_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_max, font=("Arial", 13))
-        self.zmax_slider.pack(fill=tk.X)
+        tk.Label(colormap_group, text="Max", font=("TkDefaultFont", 12)).pack(anchor='w')
+        self.zmax_slider = tk.Scale(colormap_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_max, font=("TkDefaultFont", 12))
+        self.zmax_slider.pack(fill=tk.X, pady=(0, 2))
         self.zmax_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
-
-        # Entry for setting z-stack max slider cap
-        zcap_frame = tk.Frame(control_frame)
-        zcap_frame.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(zcap_frame, text="Slider Max:", font=("Arial", 11)).pack(side=tk.LEFT)
-        zcap_entry = tk.Entry(zcap_frame, textvariable=self.zmax_slider_limit, width=8, font=("Arial", 11))
-        zcap_entry.pack(side=tk.LEFT)
+        zcap_frame = tk.Frame(colormap_group)
+        zcap_frame.pack(fill=tk.X)
+        tk.Label(zcap_frame, text="Slider max:", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+        zcap_entry = ttk.Entry(zcap_frame, textvariable=self.zmax_slider_limit, width=8)
+        zcap_entry.pack(side=tk.LEFT, padx=(5, 0))
         zcap_entry.bind("<Return>", lambda e: self.set_zmax_slider_limit())
         zcap_entry.bind("<FocusOut>", lambda e: self.set_zmax_slider_limit())
+        tk.Checkbutton(colormap_group, text="Auto-pad", variable=self.zstack_auto_pad, font=("TkDefaultFont", 12)).pack(anchor='w')
+        tk.Checkbutton(colormap_group, text="Show overlay", variable=self.zstack_show_overlay, font=("TkDefaultFont", 12)).pack(anchor='w')
 
-        tk.Checkbutton(control_frame, text="Auto-pad smaller to largest", variable=self.zstack_auto_pad, font=("Arial", 13)).pack(anchor='w', pady=(6, 0))
-        tk.Checkbutton(control_frame, text="Show overlay preview", variable=self.zstack_show_overlay, font=("Arial", 13)).pack(anchor='w')
-
-        tk.Button(control_frame, text="Preview Alignment", command=self.zstack_render_preview, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
-        tk.Button(control_frame, text="Sum Slices", command=self.zstack_sum_slices, font=("Arial", 13), bg="#4CAF50", fg="black").pack(fill=tk.X)
-        tk.Button(control_frame, text="Save Summed Matrix", command=self.zstack_save_sum, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 0))
+        actions_group = ttk.LabelFrame(control_frame, text="Actions", padding=10)
+        actions_group.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(actions_group, text="Preview", command=self.zstack_render_preview, width=10).pack(pady=(0, 2))
+        tk.Button(actions_group, text="Sum Slices", command=self.zstack_sum_slices, font=("TkDefaultFont", 12), bg="#4CAF50", fg="black", width=10, padx=0, pady=0).pack(pady=(0, 2))
+        ttk.Button(actions_group, text="Save summed", command=self.zstack_save_sum, width=10).pack(pady=(0, 0))
 
         self.zstack_figure, self.zstack_ax = plt.subplots()
         self.zstack_ax.axis('off')
@@ -751,98 +757,86 @@ class MuadDataViewer:
         display_frame = tk.Frame(self.single_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        tk.Button(control_frame, text="Load Matrix File", command=self.load_single_file, font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
-
-        tk.Label(control_frame, text="Colormap", font=("Arial", 13)).pack()
-        cmap_menu = ttk.Combobox(control_frame, textvariable=self.single_colormap, values=plt.colormaps(), font=("Arial", 13))
-        cmap_menu.pack(fill=tk.X)
-
-        # Min Value label with button
-        min_label_frame = tk.Frame(control_frame)
+        # --- Load & display ---
+        load_group = ttk.LabelFrame(control_frame, text="Load & display", padding=10)
+        load_group.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(load_group, text="Load Matrix", command=self.load_single_file, width=12).pack(pady=(0, 4))
+        ttk.Label(load_group, text="Colormap").pack(anchor='w')
+        cmap_menu = ttk.Combobox(load_group, textvariable=self.single_colormap, values=plt.colormaps(), font=("TkDefaultFont", 12), width=12)
+        cmap_menu.pack(fill=tk.X, pady=(0, 4))
+        min_label_frame = ttk.Frame(load_group)
         min_label_frame.pack(fill=tk.X)
-        tk.Label(min_label_frame, text="Min Value", font=("Arial", 13)).pack(side=tk.LEFT)
-        tk.Button(min_label_frame, text="Set to 0", command=self.set_single_min_to_zero, font=("Arial", 9), width=8).pack(side=tk.RIGHT, padx=(5, 0))
-        self.min_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("Arial", 13))
-        self.min_slider.pack(fill=tk.X)
-        # Update plot when min slider is changed
+        ttk.Label(min_label_frame, text="Min Value").pack(side=tk.LEFT)
+        ttk.Button(min_label_frame, text="Set to 0", command=self.set_single_min_to_zero, width=8).pack(side=tk.RIGHT, padx=(5, 0))
+        _lf_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        self.min_slider = tk.Scale(load_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("TkDefaultFont", 12), bg=_lf_bg, highlightthickness=0)
+        self.min_slider.pack(fill=tk.X, pady=(0, 2))
         self.min_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
         self.min_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
-
-        # --- Max Value controls ---
-        tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
-
-        # Frame for max slider
-        max_slider_frame = tk.Frame(control_frame)
+        ttk.Label(load_group, text="Max Value").pack(anchor='w')
+        max_slider_frame = ttk.Frame(load_group)
         max_slider_frame.pack(fill=tk.X)
-
-        self.max_slider = tk.Scale(max_slider_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("Arial", 13))
+        self.max_slider = tk.Scale(max_slider_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("TkDefaultFont", 12), bg=_lf_bg, highlightthickness=0)
         self.max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        # Update plot when max slider is changed
         self.max_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
         self.max_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
-
-        # Entry for setting the max value of the slider (now below the slider)
-        slider_max_frame = tk.Frame(control_frame)
+        slider_max_frame = ttk.Frame(load_group)
         slider_max_frame.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(slider_max_frame, text="Slider Max:", font=("Arial", 13)).pack(side=tk.LEFT)
-        self.max_slider_limit_entry = tk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8, font=("Arial", 13))
+        ttk.Label(slider_max_frame, text="Slider Max:").pack(side=tk.LEFT)
+        self.max_slider_limit_entry = ttk.Entry(slider_max_frame, textvariable=self.max_slider_limit, width=8)
         self.max_slider_limit_entry.pack(side=tk.LEFT)
         self.max_slider_limit_entry.bind("<Return>", lambda e: self.set_max_slider_limit())
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
+        ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar).pack(anchor='w')
+        ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar).pack(anchor='w')
+        ttk.Button(load_group, text="View Map", command=self.view_single_map, width=10).pack(pady=(4, 2))
+        ttk.Button(load_group, text="Save PNG", command=self.save_single_image, width=10).pack(pady=(0, 2))
+        ttk.Button(load_group, text="Map Math", command=self.open_map_math, style="Green.TButton", width=10).pack(pady=(4, 0))
 
-        tk.Checkbutton(control_frame, text="Show Color Bar", variable=self.show_colorbar, font=("Arial", 13)).pack(anchor='w')
-        tk.Checkbutton(control_frame, text="Show Scale Bar", variable=self.show_scalebar, font=("Arial", 13)).pack(anchor='w')
-        
-        # Scale bar color picker
-        scalebar_color_frame = tk.Frame(control_frame)
-        scalebar_color_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Label(scalebar_color_frame, text="Scale Bar Color:", font=("Arial", 13)).pack(side=tk.LEFT)
-        self.scalebar_color_btn = tk.Button(scalebar_color_frame, text="Pick Color", bg=self.scalebar_color, fg='black', 
-                                          font=("Arial", 10, "bold"), command=self.pick_scalebar_color)
+        # --- Scale bar ---
+        scale_group = ttk.LabelFrame(control_frame, text="Scale bar", padding=10)
+        scale_group.pack(fill=tk.X, pady=(0, 5))
+        scalebar_color_frame = ttk.Frame(scale_group)
+        scalebar_color_frame.pack(fill=tk.X)
+        ttk.Label(scalebar_color_frame, text="Color:").pack(side=tk.LEFT)
+        self.scalebar_color_btn = tk.Button(scalebar_color_frame, text="Pick", bg=self.scalebar_color, fg='black', font=("TkDefaultFont", 12), width=6, padx=0, pady=0, highlightthickness=0, bd=0, relief='flat', command=self.pick_scalebar_color)
         self.scalebar_color_btn.pack(side=tk.LEFT, padx=(5, 0))
-
-        tk.Label(control_frame, text="Pixel size (µm)", font=("Arial", 13)).pack(pady=(10, 0))
-        self.pixel_size_entry = tk.Entry(control_frame, textvariable=self.pixel_size, font=("Arial", 13))
-        self.pixel_size_entry.pack(fill=tk.X)
+        row1 = ttk.Frame(scale_group)
+        row1.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(row1, text="Pixel size (µm):").pack(side=tk.LEFT)
+        self.pixel_size_entry = ttk.Entry(row1, textvariable=self.pixel_size, width=8)
+        self.pixel_size_entry.pack(side=tk.LEFT, padx=(5, 0))
         self.pixel_size_entry.bind("<Return>", lambda e: self.view_single_map())
         self.pixel_size_entry.bind("<FocusOut>", lambda e: self.view_single_map())
-
-        tk.Label(control_frame, text="Scale bar length (µm)", font=("Arial", 13)).pack(pady=(10, 0))
-        self.scale_length_entry = tk.Entry(control_frame, textvariable=self.scale_length, font=("Arial", 13))
-        self.scale_length_entry.pack(fill=tk.X)
+        row2 = ttk.Frame(scale_group)
+        row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(row2, text="Length (µm):").pack(side=tk.LEFT)
+        self.scale_length_entry = ttk.Entry(row2, textvariable=self.scale_length, width=8)
+        self.scale_length_entry.pack(side=tk.LEFT, padx=(5, 0))
         self.scale_length_entry.bind("<Return>", lambda e: self.view_single_map())
         self.scale_length_entry.bind("<FocusOut>", lambda e: self.view_single_map())
 
-        tk.Button(control_frame, text="View Map", command=self.view_single_map, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
-        tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
-
-        # --- Math Expression Button ---
-        tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13, "bold"), bg="#4CAF50", fg="black").pack(fill=tk.X, pady=(10, 2))
-
-        # --- Zoom/Crop Buttons ---
-        tk.Label(control_frame, text="Zoom & Crop", font=("Arial", 13, "bold")).pack(pady=(10, 5))
-        self.zoom_button = tk.Button(control_frame, text="Select Region to Zoom", command=self.toggle_zoom_mode, font=("Arial", 13), bg="#2196F3", fg="black")
+        # --- Zoom & crop ---
+        zoom_group = ttk.LabelFrame(control_frame, text="Zoom & crop", padding=10)
+        zoom_group.pack(fill=tk.X, pady=(0, 5))
+        self.zoom_button = tk.Button(zoom_group, text="Select region", command=self.toggle_zoom_mode, font=("TkDefaultFont", 12), bg="#2196F3", fg="black", width=12, padx=0, pady=0, highlightthickness=0, bd=0)
         self.zoom_button.pack(fill=tk.X, pady=(0, 2))
-        
-        self.save_crop_button = tk.Button(control_frame, text="Save Cropped Matrix", command=self.save_cropped_matrix, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
+        self.save_crop_button = ttk.Button(zoom_group, text="Save cropped", command=self.save_cropped_matrix, state=tk.DISABLED, width=12)
         self.save_crop_button.pack(fill=tk.X, pady=(0, 2))
-        
-        self.reset_zoom_button = tk.Button(control_frame, text="Reset to Full View", command=self.reset_zoom, font=("Arial", 13), state=tk.DISABLED, fg="black", disabledforeground="gray")
-        self.reset_zoom_button.pack(fill=tk.X, pady=(0, 2))
-        
-        # --- Polygon Selection for Statistics ---
-        tk.Label(control_frame, text="Region Statistics", font=("Arial", 13, "bold")).pack(pady=(10, 5))
-        self.polygon_button = tk.Button(control_frame, text="Select Polygon Region", command=self.toggle_polygon_mode, font=("Arial", 13), bg="#9C27B0", fg="black")
-        self.polygon_button.pack(fill=tk.X, pady=(0, 2))
-        
-        self.view_stats_button = tk.Button(control_frame, text="View Statistics Table", command=self.show_polygon_results_window, font=("Arial", 13), fg="black")
-        self.view_stats_button.pack(fill=tk.X, pady=(0, 2))
-        
-        self.clear_polygons_button = tk.Button(control_frame, text="Clear All Polygons", command=self.clear_all_polygons, font=("Arial", 13), fg="black")
-        self.clear_polygons_button.pack(fill=tk.X, pady=(0, 2))
+        self.reset_zoom_button = ttk.Button(zoom_group, text="Reset view", command=self.reset_zoom, state=tk.DISABLED, width=12)
+        self.reset_zoom_button.pack(fill=tk.X, pady=(0, 0))
 
-        # Add a label at the bottom left to display loaded file info
-        self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 13, "italic"), anchor="w", justify="left", wraplength=200)
+        # --- Region statistics ---
+        region_group = ttk.LabelFrame(control_frame, text="Region statistics", padding=10)
+        region_group.pack(fill=tk.X, pady=(0, 5))
+        self.polygon_button = tk.Button(region_group, text="Select polygon", command=self.toggle_polygon_mode, font=("TkDefaultFont", 12), bg="#9C27B0", fg="black", width=12, padx=0, pady=0, highlightthickness=0, bd=0)
+        self.polygon_button.pack(fill=tk.X, pady=(0, 2))
+        self.view_stats_button = ttk.Button(region_group, text="View stats table", command=self.show_polygon_results_window, width=12)
+        self.view_stats_button.pack(fill=tk.X, pady=(0, 2))
+        self.clear_polygons_button = ttk.Button(region_group, text="Clear polygons", command=self.clear_all_polygons, width=12)
+        self.clear_polygons_button.pack(fill=tk.X, pady=(0, 0))
+
+        self.single_file_label = ttk.Label(control_frame, text="Loaded file: None", style="Status.TLabel", wraplength=200)
         self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         self.single_figure, self.single_ax = plt.subplots()
@@ -1466,8 +1460,7 @@ class MuadDataViewer:
             # Export button
             export_frame = tk.Frame(self.polygon_results_window)
             export_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-            tk.Button(export_frame, text="Export to CSV", command=self.export_polygon_results,
-                     font=("Arial", 12), fg="black").pack(side=tk.RIGHT)
+            ttk.Button(export_frame, text="Export to CSV", command=self.export_polygon_results).pack(side=tk.RIGHT)
         
         # Update the table
         self.update_polygon_results_table()
@@ -1740,44 +1733,62 @@ class MuadDataViewer:
 
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
+    def _load_rgb_button_icons(self):
+        """Load preview and save icons from Scalebaron icons folder (saves GUI space)."""
+        self.rgb_button_icons = {}
+        if not PIL_AVAILABLE:
+            return
+        icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
+        for key, filename in [('preview', 'preview.png'), ('save', 'save.png')]:
+            path = os.path.join(icons_dir, filename)
+            if not os.path.exists(path):
+                continue
+            try:
+                img = Image.open(path)
+                if img.size[0] > 28 or img.size[1] > 28:
+                    img = img.resize((28, 28), Image.LANCZOS)
+                elif img.size[0] < 28 or img.size[1] < 28:
+                    img = img.resize((28, 28), Image.LANCZOS)
+                self.rgb_button_icons[key] = ImageTk.PhotoImage(img)
+            except Exception:
+                pass
+
     def build_rgb_tab(self):
+        self._load_rgb_button_icons()
         control_container, control_frame = self._make_scrollable_control_panel(self.rgb_tab)
         control_container.pack(side=tk.LEFT, fill=tk.Y)
 
         display_frame = tk.Frame(self.rgb_tab, bg="black")
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        self.file_root_label = tk.Label(control_frame, text="Dataset: None", font=("Arial", 13, "italic"))
-        self.file_root_label.pack(pady=(0, 10))
+        dataset_group = ttk.LabelFrame(control_frame, text="Dataset", padding=10)
+        dataset_group.pack(fill=tk.X, pady=(0, 5))
+        self.file_root_label = ttk.Label(dataset_group, text="Nothing loaded yet", style="Status.TLabel")
+        self.file_root_label.pack(anchor='w')
 
         color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
-        default_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}
-
+        channels_group = ttk.LabelFrame(control_frame, text="Channels", padding=10)
+        channels_group.pack(fill=tk.X, pady=(0, 5))
         for ch in ['R', 'G', 'B']:
             color = color_names[ch]
-            tk.Button(control_frame, text=f"Load {color} Channel", command=lambda c=ch: self.load_rgb_file(c), font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
-            # Frame for element label and max value
-            elem_frame = tk.Frame(control_frame)
-            elem_frame.pack(fill=tk.X)
-            elem_label = tk.Label(elem_frame, text=f"Loaded Element: None", font=("Arial", 13, "italic"))
-            elem_label.pack(side=tk.LEFT)
-            max_value_label = tk.Label(elem_frame, text="", font=("Arial", 11), foreground="gray")
-            max_value_label.pack(side=tk.RIGHT)
-            # Color picker and gradient
-            color_picker_frame = tk.Frame(control_frame)
-            color_picker_frame.pack(fill=tk.X, padx=5, pady=2)
-            color_btn = tk.Button(color_picker_frame, text="Pick Color", bg=self.rgb_colors[ch], fg='black', font=("Arial", 13, "bold"),
-                                  command=lambda c=ch: self.pick_channel_color(c))
+            ttk.Button(channels_group, text=f"Load {color}", command=lambda c=ch: self.load_rgb_file(c), width=10).pack(anchor='w', pady=(2, 0))
+            elem_label = ttk.Label(channels_group, text=f"Loaded Element: None", style="Status.TLabel")
+            elem_label.pack(anchor='w')
+            max_value_label = tk.Label(channels_group, text="", font=("TkDefaultFont", 12), foreground="gray")
+            max_value_label.pack(anchor='w', pady=(0, 1))
+            color_picker_frame = tk.Frame(channels_group)
+            color_picker_frame.pack(fill=tk.X, pady=(0, 2))
+            color_btn = tk.Button(color_picker_frame, text="Color", bg=self.rgb_colors[ch], fg='black', font=("TkDefaultFont", 12),
+                                  command=lambda c=ch: self.pick_channel_color(c), width=6, padx=0, pady=0)
             color_btn.pack(side=tk.LEFT, padx=(0, 5))
-            gradient_canvas = tk.Canvas(color_picker_frame, height=10, width=256)
+            gradient_canvas = tk.Canvas(color_picker_frame, height=8, width=180)
             gradient_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.draw_gradient(gradient_canvas, self.rgb_colors[ch])
             self.rgb_color_buttons[ch] = color_btn
             self.rgb_gradient_canvases[ch] = gradient_canvas
-
-            max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} Max", font=("Arial", 13))
+            max_slider = tk.Scale(channels_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} max", font=("TkDefaultFont", 12))
             max_slider.set(1)
-            max_slider.pack(fill=tk.X)
+            max_slider.pack(fill=tk.X, pady=(0, 2))
             def make_slider_handler(c):
                 def handler(event):
                     self.update_rgb_max_value_display(c)
@@ -1787,65 +1798,74 @@ class MuadDataViewer:
             max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch))
             self.rgb_sliders[ch] = {'max': max_slider}
             self.rgb_labels[ch] = {'elem': elem_label, 'max_value': max_value_label}
-
-            # Entry to cap the max slider value
-            cap_frame = tk.Frame(control_frame)
+            cap_frame = tk.Frame(channels_group)
             cap_frame.pack(fill=tk.X, pady=(0, 4))
-            tk.Label(cap_frame, text=f"{color} Slider Max:", font=("Arial", 11)).pack(side=tk.LEFT)
+            tk.Label(cap_frame, text="Slider max:", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
             self.rgb_max_limits[ch] = tk.DoubleVar(value=1.0)
-            cap_entry = tk.Entry(cap_frame, textvariable=self.rgb_max_limits[ch], width=8, font=("Arial", 11))
-            cap_entry.pack(side=tk.LEFT)
+            cap_entry = ttk.Entry(cap_frame, textvariable=self.rgb_max_limits[ch], width=6)
+            cap_entry.pack(side=tk.LEFT, padx=(5, 0))
             cap_entry.bind("<Return>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
             cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
+        ttk.Checkbutton(channels_group, text="Normalize to 99th %", variable=self.normalize_var).pack(anchor='w', pady=(2, 0))
 
-        tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
-
-        # Spatial scale bar for RGB overlay
-        tk.Label(control_frame, text="Spatial scale bar", font=("Arial", 13, "bold")).pack(anchor='w', pady=(10, 2))
-        scalebar_row1 = tk.Frame(control_frame)
+        scale_group = ttk.LabelFrame(control_frame, text="Spatial scale bar", padding=10)
+        scale_group.pack(fill=tk.X, pady=(0, 5))
+        scalebar_row1 = ttk.Frame(scale_group)
         scalebar_row1.pack(fill=tk.X)
-        tk.Label(scalebar_row1, text="Pixel size (µm/px):", font=("Arial", 11)).pack(side=tk.LEFT, padx=(0, 5))
-        tk.Entry(scalebar_row1, textvariable=self.rgb_pixel_size, width=8, font=("Arial", 11)).pack(side=tk.LEFT)
-        scalebar_row2 = tk.Frame(control_frame)
-        scalebar_row2.pack(fill=tk.X, pady=(2, 2))
-        tk.Label(scalebar_row2, text="Scale bar length (µm):", font=("Arial", 11)).pack(side=tk.LEFT, padx=(0, 5))
-        tk.Entry(scalebar_row2, textvariable=self.rgb_scale_length, width=8, font=("Arial", 11)).pack(side=tk.LEFT)
-        tk.Checkbutton(control_frame, text="Show scale bar", variable=self.rgb_show_scalebar, font=("Arial", 11)).pack(anchor='w', pady=(0, 5))
+        ttk.Label(scalebar_row1, text="Pixel size (µm/px):").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(scalebar_row1, textvariable=self.rgb_pixel_size, width=8).pack(side=tk.LEFT)
+        scalebar_row2 = ttk.Frame(scale_group)
+        scalebar_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(scalebar_row2, text="Length (µm):").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(scalebar_row2, textvariable=self.rgb_scale_length, width=8).pack(side=tk.LEFT)
+        ttk.Checkbutton(scale_group, text="Show scale bar", variable=self.rgb_show_scalebar).pack(anchor='w', pady=(2, 0))
 
-        tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
-        tk.Button(control_frame, text="Save RGB Image", command=self.save_rgb_image, font=("Arial", 13)).pack(fill=tk.X)
-        tk.Button(control_frame, text="Clear Data", command=self.clear_rgb_data, font=("Arial", 13), bg="#f44336", fg="black").pack(fill=tk.X, pady=(6, 0))
+        overlay_group = ttk.LabelFrame(control_frame, text="Overlay", padding=10)
+        overlay_group.pack(fill=tk.X, pady=(0, 5))
+        rgb_action_frame = ttk.Frame(overlay_group)
+        rgb_action_frame.pack(fill=tk.X)
+        preview_icon = getattr(self, 'rgb_button_icons', {}).get('preview')
+        save_icon = getattr(self, 'rgb_button_icons', {}).get('save')
+        # View overlay: hint label + centered icon button (Scalebaron-style)
+        view_cell = ttk.Frame(rgb_action_frame)
+        view_cell.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(view_cell, text="View overlay", style="Hint.TLabel").pack(pady=(0, 2))
+        if preview_icon:
+            view_btn = tk.Button(view_cell, image=preview_icon, command=self.view_rgb_overlay, padx=2, pady=8, bg='#f0f0f0', relief='raised')
+            view_btn.image = preview_icon
+            view_btn.pack(anchor=tk.CENTER)
+        else:
+            view_btn = ttk.Button(view_cell, text="View", command=self.view_rgb_overlay, width=6)
+            view_btn.pack(anchor=tk.CENTER)
+        # Save RGB: hint label + centered icon button
+        save_cell = ttk.Frame(rgb_action_frame)
+        save_cell.pack(side=tk.LEFT)
+        ttk.Label(save_cell, text="Save RGB", style="Hint.TLabel").pack(pady=(0, 2))
+        if save_icon:
+            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_rgb_image, padx=2, pady=8, bg='#f0f0f0', relief='raised')
+            save_btn.image = save_icon
+            save_btn.pack(anchor=tk.CENTER)
+        else:
+            save_btn = ttk.Button(save_cell, text="Save", command=self.save_rgb_image, width=6)
+            save_btn.pack(anchor=tk.CENTER)
+        tk.Button(overlay_group, text="Clear Data", command=self.clear_rgb_data, font=("TkDefaultFont", 12), bg="#f44336", fg="black", width=10, padx=2, pady=8).pack(pady=(4, 0))
 
-        # --- Correlation & Ratio Analysis Section ---
-        tk.Label(control_frame, text="Correlation & Ratio Analysis", font=("Arial", 13, "bold")).pack(pady=(15, 5))
-        
-        # Element 1 selection
-        tk.Label(control_frame, text="Element 1 (numerator):", font=("Arial", 11)).pack(anchor='w')
-        elem1_menu = ttk.Combobox(control_frame, textvariable=self.correlation_elem1, values=['R', 'G', 'B'], 
-                                  state='readonly', font=("Arial", 11), width=10)
-        elem1_menu.pack(fill=tk.X, pady=(0, 5))
-        
-        # Element 2 selection
-        tk.Label(control_frame, text="Element 2 (denominator):", font=("Arial", 11)).pack(anchor='w')
-        elem2_menu = ttk.Combobox(control_frame, textvariable=self.correlation_elem2, values=['R', 'G', 'B'], 
-                                  state='readonly', font=("Arial", 11), width=10)
-        elem2_menu.pack(fill=tk.X, pady=(0, 5))
-        
-        # Calculate button
-        tk.Button(control_frame, text="Calculate Ratio Map", command=self.calculate_ratio_map, 
-                  font=("Arial", 12, "bold"), bg="#9C27B0", fg="black").pack(fill=tk.X, pady=(5, 2))
-        
-        # Correlation coefficient display
-        self.correlation_label = tk.Label(control_frame, text="Pearson r: --", font=("Arial", 11, "italic"))
-        self.correlation_label.pack(pady=(2, 5))
-        
-        # Save ratio matrix button
-        tk.Button(control_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix, 
-                  font=("Arial", 12), fg="black").pack(fill=tk.X, pady=(0, 2))
+        ratio_group = ttk.LabelFrame(control_frame, text="Correlation & ratio", padding=10)
+        ratio_group.pack(fill=tk.X, pady=(0, 5))
+        tk.Label(ratio_group, text="Element 1 (num.):", font=("TkDefaultFont", 12)).pack(anchor='w')
+        elem1_menu = ttk.Combobox(ratio_group, textvariable=self.correlation_elem1, values=['R', 'G', 'B'], state='readonly', font=("TkDefaultFont", 12), width=8)
+        elem1_menu.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(ratio_group, text="Element 2 (denom.):", font=("TkDefaultFont", 12)).pack(anchor='w')
+        elem2_menu = ttk.Combobox(ratio_group, textvariable=self.correlation_elem2, values=['R', 'G', 'B'], state='readonly', font=("TkDefaultFont", 12), width=8)
+        elem2_menu.pack(fill=tk.X, pady=(0, 2))
+        tk.Button(ratio_group, text="Ratio map", command=self.calculate_ratio_map, font=("TkDefaultFont", 12, "bold"), bg="#9C27B0", fg="black", width=10, padx=0, pady=0).pack(pady=(2, 2))
+        self.correlation_label = tk.Label(ratio_group, text="Pearson r: --", font=("TkDefaultFont", 9), foreground="gray")
+        self.correlation_label.pack(anchor='w')
+        ttk.Button(ratio_group, text="Save ratio matrix", command=self.save_ratio_matrix, width=12).pack(pady=(2, 0))
 
         # Add responsive colorbar canvas for RGB overlay
         colorbar_frame = tk.Frame(display_frame, bg="black")
-        colorbar_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(5, 0))
+        colorbar_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 0))
         self.rgb_colorbar_figure, self.rgb_colorbar_ax = plt.subplots(figsize=(3, 1.2), dpi=100, facecolor='black')
         self.rgb_colorbar_ax.set_facecolor('black')
         self.rgb_colorbar_ax.axis('off')
@@ -1854,14 +1874,17 @@ class MuadDataViewer:
         self.rgb_colorbar_canvas.get_tk_widget().pack(fill=tk.X, expand=True)
 
         self.rgb_figure = plt.figure(facecolor='black')
-        gs_rgb = self.rgb_figure.add_gridspec(1, 2, width_ratios=[1, 0.15], wspace=0.02)
+        self.rgb_figure.patch.set_facecolor('black')
+        # Scale bar underneath image (row 1) so bar and label can sit close without crowding
+        gs_rgb = self.rgb_figure.add_gridspec(2, 1, height_ratios=[1, 0.08], hspace=0.02)
         self.rgb_ax = self.rgb_figure.add_subplot(gs_rgb[0, 0])
-        self.rgb_scale_bar_ax = self.rgb_figure.add_subplot(gs_rgb[0, 1])
+        self.rgb_scale_bar_ax = self.rgb_figure.add_subplot(gs_rgb[1, 0])
         self.rgb_ax.set_facecolor('black')
         self.rgb_ax.axis('off')
         self.rgb_scale_bar_ax.set_facecolor('black')
         self.rgb_scale_bar_ax.axis('off')
         self.rgb_canvas = FigureCanvasTkAgg(self.rgb_figure, master=display_frame)
+        self.rgb_canvas.get_tk_widget().configure(bg='black', highlightthickness=0)
         self.rgb_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def pick_channel_color(self, channel):
@@ -1900,7 +1923,7 @@ class MuadDataViewer:
             if ch in self.rgb_max_limits:
                 self.rgb_max_limits[ch].set(1.0)
         # Reset dataset label
-        self.file_root_label.config(text="Dataset: None")
+        self.file_root_label.config(text="Nothing loaded yet")
         # Clear the overlay displays
         if hasattr(self, 'rgb_ax') and self.rgb_ax is not None:
             self.rgb_ax.clear()
@@ -2241,7 +2264,7 @@ class MuadDataViewer:
         self.rgb_ax.imshow(rgb, aspect='equal')
         self.rgb_ax.set_aspect('equal')
         self.rgb_ax.axis('off')
-        # Scale bar in dedicated non-data axes (right column); length from image transform so it stays accurate
+        # Scale bar in strip underneath image; length from image transform so it stays accurate
         self.rgb_scale_bar_ax.clear()
         self.rgb_scale_bar_ax.set_facecolor('black')
         self.rgb_scale_bar_ax.axis('off')
@@ -2260,14 +2283,18 @@ class MuadDataViewer:
             bar_length_fig = p1_fig[0] - p0_fig[0]
             pos = self.rgb_scale_bar_ax.get_position()
             x_center_fig = pos.x0 + pos.width * 0.5
-            y_fig = pos.y0 + pos.height * 0.5
+            # Bar and label in strip: bar at 68% up, label at 22% (fixed gap, not too close or far)
+            y_bar_axes = 0.68
+            y_label_axes = 0.22
+            y_fig = pos.y0 + pos.height * y_bar_axes
             x_start_fig = x_center_fig - bar_length_fig * 0.5
             x_end_fig = x_center_fig + bar_length_fig * 0.5
             self.rgb_scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=self.rgb_figure.transFigure,
                                         colors='white', linewidth=3)
-            self.rgb_scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=self.rgb_scale_bar_ax.transAxes,
-                                      color='white', fontsize=9, ha='center', va='top')
+            self.rgb_scale_bar_ax.text(0.5, y_label_axes, f"{scale_bar_um} µm", transform=self.rgb_scale_bar_ax.transAxes,
+                                      color='white', fontsize=9, ha='center', va='top', fontfamily='Arial')
         self.rgb_figure.tight_layout()
+        self.rgb_figure.subplots_adjust(bottom=0.02)
         self.rgb_canvas.draw()
         # Draw responsive colorbar
         self.draw_rgb_colorbar()
@@ -2421,12 +2448,12 @@ class MuadDataViewer:
                 colorbar_height = 1.5
                 total_height = base_height + colorbar_height
                 
-                # Create new figure: image + scale bar column, then colorbar row
-                fig = plt.figure(figsize=(fig_width + fig_width * 0.15, total_height), dpi=300, facecolor='black')
-                gs = GridSpec(2, 2, figure=fig, height_ratios=[base_height, colorbar_height],
-                              width_ratios=[1, 0.15], hspace=0.05, wspace=0.02)
+                # Layout: image, then scale bar underneath, then channel colorbar
+                scale_bar_height = 0.6
+                fig = plt.figure(figsize=(fig_width, base_height + scale_bar_height + colorbar_height), dpi=300, facecolor='black')
+                gs = GridSpec(3, 1, figure=fig, height_ratios=[base_height, scale_bar_height, colorbar_height], hspace=0.03)
                 ax_main = fig.add_subplot(gs[0, 0])
-                scale_bar_ax = fig.add_subplot(gs[0, 1])
+                scale_bar_ax = fig.add_subplot(gs[1, 0])
                 ax_main.imshow(img_array, aspect='equal', interpolation='nearest')
                 ax_main.axis('off')
                 ax_main.set_facecolor('black')
@@ -2442,15 +2469,16 @@ class MuadDataViewer:
                     bar_length_fig = p1_fig[0] - p0_fig[0]
                     pos = scale_bar_ax.get_position()
                     x_center_fig = pos.x0 + pos.width * 0.5
-                    y_fig = pos.y0 + pos.height * 0.5
+                    y_bar_axes = 0.68
+                    y_label_axes = 0.22
+                    y_fig = pos.y0 + pos.height * y_bar_axes
                     x_start_fig = x_center_fig - bar_length_fig * 0.5
                     x_end_fig = x_center_fig + bar_length_fig * 0.5
                     scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure,
                                        colors='white', linewidth=3)
-                    scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
-                                     color='white', fontsize=9, ha='center', va='top')
-                # Colorbar at bottom (spans both columns or just first)
-                ax_cbar = fig.add_subplot(gs[1, 0])
+                    scale_bar_ax.text(0.5, y_label_axes, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
+                                     color='white', fontsize=9, ha='center', va='top', fontfamily='Arial')
+                ax_cbar = fig.add_subplot(gs[2, 0])
                 
                 # Determine which channels are loaded and draw colorbar
                 loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
@@ -2547,16 +2575,16 @@ class MuadDataViewer:
                 fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black')
                 plt.close(fig)
             else:
-                # Save without colorbar - image + scale bar in dedicated column
+                # Save without colorbar - image then scale bar underneath
                 img_array = self.rgb_ax.get_images()[0].get_array()
                 img_height, img_width = img_array.shape[:2]
                 aspect_ratio = img_width / img_height
                 base_height = 10
                 fig_width = base_height * aspect_ratio
-                fig = plt.figure(figsize=(fig_width * 1.15, base_height), dpi=300, facecolor='black')
-                gs = GridSpec(1, 2, figure=fig, width_ratios=[1, 0.15], wspace=0.02)
+                fig = plt.figure(figsize=(fig_width, base_height * 1.08), dpi=300, facecolor='black')
+                gs = GridSpec(2, 1, figure=fig, height_ratios=[1, 0.08], hspace=0.02)
                 ax = fig.add_subplot(gs[0, 0])
-                scale_bar_ax = fig.add_subplot(gs[0, 1])
+                scale_bar_ax = fig.add_subplot(gs[1, 0])
                 ax.imshow(img_array, aspect='equal', interpolation='nearest')
                 ax.axis('off')
                 ax.set_facecolor('black')
@@ -2572,13 +2600,15 @@ class MuadDataViewer:
                     bar_length_fig = p1_fig[0] - p0_fig[0]
                     pos = scale_bar_ax.get_position()
                     x_center_fig = pos.x0 + pos.width * 0.5
-                    y_fig = pos.y0 + pos.height * 0.5
+                    y_bar_axes = 0.68
+                    y_label_axes = 0.22
+                    y_fig = pos.y0 + pos.height * y_bar_axes
                     x_start_fig = x_center_fig - bar_length_fig * 0.5
                     x_end_fig = x_center_fig + bar_length_fig * 0.5
                     scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure,
                                         colors='white', linewidth=3)
-                    scale_bar_ax.text(0.5, 0.25, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
-                                     color='white', fontsize=9, ha='center', va='top')
+                    scale_bar_ax.text(0.5, y_label_axes, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
+                                     color='white', fontsize=9, ha='center', va='top', fontfamily='Arial')
                 fig.patch.set_facecolor('black')
                 fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black', pad_inches=0)
                 plt.close(fig)
@@ -2707,13 +2737,9 @@ class MuadDataViewer:
         button_frame = tk.Frame(ratio_window)
         button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
         
-        tk.Button(button_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix, 
-                  font=("Arial", 12), fg="black").pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="Save as PNG", 
-                  command=lambda: self.save_ratio_image(fig), 
-                  font=("Arial", 12), fg="black").pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="Close", command=ratio_window.destroy, 
-                  font=("Arial", 12), fg="black").pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save as PNG", command=lambda: self.save_ratio_image(fig)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Close", command=ratio_window.destroy).pack(side=tk.RIGHT, padx=5)
         
         # Store references
         self.ratio_figure = fig
