@@ -116,6 +116,7 @@ class CompositeApp:
         self.progress_elements = []  # List of element names
         self.progress_table = None  # Treeview widget
         self.progress_data = {}  # {(sample, element): status} where status is 'complete', 'partial', or None
+        self.sample_include = {}  # sample name -> bool; which samples to include in scaling/preview (default True)
         
         # Status tracking for simplified log
         self.status = "Idle"  # Idle, Busy, Finishing
@@ -323,6 +324,9 @@ class CompositeApp:
         self.progress_table.tag_configure("partial", background="#FFE4B5")
         self.progress_table.tag_configure("missing", background="#FFB6C1")
         self.progress_table.tag_configure("missing_file", background="#D3D3D3", foreground="#666666")
+        
+        # Click on Include column toggles selection for that sample
+        self.progress_table.bind("<ButtonRelease-1>", self._on_progress_table_click)
         
         # Add refresh button for progress table
         refresh_frame = ttk.Frame(progress_section)
@@ -656,6 +660,39 @@ class CompositeApp:
         else:
             self.log_print("Status: Idle - No progress data found.")
     
+    def _on_progress_table_click(self, event):
+        """Toggle sample include when user clicks the Include (checkbox) column."""
+        if not hasattr(self, 'progress_table') or self.progress_table is None:
+            return
+        region = self.progress_table.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col = self.progress_table.identify_column(event.x)
+        # Include is first data column (#1)
+        if col != "#1":
+            return
+        item = self.progress_table.identify_row(event.y)
+        if not item:
+            return
+        try:
+            values = self.progress_table.item(item, "values")
+            if len(values) < 2:
+                return
+            sample = values[1]
+            if sample not in self.progress_samples:
+                return
+            self.sample_include[sample] = not self.sample_include.get(sample, True)
+            self.update_progress_table()
+        except Exception:
+            pass
+    
+    def get_selected_samples(self):
+        """Return list of sample names that are selected for scaling/preview. If none selected, returns all (backward compat)."""
+        selected = [s for s in self.progress_samples if self.sample_include.get(s, True)]
+        if not selected:
+            return list(self.progress_samples)
+        return selected
+    
     def scan_progress_table(self):
         """Scan input folder and build initial progress table."""
         if not self.input_dir or not os.path.isdir(self.input_dir):
@@ -683,6 +720,10 @@ class CompositeApp:
         
         self.progress_samples = sorted(samples)
         self.progress_elements = sorted(elements, key=sort_key)
+        # Preserve selection for existing samples; default new samples to included
+        for sample in self.progress_samples:
+            if sample not in self.sample_include:
+                self.sample_include[sample] = True
         
         # Build complete grid: mark files that exist vs missing
         self.progress_data = {}
@@ -734,7 +775,9 @@ class CompositeApp:
             
             self.progress_samples = sorted(samples)
             self.progress_elements = sorted(elements, key=sort_key)
-            
+            for sample in self.progress_samples:
+                if sample not in self.sample_include:
+                    self.sample_include[sample] = True
             # Build progress data - all will be checked by _check_existing_progress
             self.progress_data = {}
             for sample in self.progress_samples:
@@ -887,13 +930,15 @@ class CompositeApp:
                     pass
             return
         
-        # Set up columns
-        all_cols = ["Sample"] + self.progress_elements
+        # Set up columns: Include (checkbox) + Sample + elements
+        all_cols = ["Include", "Sample"] + self.progress_elements
         self.progress_table.configure(columns=all_cols)
         
         for col in all_cols:
-            self.progress_table.heading(col, text=col)
-            if col == "Sample":
+            self.progress_table.heading(col, text="✓" if col == "Include" else col)
+            if col == "Include":
+                self.progress_table.column(col, width=36, anchor="center", minwidth=32)
+            elif col == "Sample":
                 # Auto-size sample column based on longest sample name
                 max_sample_len = max([len(s) for s in self.progress_samples] + [6])  # "Sample" header
                 self.progress_table.column(col, width=min(max_sample_len * 8 + 20, 200), anchor="w", minwidth=80)
@@ -903,7 +948,8 @@ class CompositeApp:
         
         # Add rows
         for sample in self.progress_samples:
-            values = [sample]
+            incl = self.sample_include.get(sample, True)
+            values = ["☑" if incl else "☐", sample]
             cell_statuses = []
             for element in self.progress_elements:
                 status = self.progress_data.get((sample, element))
@@ -1295,9 +1341,12 @@ class CompositeApp:
         files = sorted(glob.glob(pattern_ppm) + glob.glob(pattern_CPS) + glob.glob(pattern_raw))
         # Remove duplicates (in case a file matches multiple patterns)
         files = list(dict.fromkeys(files))
+        # Restrict to selected samples (Progress table Include column)
+        selected = set(self.get_selected_samples())
+        files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected]
 
         if not files:
-            messagebox.showerror("Error", f"No files found for element {element}")
+            messagebox.showerror("Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
             return
 
         # Check for existing statistics.csv to enable incremental processing

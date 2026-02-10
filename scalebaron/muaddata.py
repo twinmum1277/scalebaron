@@ -355,9 +355,14 @@ class MuadDataViewer:
         _style = ttk.Style()
         _style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         _style.configure("Status.TLabel", foreground="#555555", font=("TkDefaultFont", 10, "italic"))
-        _style.configure("TLabelframe.Label", font=("TkDefaultFont", 12, "bold"))
+        # Remove the visible band behind group headings: match outer GUI (Color 1)
+        _style.configure("TLabelframe", background="#f0f0f0")
+        _style.configure("TLabelframe.Label", font=("TkDefaultFont", 12, "bold"),
+                        background="#f0f0f0")
         _style.configure("Green.TButton", background="#4CAF50", foreground="black")
         _style.map("Green.TButton", background=[("active", "#45a049")])
+        _style.configure("Red.TButton", background="#f44336", foreground="black")
+        _style.map("Red.TButton", background=[("active", "#d32f2f")])
 
         self.single_tab = tk.Frame(self.tabs)
         self.rgb_tab = tk.Frame(self.tabs)
@@ -390,13 +395,16 @@ class MuadDataViewer:
 
     def _make_scrollable_control_panel(self, parent):
         """Returns (container, inner_frame). Pack container on the left; put all controls in inner_frame.
-        On laptops/small windows the sidebar scrolls so no controls are hidden."""
+        On laptops/small windows the sidebar scrolls so no controls are hidden.
+        Inner frame is ttk.Frame (like Scalebaron) so ttk.LabelFrame heading strip matches the panel and no band shows."""
         container = tk.Frame(parent)
         canvas = tk.Canvas(container, highlightthickness=0)
         scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas, padx=10, pady=10)
+        inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        content = ttk.Frame(inner, padding=10)
+        content.pack(fill=tk.BOTH, expand=True)
         def on_canvas_configure(event):
             canvas.itemconfig(win_id, width=event.width)
         canvas.bind("<Configure>", on_canvas_configure)
@@ -416,7 +424,7 @@ class MuadDataViewer:
         canvas.bind("<MouseWheel>", on_mousewheel)
         canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
         canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-        return container, inner
+        return container, content
 
     def pad_slices_to_same_size(self, slices):
         """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
@@ -470,19 +478,19 @@ class MuadDataViewer:
 
         slices_group = ttk.LabelFrame(control_frame, text="Slices", padding=10)
         slices_group.pack(fill=tk.X, pady=(0, 5))
-        btn_row = tk.Frame(slices_group)
+        btn_row = ttk.Frame(slices_group)
         btn_row.pack(fill=tk.X)
         ttk.Button(btn_row, text="Add", command=self.zstack_add_slice, width=8).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(btn_row, text="Clear", command=self.zstack_clear_slices, width=8).pack(side=tk.LEFT)
-        self.zstack_listbox = tk.Listbox(slices_group, height=5, font=("TkDefaultFont", 12))
+        ttk.Button(btn_row, text="Clear", command=self.zstack_clear_slices, style="Red.TButton", width=8).pack(side=tk.LEFT)
+        self.zstack_listbox = tk.Listbox(slices_group, height=5, font=("TkDefaultFont", 12), bg="#f0f0f0", highlightthickness=0)
         self.zstack_listbox.pack(fill=tk.X, pady=(4, 4))
         self.zstack_listbox.bind('<<ListboxSelect>>', lambda e: self.update_zstack_offset_label())
-        self.zstack_offset_label = tk.Label(slices_group, text="Offset (dy, dx): --, --", font=("TkDefaultFont", 9), foreground="gray")
+        self.zstack_offset_label = ttk.Label(slices_group, text="Offset (dy, dx): --, --", style="Status.TLabel")
         self.zstack_offset_label.pack(anchor='w')
 
         nudge_group = ttk.LabelFrame(control_frame, text="Nudge", padding=10)
         nudge_group.pack(fill=tk.X, pady=(0, 5))
-        nudge_frame = tk.Frame(nudge_group)
+        nudge_frame = ttk.Frame(nudge_group)
         nudge_frame.pack(pady=(0, 4))
         up_btn = ttk.Button(nudge_frame, text="↑", width=3, command=lambda: self.zstack_nudge_selected( -1,  0))
         lf_btn = ttk.Button(nudge_frame, text="←", width=3, command=lambda: self.zstack_nudge_selected(  0, -1))
@@ -492,15 +500,15 @@ class MuadDataViewer:
         lf_btn.grid(row=1, column=0)
         dn_btn.grid(row=1, column=1)
         rt_btn.grid(row=1, column=2)
-        step_frame = tk.Frame(nudge_group)
+        step_frame = ttk.Frame(nudge_group)
         step_frame.pack(fill=tk.X)
-        tk.Label(step_frame, text="Step (px):", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
-        self.zstack_step_spin = tk.Spinbox(step_frame, from_=1, to=100, increment=1, width=5, textvariable=self.zstack_nudge_step, font=("TkDefaultFont", 12))
+        ttk.Label(step_frame, text="Step (px):").pack(side=tk.LEFT)
+        self.zstack_step_spin = tk.Spinbox(step_frame, from_=1, to=100, increment=1, width=5, textvariable=self.zstack_nudge_step, font=("TkDefaultFont", 12), bg="#f0f0f0", highlightthickness=0)
         self.zstack_step_spin.pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(step_frame, text="1", width=2, command=lambda: self.zstack_nudge_step.set(1)).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(step_frame, text="5", width=2, command=lambda: self.zstack_nudge_step.set(5)).pack(side=tk.LEFT)
         ttk.Button(step_frame, text="10", width=2, command=lambda: self.zstack_nudge_step.set(10)).pack(side=tk.LEFT)
-        reset_frame = tk.Frame(nudge_group)
+        reset_frame = ttk.Frame(nudge_group)
         reset_frame.pack(fill=tk.X, pady=(2, 0))
         ttk.Button(reset_frame, text="Reset sel.", command=self.zstack_reset_selected_offset, width=8).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(reset_frame, text="Reset all", command=self.zstack_reset_all_offsets, width=8).pack(side=tk.LEFT)
@@ -509,31 +517,45 @@ class MuadDataViewer:
         colormap_group.pack(fill=tk.X, pady=(0, 5))
         zcmap_menu = ttk.Combobox(colormap_group, textvariable=self.zstack_colormap, values=plt.colormaps(), font=("TkDefaultFont", 12), width=12)
         zcmap_menu.pack(fill=tk.X, pady=(0, 4))
-        min_label_frame = tk.Frame(colormap_group)
+        min_label_frame = ttk.Frame(colormap_group)
         min_label_frame.pack(fill=tk.X)
-        tk.Label(min_label_frame, text="Min", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+        ttk.Label(min_label_frame, text="Min").pack(side=tk.LEFT)
         ttk.Button(min_label_frame, text="Set 0", command=self.set_zstack_min_to_zero, width=6).pack(side=tk.RIGHT, padx=(5, 0))
-        self.zmin_slider = tk.Scale(colormap_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_min, font=("TkDefaultFont", 12))
+        self.zmin_val_label = ttk.Label(colormap_group, text="0.00")
+        self.zmin_val_label.pack(anchor='w')
+        self.zmin_slider = ttk.Scale(colormap_group, from_=0, to=1, orient=tk.HORIZONTAL,
+                                     variable=self.zstack_min)
         self.zmin_slider.pack(fill=tk.X, pady=(0, 2))
-        self.zmin_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
-        tk.Label(colormap_group, text="Max", font=("TkDefaultFont", 12)).pack(anchor='w')
-        self.zmax_slider = tk.Scale(colormap_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.zstack_max, font=("TkDefaultFont", 12))
+        def _zmin_motion(e):
+            self.zmin_val_label.config(text=f"{self.zstack_min.get():.2f}")
+            self.zstack_render_preview()
+        self.zmin_slider.bind("<B1-Motion>", _zmin_motion)
+        self.zmin_slider.bind("<ButtonRelease-1>", _zmin_motion)
+        ttk.Label(colormap_group, text="Max").pack(anchor='w')
+        self.zmax_val_label = ttk.Label(colormap_group, text="1.00")
+        self.zmax_val_label.pack(anchor='w')
+        self.zmax_slider = ttk.Scale(colormap_group, from_=0, to=1, orient=tk.HORIZONTAL,
+                                     variable=self.zstack_max)
         self.zmax_slider.pack(fill=tk.X, pady=(0, 2))
-        self.zmax_slider.bind("<B1-Motion>", lambda e: self.zstack_render_preview())
-        zcap_frame = tk.Frame(colormap_group)
+        def _zmax_motion(e):
+            self.zmax_val_label.config(text=f"{self.zstack_max.get():.2f}")
+            self.zstack_render_preview()
+        self.zmax_slider.bind("<B1-Motion>", _zmax_motion)
+        self.zmax_slider.bind("<ButtonRelease-1>", _zmax_motion)
+        zcap_frame = ttk.Frame(colormap_group)
         zcap_frame.pack(fill=tk.X)
-        tk.Label(zcap_frame, text="Slider max:", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+        ttk.Label(zcap_frame, text="Slider max:").pack(side=tk.LEFT)
         zcap_entry = ttk.Entry(zcap_frame, textvariable=self.zmax_slider_limit, width=8)
         zcap_entry.pack(side=tk.LEFT, padx=(5, 0))
         zcap_entry.bind("<Return>", lambda e: self.set_zmax_slider_limit())
         zcap_entry.bind("<FocusOut>", lambda e: self.set_zmax_slider_limit())
-        tk.Checkbutton(colormap_group, text="Auto-pad", variable=self.zstack_auto_pad, font=("TkDefaultFont", 12)).pack(anchor='w')
-        tk.Checkbutton(colormap_group, text="Show overlay", variable=self.zstack_show_overlay, font=("TkDefaultFont", 12)).pack(anchor='w')
+        ttk.Checkbutton(colormap_group, text="Auto-pad", variable=self.zstack_auto_pad).pack(anchor='w')
+        ttk.Checkbutton(colormap_group, text="Show overlay", variable=self.zstack_show_overlay).pack(anchor='w')
 
         actions_group = ttk.LabelFrame(control_frame, text="Actions", padding=10)
         actions_group.pack(fill=tk.X, pady=(0, 5))
         ttk.Button(actions_group, text="Preview", command=self.zstack_render_preview, width=10).pack(pady=(0, 2))
-        tk.Button(actions_group, text="Sum Slices", command=self.zstack_sum_slices, font=("TkDefaultFont", 12), bg="#4CAF50", fg="black", width=10, padx=0, pady=0).pack(pady=(0, 2))
+        ttk.Button(actions_group, text="Sum Slices", command=self.zstack_sum_slices, style="Green.TButton", width=10).pack(pady=(0, 2))
         ttk.Button(actions_group, text="Save summed", command=self.zstack_save_sum, width=10).pack(pady=(0, 0))
 
         self.zstack_figure, self.zstack_ax = plt.subplots()
@@ -576,6 +598,8 @@ class MuadDataViewer:
             self.zmax_slider.config(from_=min_val, to=max_val)
             self.zmin_slider.set(min_val)
             self.zmax_slider.set(max_val)
+            self.zmin_val_label.config(text=f"{min_val:.2f}")
+            self.zmax_val_label.config(text=f"{max_val:.2f}")
             self.zmax_slider_limit.set(round(max_val))
             self.zstack_render_preview()
             self.update_zstack_offset_label()
@@ -592,6 +616,7 @@ class MuadDataViewer:
                 self.zmin_slider.config(to=val)
                 if self.zstack_max.get() > val:
                     self.zstack_max.set(val)
+                self.zmax_val_label.config(text=f"{self.zstack_max.get():.2f}")
                 self.zmax_slider_limit.set(val)
                 self.zstack_render_preview()
             else:
@@ -769,17 +794,29 @@ class MuadDataViewer:
         ttk.Label(min_label_frame, text="Min Value").pack(side=tk.LEFT)
         ttk.Button(min_label_frame, text="Set to 0", command=self.set_single_min_to_zero, width=8).pack(side=tk.RIGHT, padx=(5, 0))
         _lf_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
-        self.min_slider = tk.Scale(load_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("TkDefaultFont", 12), bg=_lf_bg, highlightthickness=0)
+        self.min_val_label = ttk.Label(load_group, text="0.00")
+        self.min_val_label.pack(anchor='w')
+        self.min_slider = ttk.Scale(load_group, from_=0, to=1, orient=tk.HORIZONTAL,
+                                    variable=self.single_min)
         self.min_slider.pack(fill=tk.X, pady=(0, 2))
-        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
-        self.min_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
+        def _single_min_motion(e):
+            self.min_val_label.config(text=f"{self.single_min.get():.2f}")
+            self.view_single_map(update_layout=False)
+        self.min_slider.bind("<ButtonRelease-1>", _single_min_motion)
+        self.min_slider.bind("<B1-Motion>", _single_min_motion)
         ttk.Label(load_group, text="Max Value").pack(anchor='w')
+        self.max_val_label = ttk.Label(load_group, text="1.00")
+        self.max_val_label.pack(anchor='w')
         max_slider_frame = ttk.Frame(load_group)
         max_slider_frame.pack(fill=tk.X)
-        self.max_slider = tk.Scale(max_slider_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("TkDefaultFont", 12), bg=_lf_bg, highlightthickness=0)
+        self.max_slider = ttk.Scale(max_slider_frame, from_=0, to=1, orient=tk.HORIZONTAL,
+                                    variable=self.single_max)
         self.max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map(update_layout=False))
-        self.max_slider.bind("<B1-Motion>", lambda e: self.view_single_map(update_layout=False))
+        def _single_max_motion(e):
+            self.max_val_label.config(text=f"{self.single_max.get():.2f}")
+            self.view_single_map(update_layout=False)
+        self.max_slider.bind("<ButtonRelease-1>", _single_max_motion)
+        self.max_slider.bind("<B1-Motion>", _single_max_motion)
         slider_max_frame = ttk.Frame(load_group)
         slider_max_frame.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(slider_max_frame, text="Slider Max:").pack(side=tk.LEFT)
@@ -819,22 +856,22 @@ class MuadDataViewer:
         # --- Zoom & crop ---
         zoom_group = ttk.LabelFrame(control_frame, text="Zoom & crop", padding=10)
         zoom_group.pack(fill=tk.X, pady=(0, 5))
-        self.zoom_button = tk.Button(zoom_group, text="Select region", command=self.toggle_zoom_mode, font=("TkDefaultFont", 12), bg="#2196F3", fg="black", width=12, padx=0, pady=0, highlightthickness=0, bd=0)
-        self.zoom_button.pack(fill=tk.X, pady=(0, 2))
-        self.save_crop_button = ttk.Button(zoom_group, text="Save cropped", command=self.save_cropped_matrix, state=tk.DISABLED, width=12)
-        self.save_crop_button.pack(fill=tk.X, pady=(0, 2))
-        self.reset_zoom_button = ttk.Button(zoom_group, text="Reset view", command=self.reset_zoom, state=tk.DISABLED, width=12)
-        self.reset_zoom_button.pack(fill=tk.X, pady=(0, 0))
+        self.zoom_button = ttk.Button(zoom_group, text="Select region", command=self.toggle_zoom_mode, width=10)
+        self.zoom_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.save_crop_button = ttk.Button(zoom_group, text="Save cropped", command=self.save_cropped_matrix, state=tk.DISABLED, width=10)
+        self.save_crop_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.reset_zoom_button = ttk.Button(zoom_group, text="Reset view", command=self.reset_zoom, state=tk.DISABLED, width=10)
+        self.reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
         # --- Region statistics ---
         region_group = ttk.LabelFrame(control_frame, text="Region statistics", padding=10)
         region_group.pack(fill=tk.X, pady=(0, 5))
-        self.polygon_button = tk.Button(region_group, text="Select polygon", command=self.toggle_polygon_mode, font=("TkDefaultFont", 12), bg="#9C27B0", fg="black", width=12, padx=0, pady=0, highlightthickness=0, bd=0)
-        self.polygon_button.pack(fill=tk.X, pady=(0, 2))
-        self.view_stats_button = ttk.Button(region_group, text="View stats table", command=self.show_polygon_results_window, width=12)
-        self.view_stats_button.pack(fill=tk.X, pady=(0, 2))
-        self.clear_polygons_button = ttk.Button(region_group, text="Clear polygons", command=self.clear_all_polygons, width=12)
-        self.clear_polygons_button.pack(fill=tk.X, pady=(0, 0))
+        self.polygon_button = ttk.Button(region_group, text="Select ROI", command=self.toggle_polygon_mode, width=10)
+        self.polygon_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.view_stats_button = ttk.Button(region_group, text="Tabulate", command=self.show_polygon_results_window, width=10)
+        self.view_stats_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.clear_polygons_button = ttk.Button(region_group, text="Clear polygons", command=self.clear_all_polygons, width=10)
+        self.clear_polygons_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
         self.single_file_label = ttk.Label(control_frame, text="Loaded file: None", style="Status.TLabel", wraplength=200)
         self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
@@ -856,6 +893,8 @@ class MuadDataViewer:
                 # If the current slider value is above the new max, set it to the new max
                 if self.single_max.get() > val:
                     self.single_max.set(val)
+                self.min_val_label.config(text=f"{self.single_min.get():.2f}")
+                self.max_val_label.config(text=f"{self.single_max.get():.2f}")
                 # Update the entry to show the value actually applied
                 self.max_slider_limit.set(val)
                 # Update the map (layout will be updated only if colorbar changes)
@@ -925,7 +964,8 @@ class MuadDataViewer:
                 self.max_slider.config(from_=min_val, to=max_val)
                 self.min_slider.set(min_val)
                 self.max_slider.set(max_val)
-                
+                self.min_val_label.config(text=f"{min_val:.2f}")
+                self.max_val_label.config(text=f"{max_val:.2f}")
                 # Set the max_slider_limit variable and entry to the new max (rounded to integer)
                 self.max_slider_limit.set(round(max_val))
                 # Update view
@@ -1008,7 +1048,7 @@ class MuadDataViewer:
         if not self.zoom_active:
             # Activate zoom mode
             self.zoom_active = True
-            self.zoom_button.config(text="Cancel Selection", bg="#FF5722", fg="black")
+            self.zoom_button.config(text="Cancel selection", style="Red.TButton")
             
             # Create rectangle selector with white edge color for visibility
             self.rectangle_selector = RectangleSelector(
@@ -1029,7 +1069,7 @@ class MuadDataViewer:
     def deactivate_zoom_mode(self):
         """Deactivate zoom selection mode."""
         self.zoom_active = False
-        self.zoom_button.config(text="Select Region to Zoom", bg="#2196F3", fg="black")
+        self.zoom_button.config(text="Select region", style="TButton")
         
         if self.rectangle_selector is not None:
             self.rectangle_selector.set_active(False)
@@ -1098,6 +1138,8 @@ class MuadDataViewer:
         self.max_slider.config(from_=min_val, to=max_val)
         self.min_slider.set(min_val)
         self.max_slider.set(max_val)
+        self.min_val_label.config(text=f"{min_val:.2f}")
+        self.max_val_label.config(text=f"{max_val:.2f}")
         self.max_slider_limit.set(round(max_val))
         
         # Enable save and reset buttons
@@ -1176,6 +1218,8 @@ class MuadDataViewer:
         self.max_slider.config(from_=min_val, to=max_val)
         self.min_slider.set(min_val)
         self.max_slider.set(max_val)
+        self.min_val_label.config(text=f"{min_val:.2f}")
+        self.max_val_label.config(text=f"{max_val:.2f}")
         self.max_slider_limit.set(round(max_val))
         
         # Disable save and reset buttons
@@ -1199,7 +1243,7 @@ class MuadDataViewer:
             # Activate polygon mode
             self.polygon_active = True
             self.polygon_vertices = []
-            self.polygon_button.config(text="Cancel Selection", bg="#FF5722", fg="black")
+            self.polygon_button.config(text="Cancel selection", style="Red.TButton")
             
             # Disable zoom mode if active
             if self.zoom_active:
@@ -1219,7 +1263,7 @@ class MuadDataViewer:
         """Deactivate polygon selection mode."""
         self.polygon_active = False
         self.polygon_vertices = []
-        self.polygon_button.config(text="Select Polygon Region", bg="#9C27B0", fg="black")
+        self.polygon_button.config(text="Select ROI", style="TButton")
         # Disconnect event handlers
         if hasattr(self, 'polygon_cid'):
             self.single_canvas.mpl_disconnect(self.polygon_cid)
@@ -1734,21 +1778,28 @@ class MuadDataViewer:
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
     def _load_rgb_button_icons(self):
-        """Load preview and save icons from Scalebaron icons folder (saves GUI space)."""
+        """Load preview, save, and clear (trash) icons from Scalebaron icons folder (saves GUI space)."""
         self.rgb_button_icons = {}
         if not PIL_AVAILABLE:
             return
         icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-        for key, filename in [('preview', 'preview.png'), ('save', 'save.png')]:
+        for key, filename in [('preview', 'preview.png'), ('save', 'save.png'), ('clear', 'bin.svg')]:
             path = os.path.join(icons_dir, filename)
             if not os.path.exists(path):
                 continue
             try:
-                img = Image.open(path)
-                if img.size[0] > 28 or img.size[1] > 28:
-                    img = img.resize((28, 28), Image.LANCZOS)
-                elif img.size[0] < 28 or img.size[1] < 28:
-                    img = img.resize((28, 28), Image.LANCZOS)
+                if filename.lower().endswith('.svg'):
+                    try:
+                        import cairosvg
+                        import io
+                        png_data = cairosvg.svg2png(url=path, output_width=28, output_height=28)
+                        img = Image.open(io.BytesIO(png_data))
+                    except Exception:
+                        continue
+                else:
+                    img = Image.open(path)
+                    if img.size[0] != 28 or img.size[1] != 28:
+                        img = img.resize((28, 28), Image.LANCZOS)
                 self.rgb_button_icons[key] = ImageTk.PhotoImage(img)
             except Exception:
                 pass
@@ -1774,33 +1825,39 @@ class MuadDataViewer:
             ttk.Button(channels_group, text=f"Load {color}", command=lambda c=ch: self.load_rgb_file(c), width=10).pack(anchor='w', pady=(2, 0))
             elem_label = ttk.Label(channels_group, text=f"Loaded Element: None", style="Status.TLabel")
             elem_label.pack(anchor='w')
-            max_value_label = tk.Label(channels_group, text="", font=("TkDefaultFont", 12), foreground="gray")
+            max_value_label = ttk.Label(channels_group, text="", style="Status.TLabel")
             max_value_label.pack(anchor='w', pady=(0, 1))
-            color_picker_frame = tk.Frame(channels_group)
+            color_picker_frame = ttk.Frame(channels_group)
             color_picker_frame.pack(fill=tk.X, pady=(0, 2))
             color_btn = tk.Button(color_picker_frame, text="Color", bg=self.rgb_colors[ch], fg='black', font=("TkDefaultFont", 12),
-                                  command=lambda c=ch: self.pick_channel_color(c), width=6, padx=0, pady=0)
+                                  command=lambda c=ch: self.pick_channel_color(c), width=6, padx=0, pady=0,
+                                  highlightthickness=0, bd=0, relief='flat')
             color_btn.pack(side=tk.LEFT, padx=(0, 5))
-            gradient_canvas = tk.Canvas(color_picker_frame, height=8, width=180)
+            _chan_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+            gradient_canvas = tk.Canvas(color_picker_frame, height=8, width=180, bg=_chan_bg, highlightthickness=0)
             gradient_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.draw_gradient(gradient_canvas, self.rgb_colors[ch])
             self.rgb_color_buttons[ch] = color_btn
             self.rgb_gradient_canvases[ch] = gradient_canvas
-            max_slider = tk.Scale(channels_group, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} max", font=("TkDefaultFont", 12))
+            ttk.Label(channels_group, text=f"{color} max").pack(anchor='w')
+            rgb_slider_val_label = ttk.Label(channels_group, text="1.00")
+            rgb_slider_val_label.pack(anchor='w')
+            max_slider = ttk.Scale(channels_group, from_=0, to=1, orient=tk.HORIZONTAL)
             max_slider.set(1)
             max_slider.pack(fill=tk.X, pady=(0, 2))
-            def make_slider_handler(c):
+            def make_slider_handler(c, val_label):
                 def handler(event):
+                    val_label.config(text=f"{max_slider.get():.2f}")
                     self.update_rgb_max_value_display(c)
                     self.view_rgb_overlay()
                 return handler
-            max_slider.bind("<B1-Motion>", make_slider_handler(ch))
-            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch))
+            max_slider.bind("<B1-Motion>", make_slider_handler(ch, rgb_slider_val_label))
+            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch, rgb_slider_val_label))
             self.rgb_sliders[ch] = {'max': max_slider}
-            self.rgb_labels[ch] = {'elem': elem_label, 'max_value': max_value_label}
-            cap_frame = tk.Frame(channels_group)
+            self.rgb_labels[ch] = {'elem': elem_label, 'max_value': max_value_label, 'slider_value': rgb_slider_val_label}
+            cap_frame = ttk.Frame(channels_group)
             cap_frame.pack(fill=tk.X, pady=(0, 4))
-            tk.Label(cap_frame, text="Slider max:", font=("TkDefaultFont", 12)).pack(side=tk.LEFT)
+            ttk.Label(cap_frame, text="Slider max:").pack(side=tk.LEFT)
             self.rgb_max_limits[ch] = tk.DoubleVar(value=1.0)
             cap_entry = ttk.Entry(cap_frame, textvariable=self.rgb_max_limits[ch], width=6)
             cap_entry.pack(side=tk.LEFT, padx=(5, 0))
@@ -1831,7 +1888,7 @@ class MuadDataViewer:
         view_cell.pack(side=tk.LEFT, padx=(0, 8))
         ttk.Label(view_cell, text="View overlay", style="Hint.TLabel").pack(pady=(0, 2))
         if preview_icon:
-            view_btn = tk.Button(view_cell, image=preview_icon, command=self.view_rgb_overlay, padx=2, pady=8, bg='#f0f0f0', relief='raised')
+            view_btn = tk.Button(view_cell, image=preview_icon, command=self.view_rgb_overlay, padx=2, pady=8, bg='#f0f0f0', relief='flat', highlightthickness=0, bd=0)
             view_btn.image = preview_icon
             view_btn.pack(anchor=tk.CENTER)
         else:
@@ -1839,27 +1896,58 @@ class MuadDataViewer:
             view_btn.pack(anchor=tk.CENTER)
         # Save RGB: hint label + centered icon button
         save_cell = ttk.Frame(rgb_action_frame)
-        save_cell.pack(side=tk.LEFT)
+        save_cell.pack(side=tk.LEFT, padx=(0, 8))
         ttk.Label(save_cell, text="Save RGB", style="Hint.TLabel").pack(pady=(0, 2))
         if save_icon:
-            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_rgb_image, padx=2, pady=8, bg='#f0f0f0', relief='raised')
+            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_rgb_image, padx=2, pady=8, bg='#f0f0f0', relief='flat', highlightthickness=0, bd=0)
             save_btn.image = save_icon
             save_btn.pack(anchor=tk.CENTER)
         else:
             save_btn = ttk.Button(save_cell, text="Save", command=self.save_rgb_image, width=6)
             save_btn.pack(anchor=tk.CENTER)
-        tk.Button(overlay_group, text="Clear Data", command=self.clear_rgb_data, font=("TkDefaultFont", 12), bg="#f44336", fg="black", width=10, padx=2, pady=8).pack(pady=(4, 0))
+        # Clear data: same row as View/Save, icon or text (trash from icons/bin.svg)
+        clear_cell = ttk.Frame(rgb_action_frame)
+        clear_cell.pack(side=tk.LEFT)
+        ttk.Label(clear_cell, text="Clear data", style="Hint.TLabel").pack(pady=(0, 2))
+        clear_icon = getattr(self, 'rgb_button_icons', {}).get('clear')
+        if clear_icon:
+            clear_btn = tk.Button(clear_cell, image=clear_icon, command=self.clear_rgb_data, padx=2, pady=8, bg='#f44336', fg='black', relief='flat', highlightthickness=0, bd=0)
+            clear_btn.image = clear_icon
+            clear_btn.pack(anchor=tk.CENTER)
+        else:
+            clear_btn = ttk.Button(clear_cell, text="Clear", command=self.clear_rgb_data, style="Red.TButton", width=6)
+            clear_btn.pack(anchor=tk.CENTER)
 
         ratio_group = ttk.LabelFrame(control_frame, text="Correlation & ratio", padding=10)
         ratio_group.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(ratio_group, text="Element 1 (num.):", font=("TkDefaultFont", 12)).pack(anchor='w')
-        elem1_menu = ttk.Combobox(ratio_group, textvariable=self.correlation_elem1, values=['R', 'G', 'B'], state='readonly', font=("TkDefaultFont", 12), width=8)
+        ttk.Label(ratio_group, text="Element 1 (num.):").pack(anchor='w')
+        elem1_menu = ttk.Combobox(
+            ratio_group,
+            textvariable=self.correlation_elem1,
+            values=['R', 'G', 'B'],
+            state='readonly',
+            font=("TkDefaultFont", 12),
+            width=8,
+        )
         elem1_menu.pack(fill=tk.X, pady=(0, 2))
-        tk.Label(ratio_group, text="Element 2 (denom.):", font=("TkDefaultFont", 12)).pack(anchor='w')
-        elem2_menu = ttk.Combobox(ratio_group, textvariable=self.correlation_elem2, values=['R', 'G', 'B'], state='readonly', font=("TkDefaultFont", 12), width=8)
+        ttk.Label(ratio_group, text="Element 2 (denom.):").pack(anchor='w')
+        elem2_menu = ttk.Combobox(
+            ratio_group,
+            textvariable=self.correlation_elem2,
+            values=['R', 'G', 'B'],
+            state='readonly',
+            font=("TkDefaultFont", 12),
+            width=8,
+        )
         elem2_menu.pack(fill=tk.X, pady=(0, 2))
-        tk.Button(ratio_group, text="Ratio map", command=self.calculate_ratio_map, font=("TkDefaultFont", 12, "bold"), bg="#9C27B0", fg="black", width=10, padx=0, pady=0).pack(pady=(2, 2))
-        self.correlation_label = tk.Label(ratio_group, text="Pearson r: --", font=("TkDefaultFont", 9), foreground="gray")
+        ttk.Button(
+            ratio_group,
+            text="Ratio map",
+            command=self.calculate_ratio_map,
+            style="Green.TButton",
+            width=10,
+        ).pack(pady=(2, 2))
+        self.correlation_label = ttk.Label(ratio_group, text="Pearson r: --", style="Status.TLabel")
         self.correlation_label.pack(anchor='w')
         ttk.Button(ratio_group, text="Save ratio matrix", command=self.save_ratio_matrix, width=12).pack(pady=(2, 0))
 
@@ -1919,6 +2007,7 @@ class MuadDataViewer:
             # Reset sliders to default
             self.rgb_sliders[ch]['max'].config(from_=0, to=1)
             self.rgb_sliders[ch]['max'].set(1)
+            self.rgb_labels[ch]['slider_value'].config(text="1.00")
             # Reset slider max limits
             if ch in self.rgb_max_limits:
                 self.rgb_max_limits[ch].set(1.0)
@@ -1951,6 +2040,7 @@ class MuadDataViewer:
                 self.rgb_sliders[channel]['max'].config(to=val)
                 if self.rgb_sliders[channel]['max'].get() > val:
                     self.rgb_sliders[channel]['max'].set(val)
+                self.rgb_labels[channel]['slider_value'].config(text=f"{self.rgb_sliders[channel]['max'].get():.2f}")
                 self.rgb_max_limits[channel].set(val)
                 self.update_rgb_max_value_display(channel)
                 self.view_rgb_overlay()
@@ -2025,6 +2115,8 @@ class MuadDataViewer:
             self.max_slider.config(from_=min_val, to=max_val)
             self.min_slider.set(min_val)
             self.max_slider.set(max_val)
+            self.min_val_label.config(text=f"{min_val:.2f}")
+            self.max_val_label.config(text=f"{max_val:.2f}")
             # Set the max_slider_limit variable and entry to the default max (rounded to integer)
             self.max_slider_limit.set(round(max_val))
             # Update loaded file label
@@ -2209,6 +2301,7 @@ class MuadDataViewer:
             if np.isfinite(max_val):
                 self.rgb_sliders[channel]['max'].config(from_=0, to=max_val)
                 self.rgb_sliders[channel]['max'].set(max_val)
+                self.rgb_labels[channel]['slider_value'].config(text=f"{max_val:.2f}")
                 # initialize per-channel slider cap
                 if channel in self.rgb_max_limits:
                     self.rgb_max_limits[channel].set(round(max_val))
