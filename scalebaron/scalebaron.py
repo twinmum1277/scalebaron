@@ -36,11 +36,37 @@ class CompositeApp:
         except (ValueError, TypeError):
             return default
 
+    def _pt_from_font_str(self, val_str, default=16):
+        """Return point size from a string (e.g. from combobox.get()): (None) -> default, else int in 6–72."""
+        val = str(val_str).strip()
+        if not val or val == "(None)":
+            return default
+        try:
+            return max(6, min(72, int(val)))
+        except (ValueError, TypeError):
+            return default
+
+    def _get_element_label_font_value(self):
+        """Return current Element label dropdown value from the widget so it's up-to-date when user just selected then clicked Preview."""
+        c = getattr(self, "element_label_font_combobox", None)
+        if c is not None and c.winfo_exists():
+            return str(c.get()).strip()
+        return str(self.element_label_font.get()).strip()
+
     def _on_element_label_font_change(self):
         """When Element label dropdown changes, update preview to show or hide label (if preview exists)."""
         if not getattr(self, "preview_image", None) or not getattr(self, "original_preview_image", None):
             return
         self.add_element_label()
+
+    def _on_font_change_refresh_preview(self):
+        """When any font dropdown changes and a preview exists, regenerate the composite so the new font sizes apply."""
+        if not getattr(self, "matrices", None) or not self.matrices:
+            return
+        if not getattr(self, "preview_image", None):
+            return
+        # Regenerate preview with current font settings (sample names, scale bar, color bar, element label)
+        self.generate_composite(preview=True)
 
     def get_contrasting_text_color(self, cmap_name):
         rgba = plt.get_cmap(cmap_name)(0.0)  # Color for 0 value
@@ -421,11 +447,16 @@ class CompositeApp:
             c.grid(row=row, column=1, padx=5, pady=2, sticky="w")
             return c
         _make_font_row(0, "Sample names:", self.sample_name_font)
-        _make_font_row(1, "Element label:", self.element_label_font)
+        self.element_label_font_combobox = _make_font_row(1, "Element label:", self.element_label_font)
         _make_font_row(2, "Scale bar:", self.scale_bar_font)
         _make_font_row(3, "Color bar:", self.color_bar_font)
-        # When Element label changes, update preview if one is open (show or hide label)
-        self.element_label_font.trace_add("write", lambda *_: self._on_element_label_font_change())
+        # When any font dropdown changes, refresh preview if one exists (so font size changes apply without re-clicking Preview)
+        def _refresh_preview_on_font_change(*args):
+            self._on_font_change_refresh_preview()
+        self.element_label_font.trace_add("write", _refresh_preview_on_font_change)
+        self.sample_name_font.trace_add("write", _refresh_preview_on_font_change)
+        self.scale_bar_font.trace_add("write", _refresh_preview_on_font_change)
+        self.color_bar_font.trace_add("write", _refresh_preview_on_font_change)
         
         # Action buttons
         action_frame = ttk.Frame(control_frame)
@@ -1961,6 +1992,8 @@ class CompositeApp:
             self.log_print("⚠️ No data loaded.")
             return
 
+        # Ensure font dropdowns have committed their value to the variables (readonly Combobox updates on focus out)
+        self.master.update_idletasks()
         self.set_status("Busy")
         if preview:
             self.log_print("Status: Busy - Generating preview...")
@@ -2204,7 +2237,7 @@ class CompositeApp:
         if preview:
             self.preview_image = composited.copy()
             self.original_preview_image = self.preview_image.copy()
-            if str(self.element_label_font.get()).strip() != "(None)":
+            if self._get_element_label_font_value() != "(None)":
                 self.preview_image = self._add_element_label_to_image(self.original_preview_image)
             self.preview_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
             self.preview_image.save(self.preview_file)
@@ -2218,7 +2251,7 @@ class CompositeApp:
         else:
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            to_save = self._add_element_label_to_image(composited) if str(self.element_label_font.get()).strip() != "(None)" else composited
+            to_save = self._add_element_label_to_image(composited) if self._get_element_label_font_value() != "(None)" else composited
             to_save.save(out_path)
             
             # Update progress table - mark as complete
@@ -2321,7 +2354,8 @@ class CompositeApp:
 
     def _add_element_label_to_image(self, img):
         """Draw element label on a PIL image if Element label font is not (None). Returns new image (or unchanged if off)."""
-        if not img or str(self.element_label_font.get()).strip() == "(None)":
+        el_val = self._get_element_label_font_value()
+        if not img or el_val == "(None)":
             return img.copy() if img else img
         try:
             from PIL import ImageDraw, ImageFont
@@ -2337,8 +2371,8 @@ class CompositeApp:
                         units = "ppm" if unit_type == "ppm" else ("CPS" if unit_type == "CPS" else "counts")
                         break
             img_width, img_height = labeled_image.size
-            min_font_size = max(8, img_width // 80)
-            font_size = max(min_font_size, self._pt_from_font(self.element_label_font, 16))
+            font_size = self._pt_from_font_str(el_val, 16)
+            font_size = max(6, font_size)  # only enforce a small minimum for readability
             try:
                 font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
             except Exception:
@@ -2362,7 +2396,7 @@ class CompositeApp:
             return
         if not hasattr(self, "original_preview_image") or self.original_preview_image is None:
             return
-        if str(self.element_label_font.get()).strip() == "(None)":
+        if self._get_element_label_font_value() == "(None)":
             self.preview_image = self.original_preview_image.copy()
         else:
             self.preview_image = self._add_element_label_to_image(self.original_preview_image)
