@@ -18,7 +18,7 @@ import glob
 import re
 import tempfile
 import time
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import shutil
 import pandas as pd
 import base64
@@ -26,6 +26,22 @@ import io
 
 class CompositeApp:
     
+    def _pt_from_font(self, var, default=16):
+        """Return point size from a font StringVar: (None) -> default, else int in 6–72."""
+        val = str(var.get()).strip()
+        if not val or val == "(None)":
+            return default
+        try:
+            return max(6, min(72, int(val)))
+        except (ValueError, TypeError):
+            return default
+
+    def _on_element_label_font_change(self):
+        """When Element label dropdown changes, update preview to show or hide label (if preview exists)."""
+        if not getattr(self, "preview_image", None) or not getattr(self, "original_preview_image", None):
+            return
+        self.add_element_label()
+
     def get_contrasting_text_color(self, cmap_name):
         rgba = plt.get_cmap(cmap_name)(0.0)  # Color for 0 value
         r, g, b = rgba[:3]
@@ -93,8 +109,11 @@ class CompositeApp:
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
         self.element = tk.StringVar()
-        self.sample_name_font_size = tk.StringVar(value="Medium")  # None, Small, Medium, Large, X-Large
-        self.element_label_font_size = tk.IntVar(value=16)  # Font size for element label (default 16)
+        # Fonts: same style for each — (None) = off/default, then point sizes
+        self.sample_name_font = tk.StringVar(value="12")   # (None) = off, else pt
+        self.element_label_font = tk.StringVar(value="16")  # (None) = default 16 when adding, else pt
+        self.scale_bar_font = tk.StringVar(value="10")     # (None) = off, else pt
+        self.color_bar_font = tk.StringVar(value="10")     # (None) = default 10, else pt
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max, constrained to 2 decimal places
         self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
         self.use_button_icons = tk.BooleanVar(value=False)  # Toggle for icon buttons
@@ -390,25 +409,23 @@ class CompositeApp:
         # Log Scale
         ttk.Checkbutton(display_frame, text="Log Scale", variable=self.use_log).grid(row=2, column=0, columnspan=2, pady=2)
         
-        # Font controls
+        # Font controls: same style for each — (None) = off/default, then point sizes
         font_frame = ttk.LabelFrame(control_frame, text="Fonts", padding=10)
         font_frame.pack(fill=tk.X, pady=5)
         font_frame.columnconfigure(0, weight=1)
         font_frame.columnconfigure(1, weight=0, minsize=80)
-        
-        # Sample name font size (None = no labels on composite subplots; Small/Medium/Large/X-Large = sizes)
-        ttk.Label(font_frame, text="Sample Name Font:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.sample_name_font_size_dropdown = ttk.Combobox(font_frame, textvariable=self.sample_name_font_size, values=["None", "Small", "Medium", "Large", "X-Large"], width=8)
-        self.sample_name_font_size_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-        
-        # Element label font size
-        ttk.Label(font_frame, text="Element Label Font:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        element_font_frame = ttk.Frame(font_frame)
-        element_font_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        ttk.Scale(element_font_frame, from_=13, to=72, variable=self.element_label_font_size, orient=tk.HORIZONTAL, length=60).pack(side=tk.LEFT)
-        self.element_font_size_label = ttk.Label(element_font_frame, text="16", width=3)
-        self.element_font_size_label.pack(side=tk.LEFT, padx=(3, 0))
-        self.element_label_font_size.trace('w', lambda *args: self.element_font_size_label.config(text=str(self.element_label_font_size.get())))
+        font_dropdown_values = ["(None)", "8", "9", "10", "12", "14", "16", "18", "20", "24"]
+        def _make_font_row(row, label, var, width=8):
+            ttk.Label(font_frame, text=label).grid(row=row, column=0, sticky="e", padx=5, pady=2)
+            c = ttk.Combobox(font_frame, textvariable=var, values=font_dropdown_values, width=width, state="readonly")
+            c.grid(row=row, column=1, padx=5, pady=2, sticky="w")
+            return c
+        _make_font_row(0, "Sample names:", self.sample_name_font)
+        _make_font_row(1, "Element label:", self.element_label_font)
+        _make_font_row(2, "Scale bar:", self.scale_bar_font)
+        _make_font_row(3, "Color bar:", self.color_bar_font)
+        # When Element label changes, update preview if one is open (show or hide label)
+        self.element_label_font.trace_add("write", lambda *_: self._on_element_label_font_change())
         
         # Action buttons
         action_frame = ttk.Frame(control_frame)
@@ -425,18 +442,6 @@ class CompositeApp:
         else:
             self.preview_btn = ttk.Button(action_frame, text="👁️", command=self.preview_composite, width=1)
         self.preview_btn.pack(pady=(0, 10))
-        
-        # Add Element Label button
-        ttk.Label(action_frame, text="Add Element Label (optional)", style="Hint.TLabel").pack(pady=(5, 0))
-        add_label_icon = self.button_icons.get('add_label')
-        if add_label_icon:
-            self.add_label_btn = tk.Button(action_frame, image=add_label_icon, command=self.add_element_label,
-                                           padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                           activebackground='#4CAF50')
-            self.add_label_btn.image = add_label_icon
-        else:
-            self.add_label_btn = ttk.Button(action_frame, text="🏷️", command=self.add_element_label, width=1)
-        self.add_label_btn.pack(pady=(0, 10))
         
         # Save Composite button
         ttk.Label(action_frame, text="Save Composite", style="Hint.TLabel").pack(pady=(5, 0))
@@ -1586,36 +1591,16 @@ class CompositeApp:
         control_panel = tk.Frame(self.preview_window, bg='#f0f0f0', relief=tk.RAISED, borderwidth=1)
         control_panel.pack(fill=tk.X, side=tk.BOTTOM, padx=0, pady=0)
         
-        # Left side: Font size control
+        # Left side: show current font size (set in Fonts group)
         font_frame = tk.Frame(control_panel, bg='#f0f0f0')
         font_frame.pack(side=tk.LEFT, padx=10, pady=8)
-        tk.Label(font_frame, text="Label Font:", font=("Arial", 10), bg='#f0f0f0').pack(side=tk.LEFT, padx=(0, 5))
-        font_scale = tk.Scale(font_frame, from_=13, to=72, variable=self.element_label_font_size, 
-                             orient=tk.HORIZONTAL, length=100, font=("Arial", 9))
-        font_scale.pack(side=tk.LEFT)
-        font_value_label = tk.Label(font_frame, text=str(self.element_label_font_size.get()), 
-                                   font=("Arial", 9), bg='#f0f0f0', width=3)
-        font_value_label.pack(side=tk.LEFT, padx=(5, 0))
-        # Update label when slider changes
-        self.element_label_font_size.trace('w', lambda *args: font_value_label.config(text=str(self.element_label_font_size.get())))
+        tk.Label(font_frame, text="Element label (Fonts tab):", font=("Arial", 9), bg='#f0f0f0').pack(side=tk.LEFT, padx=(0, 5))
+        font_value_label = tk.Label(font_frame, text=f"{self._pt_from_font(self.element_label_font, 16)} pt", font=("Arial", 9), bg='#f0f0f0', width=4)
+        font_value_label.pack(side=tk.LEFT)
         
-        # Right side: Icon buttons
+        # Right side: Save button
         button_frame = tk.Frame(control_panel, bg='#f0f0f0')
         button_frame.pack(side=tk.RIGHT, padx=10, pady=8)
-        
-        # Add Element Label button with icon
-        add_label_icon = self.button_icons.get('add_label')
-        if add_label_icon:
-            add_label_btn = tk.Button(button_frame, image=add_label_icon, 
-                                    command=self.add_element_label,
-                                    padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                    activebackground='#4CAF50')
-            add_label_btn.image = add_label_icon  # Keep reference
-        else:
-            add_label_btn = tk.Button(button_frame, text="🏷️", 
-                                    command=self.add_element_label,
-                                    padx=2, pady=8, bg='#f0f0f0', relief='raised')
-        add_label_btn.pack(side=tk.LEFT, padx=(0, 5))
         
         # Save Composite button with icon
         save_icon = self.button_icons.get('save')
@@ -1890,6 +1875,87 @@ class CompositeApp:
                 best_rows = r
         return best_rows
 
+    def _build_overlay_image(
+        self,
+        base_image,
+        tight_bbox,
+        image_positions,
+        scale_bar_pos,
+        last_ax_width_fig,
+        labels,
+        show_labels,
+        font_size_pt,
+        text_color,
+        scale_bar_px,
+        scale_bar_um,
+        scale_bar_caption,
+        data_width,
+        draw_scale_bar=True,
+        scale_bar_font_pt=10,
+        dpi=300,
+    ):
+        """
+        Draw overlay (sample names + scale bar) in base-image pixel coordinates.
+        Base and overlay stay locked: same coordinate system, same scale.
+        Returns RGBA PIL Image same size as base_image.
+        """
+        W, H = base_image.size
+        bx0, by0 = getattr(tight_bbox, "x0", 0), getattr(tight_bbox, "y0", 0)
+        bx1, by1 = getattr(tight_bbox, "x1", 1), getattr(tight_bbox, "y1", 1)
+        bw = bx1 - bx0
+        bh = by1 - by0
+
+        def fig_to_pixel(fx, fy):
+            px = (fx - bx0) / bw * W if bw else 0
+            py = (by0 + bh - fy) / bh * H if bh else 0  # fig y: bottom=0, image y: top=0
+            return (int(round(px)), int(round(py)))
+
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        fill = (255, 255, 255) if text_color == "white" else (0, 0, 0)
+        font_size_px = max(10, int(font_size_pt * dpi / 72))
+
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size_px)
+        except Exception:
+            try:
+                font = ImageFont.truetype("arialbd.ttf", font_size_px)
+            except Exception:
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size_px)
+                except Exception:
+                    font = ImageFont.load_default()
+
+        if show_labels and labels and len(image_positions) == len(labels):
+            for (x0, y0, w, h), label in zip(image_positions, labels):
+                cx_fig = x0 + w * 0.5
+                top_fig = y0 + h
+                cx_px, top_px = fig_to_pixel(cx_fig, top_fig)
+                draw.text((cx_px, top_px), label, fill=fill, font=font, anchor="mb")
+
+        if draw_scale_bar and data_width and data_width > 0 and last_ax_width_fig and scale_bar_px > 0:
+            bar_length_px = scale_bar_px * (last_ax_width_fig / bw) * (W / data_width) if bw else 0
+            bar_length_px = max(1, int(round(bar_length_px)))
+            sx0, sy0 = scale_bar_pos.x0, scale_bar_pos.y0
+            sw, sh = scale_bar_pos.width, scale_bar_pos.height
+            cx_fig = sx0 + sw * 0.5
+            cy_fig = sy0 + sh * 0.5
+            cx_px, cy_px = fig_to_pixel(cx_fig, cy_fig)
+            x1 = max(0, cx_px - bar_length_px // 2)
+            x2 = min(W, cx_px + bar_length_px // 2)
+            draw.line([(x1, cy_px), (x2, cy_px)], fill=fill, width=max(2, int(3 * dpi / 150)))
+            label_lines = [f"{scale_bar_um:.0f} µm"]
+            if scale_bar_caption:
+                label_lines.append(scale_bar_caption)
+            scale_bar_font_px = max(8, int(scale_bar_font_pt * dpi / 72))
+            try:
+                small_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", scale_bar_font_px)
+            except Exception:
+                small_font = font
+            draw.text((cx_px, cy_px + 12), "\n".join(label_lines), fill=fill, font=small_font, anchor="mt")
+
+        return overlay
+
     def generate_composite(self, preview=False, override_rows=None):
         if not self.matrices:
             self.log_print("⚠️ No data loaded.")
@@ -1947,6 +2013,8 @@ class CompositeApp:
         means = []
 
         im = None
+        show_subplot_label = str(self.sample_name_font.get()).strip() != "(None)"
+        font_size = self._pt_from_font(self.sample_name_font, 12) if show_subplot_label else 12  # overlay + subtitles
 
         for i, (matrix, label) in enumerate(zip(matrices_to_use, self.labels)):
             if preview:
@@ -1957,25 +2025,11 @@ class CompositeApp:
             # Get the pixel size for this sample
             pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
 
-            # Determine font size based on selection (None = no subplot labels)
-            font_size = None
-            show_subplot_label = self.sample_name_font_size.get() != "None"
-            if show_subplot_label:
-                if self.sample_name_font_size.get() == "Small":
-                    font_size = 8
-                elif self.sample_name_font_size.get() == "Medium":
-                    font_size = 12
-                elif self.sample_name_font_size.get() == "Large":
-                    font_size = 16
-                elif self.sample_name_font_size.get() == "X-Large":
-                    font_size = 20
-                else:
-                    font_size = 12
-
             im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
             ax.set_aspect('auto')
             if show_subplot_label:
-                ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+                # Sample names go on overlay layer (for future editing); keep title empty in base
+                ax.set_title("", color=text_color, fontsize=font_size)
                 if self.use_custom_pixel_sizes.get():
                     pixel_label = f"{int(round(pixel_size))} µm/px"
                     subtitle_size = (font_size - 2) if font_size else 9
@@ -2040,8 +2094,9 @@ class CompositeApp:
         # Do not call axis('off') here so color bar tick labels (units) remain visible
 
         # Add color bar to its dedicated axes (top of right column)
+        cbar_pt = self._pt_from_font(self.color_bar_font, 10)
         cbar = plt.colorbar(im, cax=color_bar_ax, orientation='vertical')
-        cbar.ax.yaxis.set_tick_params(color=text_color, labelsize=9)
+        cbar.ax.yaxis.set_tick_params(color=text_color, labelsize=cbar_pt)
         cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=text_color)
         offset_text = cbar.ax.yaxis.get_offset_text()
@@ -2051,7 +2106,7 @@ class CompositeApp:
         if getattr(self, 'current_element_unit', None):
             u = self.current_element_unit
             units_label = 'ppm' if u == 'ppm' else ('CPS' if u == 'CPS' else 'counts')
-            cbar.set_label(units_label, color=text_color, fontsize=10)
+            cbar.set_label(units_label, color=text_color, fontsize=cbar_pt)
 
         # Scale bar in right column (below color bar): length from last image's data scale so it stays accurate
         if self.use_custom_pixel_sizes.get() and self.labels:
@@ -2069,28 +2124,10 @@ class CompositeApp:
         else:
             scale_bar_px = max(1, int(round(scale_bar_um / pixel_size_um)))
 
-        # Length in figure coords so the bar is accurate relative to the image
-        p0_display = last_image_ax.transData.transform((0, 0))
-        p1_display = last_image_ax.transData.transform((scale_bar_px, 0))
-        p0_fig = fig.transFigure.inverted().transform(p0_display)
-        p1_fig = fig.transFigure.inverted().transform(p1_display)
-        bar_length_fig = p1_fig[0] - p0_fig[0]
-
+        # Scale bar and sample names drawn on overlay layer (same coords as base; locked together)
         scale_bar_ax.set_facecolor(bg_color)
         scale_bar_ax.axis('off')
-        pos = scale_bar_ax.get_position()
-        x_center_fig = pos.x0 + pos.width * 0.5
-        y_fig = pos.y0 + pos.height * 0.5
-        x_start_fig = x_center_fig - bar_length_fig * 0.5
-        x_end_fig = x_center_fig + bar_length_fig * 0.5
-        scale_bar_ax.hlines(y_fig, x_start_fig, x_end_fig, transform=fig.transFigure, colors='white', linewidth=3)
-        label_lines = [f"{scale_bar_um:.0f} µm"]
-        if scale_bar_caption:
-            label_lines.append(scale_bar_caption)
-        scale_bar_ax.text(0.5, 0.25, "\n".join(label_lines), transform=scale_bar_ax.transAxes,
-                          color=text_color, fontsize=8, ha='center', va='top')
 
-        
         # Set background color and hide axes for image cells only (keep color bar labels visible)
         for ax in axs.flat:
             ax.set_facecolor(bg_color)
@@ -2105,8 +2142,8 @@ class CompositeApp:
         # Re-create colorbar and apply styles again
         export_cbar = plt.colorbar(im, cax=colorbar_ax, orientation='vertical')
 
-        # Reapply tick and outline styling
-        export_cbar.ax.yaxis.set_tick_params(color=text_color)
+        # Reapply tick and outline styling (use same font size as main color bar)
+        export_cbar.ax.yaxis.set_tick_params(color=text_color, labelsize=cbar_pt)
         export_cbar.outline.set_edgecolor(text_color)
         plt.setp(plt.getp(export_cbar.ax.axes, 'yticklabels'), color=text_color)
         # Set color for scientific notation offset label (e.g., "1e7")
@@ -2116,35 +2153,73 @@ class CompositeApp:
         if getattr(self, 'current_element_unit', None):
             u = self.current_element_unit
             units_label = 'ppm' if u == 'ppm' else ('CPS' if u == 'CPS' else 'counts')
-            export_cbar.set_label(units_label, color=text_color, fontsize=10)
+            export_cbar.set_label(units_label, color=text_color, fontsize=cbar_pt)
 
         # Save
         colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
         colorbar_fig.savefig(colorbar_path, dpi=300, bbox_inches='tight', transparent=True)
         plt.close(colorbar_fig)
-        
+
+        # Overlay layer: sample names + scale bar (same coordinate system as base; locked together)
+        # Save base without bbox_inches='tight' so figure coords (0-1) map 1:1 to pixels
+        image_positions = [
+            (axs[i // cols, i % cols].get_position().x0, axs[i // cols, i % cols].get_position().y0,
+             axs[i // cols, i % cols].get_position().width, axs[i // cols, i % cols].get_position().height)
+            for i in range(len(self.labels))
+        ]
+        scale_bar_pos = scale_bar_ax.get_position()
+        last_ax_width_fig = last_image_ax.get_position().width
+        dpi = 300
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=dpi, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        base_image = Image.open(buf).convert("RGB")
+        # Use full figure as bbox so (0,0)-(1,1) figure coords map to (0,0)-(W,H) pixels
+        full_fig_bbox = type("Bbox", (), {"x0": 0, "y0": 0, "x1": 1, "y1": 1})()
+        overlay = self._build_overlay_image(
+            base_image,
+            full_fig_bbox,
+            image_positions,
+            scale_bar_pos,
+            last_ax_width_fig,
+            list(self.labels),
+            show_subplot_label,
+            font_size if font_size is not None else 12,
+            text_color,
+            scale_bar_px,
+            scale_bar_um,
+            scale_bar_caption,
+            matrices_to_use[-1].shape[1] if matrices_to_use else 0,
+            draw_scale_bar=str(self.scale_bar_font.get()).strip() != "(None)",
+            scale_bar_font_pt=self._pt_from_font(self.scale_bar_font, 10),
+            dpi=dpi,
+        )
+        composited = Image.alpha_composite(base_image.convert("RGBA"), overlay).convert("RGB")
+
+        # Store for future editing of sample names (redraw overlay only)
+        self._base_preview_image = base_image
+        self._overlay_sample_names = list(self.labels)
+
         if preview:
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
-            plt.close(fig)
-            
-            self.preview_image = Image.open(tmp_file.name)
-            # Store the original unlabeled image
+            self.preview_image = composited.copy()
             self.original_preview_image = self.preview_image.copy()
-            
-            # Store the temp file path
-            self.preview_file = tmp_file.name
-            
+            if str(self.element_label_font.get()).strip() != "(None)":
+                self.preview_image = self._add_element_label_to_image(self.original_preview_image)
+            self.preview_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+            self.preview_image.save(self.preview_file)
+
             # Update preview in the Preview tab
             self.update_preview_image()
-            
+
             # Switch to Preview tab to show the preview
             self.tabs.select(1)  # Index 1 is the Preview & Export tab
+            self.set_status("Idle")
         else:
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            plt.savefig(out_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
-            plt.close(fig)
+            to_save = self._add_element_label_to_image(composited) if str(self.element_label_font.get()).strip() != "(None)" else composited
+            to_save.save(out_path)
             
             # Update progress table - mark as complete
             element = self.element.get()
@@ -2244,98 +2319,56 @@ class CompositeApp:
             import traceback
             self.log_print(traceback.format_exc())
 
-    def add_element_label(self):
-        """Add element label to the current preview image using PIL."""
-        if not hasattr(self, 'preview_image'):
-            messagebox.showwarning("No Preview", "Please generate a preview first.")
-            return
-        
+    def _add_element_label_to_image(self, img):
+        """Draw element label on a PIL image if Element label font is not (None). Returns new image (or unchanged if off)."""
+        if not img or str(self.element_label_font.get()).strip() == "(None)":
+            return img.copy() if img else img
         try:
-            self.log_print("Adding element label...")
-            
-            # Get element name and units
+            from PIL import ImageDraw, ImageFont
+            labeled_image = img.convert("RGB").copy()
+            draw = ImageDraw.Draw(labeled_image)
             element_name = self.element.get()
-            units = "ppm"  # Default
-            # Check all files for this element to determine unit type
-            for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
+            units = "ppm"
+            for file in glob.glob(os.path.join(self.input_dir or "", "* matrix.xlsx")):
                 parsed = self.parse_matrix_filename(file)
                 if parsed:
                     _, element, unit_type = parsed
                     if element == element_name:
-                        if unit_type == 'ppm':
-                            units = "ppm"
-                            break
-                        elif unit_type == 'CPS':
-                            units = "CPS"
-                            break
-                        elif unit_type == 'raw':
-                            units = "counts"  # Raw counts data (not per second)
-                            break
-            
-            self.log_print("Creating image copy...")
-            # Start from the original unlabeled image (if available) to avoid overlapping labels
-            if self.original_preview_image is not None:
-                labeled_image = self.original_preview_image.copy()
-            else:
-                # Fallback to current preview_image if original not available
-                labeled_image = self.preview_image.copy()
-            
-            # Get image dimensions
+                        units = "ppm" if unit_type == "ppm" else ("CPS" if unit_type == "CPS" else "counts")
+                        break
             img_width, img_height = labeled_image.size
-            self.log_print(f"Processing image: {img_width}x{img_height}")
-            
-            # Create a drawing context
-            from PIL import ImageDraw, ImageFont
-            draw = ImageDraw.Draw(labeled_image)
-            self.log_print("Setting up font...")
-            
-            # Try to use a nice font, fallback to default if not available
+            min_font_size = max(8, img_width // 80)
+            font_size = max(min_font_size, self._pt_from_font(self.element_label_font, 16))
             try:
-                # Use user-specified font size, with a minimum based on image size
-                min_font_size = max(8, img_width // 80)  # Minimum based on image size
-                font_size = max(min_font_size, self.element_label_font_size.get())
                 font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
-            except:
+            except Exception:
                 try:
-                    font = ImageFont.truetype("arialbd.ttf", font_size)  # Arial Bold
-                except:
+                    font = ImageFont.truetype("arialbd.ttf", font_size)
+                except Exception:
                     try:
                         font = ImageFont.truetype("arial.ttf", font_size)
-                    except:
+                    except Exception:
                         font = ImageFont.load_default()
-            
-            # Prepare the text
             element_text = f"{element_name} ({units})"
-            
-            # Get text dimensions
-            bbox = draw.textbbox((0, 0), element_text, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            
-            # Position text at bottom left corner with more padding
-            x = 50  # 50 pixels from left edge (increased from 20)
-            y = img_height - text_height - 50  # 50 pixels from bottom edge (increased from 20)
-            
-            self.log_print("Drawing label...")
-            # Draw the text in white (no background)
-            draw.text((x, y), element_text, fill=(255, 255, 255), font=font)
-            
-            self.log_print("Updating preview...")
-            # Update the preview image
-            self.preview_image = labeled_image
-            
-            # Update the preview in the Preview tab
-            self.update_preview_image()
-            
-            # Also update separate preview window if it exists (for backward compatibility)
-            if self.preview_window is not None and self.preview_window.winfo_exists():
-                self._update_preview_window_image()
-            
-            self.log_print(f"✅ Added element label: {element_text}")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add element label: {str(e)}")
-            self.log_print(f"Error adding element label: {str(e)}")
+            x, y = 50, img_height - 50
+            draw.text((x, y), element_text, fill=(255, 255, 255), font=font, anchor="lb")
+            return labeled_image
+        except Exception:
+            return img.copy() if img else img
+
+    def add_element_label(self):
+        """Apply or remove element label based on Element label dropdown; update preview."""
+        if not hasattr(self, "preview_image") or self.preview_image is None:
+            return
+        if not hasattr(self, "original_preview_image") or self.original_preview_image is None:
+            return
+        if str(self.element_label_font.get()).strip() == "(None)":
+            self.preview_image = self.original_preview_image.copy()
+        else:
+            self.preview_image = self._add_element_label_to_image(self.original_preview_image)
+        self.update_preview_image()
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            self._update_preview_window_image()
 
 def main():
     root = tk.Tk()
