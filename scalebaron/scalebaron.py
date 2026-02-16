@@ -1923,11 +1923,14 @@ class CompositeApp:
         data_width,
         draw_scale_bar=True,
         scale_bar_font_pt=10,
+        draw_element_label=False,
+        element_label_text="",
+        element_label_font_pt=16,
         dpi=300,
     ):
         """
-        Draw overlay (sample names + scale bar) in base-image pixel coordinates.
-        Base and overlay stay locked: same coordinate system, same scale.
+        Draw a single overlay: sample names, scale bar, and element label in base-image pixel coordinates.
+        All annotations share the same layer and the same pt→pixel scaling (font_pt * dpi / 72).
         Returns RGBA PIL Image same size as base_image.
         """
         W, H = base_image.size
@@ -1984,6 +1987,20 @@ class CompositeApp:
             except Exception:
                 small_font = font
             draw.text((cx_px, cy_px + 12), "\n".join(label_lines), fill=fill, font=small_font, anchor="mt")
+
+        # Element label: same layer, same pt→pixel scaling (so size matches other annotations)
+        if draw_element_label and element_label_text:
+            el_font_pt = max(6, min(72, element_label_font_pt))
+            el_font_px = max(8, int(el_font_pt * dpi / 72))
+            try:
+                el_font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", el_font_px)
+            except Exception:
+                try:
+                    el_font = ImageFont.truetype("arialbd.ttf", el_font_px)
+                except Exception:
+                    el_font = font
+            x_el, y_el = 50, H - 50
+            draw.text((x_el, y_el), element_label_text, fill=fill, font=el_font, anchor="lb")
 
         return overlay
 
@@ -2208,6 +2225,22 @@ class CompositeApp:
         plt.close(fig)
         buf.seek(0)
         base_image = Image.open(buf).convert("RGB")
+        # Element label: same overlay layer, same pt→pixel scaling
+        el_val = self._get_element_label_font_value()
+        draw_element_label = el_val != "(None)"
+        element_label_text = ""
+        if draw_element_label:
+            element_name = self.element.get()
+            units = "ppm"
+            for file in glob.glob(os.path.join(self.input_dir or "", "* matrix.xlsx")):
+                parsed = self.parse_matrix_filename(file)
+                if parsed:
+                    _, el, unit_type = parsed
+                    if el == element_name:
+                        units = "ppm" if unit_type == "ppm" else ("CPS" if unit_type == "CPS" else "counts")
+                        break
+            element_label_text = f"{element_name} ({units})"
+        element_label_font_pt = self._pt_from_font_str(el_val, 16) if draw_element_label else 16
         # Use full figure as bbox so (0,0)-(1,1) figure coords map to (0,0)-(W,H) pixels
         full_fig_bbox = type("Bbox", (), {"x0": 0, "y0": 0, "x1": 1, "y1": 1})()
         overlay = self._build_overlay_image(
@@ -2226,6 +2259,9 @@ class CompositeApp:
             matrices_to_use[-1].shape[1] if matrices_to_use else 0,
             draw_scale_bar=str(self.scale_bar_font.get()).strip() != "(None)",
             scale_bar_font_pt=self._pt_from_font(self.scale_bar_font, 10),
+            draw_element_label=draw_element_label,
+            element_label_text=element_label_text,
+            element_label_font_pt=element_label_font_pt,
             dpi=dpi,
         )
         composited = Image.alpha_composite(base_image.convert("RGBA"), overlay).convert("RGB")
@@ -2237,8 +2273,6 @@ class CompositeApp:
         if preview:
             self.preview_image = composited.copy()
             self.original_preview_image = self.preview_image.copy()
-            if self._get_element_label_font_value() != "(None)":
-                self.preview_image = self._add_element_label_to_image(self.original_preview_image)
             self.preview_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
             self.preview_image.save(self.preview_file)
 
@@ -2251,8 +2285,7 @@ class CompositeApp:
         else:
             out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            to_save = self._add_element_label_to_image(composited) if self._get_element_label_font_value() != "(None)" else composited
-            to_save.save(out_path)
+            composited.save(out_path)
             
             # Update progress table - mark as complete
             element = self.element.get()
@@ -2391,18 +2424,8 @@ class CompositeApp:
             return img.copy() if img else img
 
     def add_element_label(self):
-        """Apply or remove element label based on Element label dropdown; update preview."""
-        if not hasattr(self, "preview_image") or self.preview_image is None:
-            return
-        if not hasattr(self, "original_preview_image") or self.original_preview_image is None:
-            return
-        if self._get_element_label_font_value() == "(None)":
-            self.preview_image = self.original_preview_image.copy()
-        else:
-            self.preview_image = self._add_element_label_to_image(self.original_preview_image)
-        self.update_preview_image()
-        if self.preview_window is not None and self.preview_window.winfo_exists():
-            self._update_preview_window_image()
+        """Element label is drawn in the overlay; changing the dropdown triggers full refresh via trace. This runs refresh so preview updates (e.g. if called from elsewhere)."""
+        self._on_font_change_refresh_preview()
 
 def main():
     root = tk.Tk()
