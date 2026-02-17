@@ -290,10 +290,10 @@ class CompositeApp:
                   bg="#4CAF50", fg="black", width=1, height=3)
         self.batch_btn.pack(pady=(0, 5))
         
-        # Batch progress bar (visible during batch; updates in real time with Status Log)
+        # Shared progress bar (Batch processing and Calculate Statistics; updates in real time with Status Log)
         self.batch_progress_frame = ttk.Frame(button_frame)
         self.batch_progress_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(self.batch_progress_frame, text="Batch progress:", style="Hint.TLabel").pack(anchor="w")
+        ttk.Label(self.batch_progress_frame, text="Progress:", style="Hint.TLabel").pack(anchor="w")
         self.batch_progress_bar = ttk.Progressbar(self.batch_progress_frame, mode='determinate', maximum=100, value=0)
         self.batch_progress_bar.pack(fill=tk.X, pady=(2, 2))
         self.batch_progress_label = ttk.Label(self.batch_progress_frame, text="", style="Hint.TLabel")
@@ -348,31 +348,50 @@ class CompositeApp:
         progress_section = ttk.Frame(paned)
         paned.add(progress_section, weight=1)
         ttk.Label(progress_section, text="Progress Table:", style="Hint.TLabel").pack(anchor="center", padx=5, pady=(5, 0))
-        
+
         progress_frame = ttk.Frame(progress_section)
         progress_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
-        
-        # Create Treeview for progress table (embedded version)
-        self.progress_table = ttk.Treeview(progress_frame, columns=(), show="headings", height=6)
-        progress_xscroll = ttk.Scrollbar(progress_frame, orient=tk.HORIZONTAL, command=self.progress_table.xview)
-        progress_yscroll = ttk.Scrollbar(progress_frame, orient=tk.VERTICAL, command=self.progress_table.yview)
-        self.progress_table.configure(xscrollcommand=progress_xscroll.set, yscrollcommand=progress_yscroll.set)
-        
-        self.progress_table.grid(row=0, column=0, sticky='nsew')
-        progress_yscroll.grid(row=0, column=1, sticky='ns')
-        progress_xscroll.grid(row=1, column=0, sticky='ew')
+
+        # Progress table: scrollable grid of Labels so each cell can have its own colour (complete/partial/not started/no file)
+        self.progress_table_canvas = tk.Canvas(progress_frame, highlightthickness=0)
+        progress_yscroll = ttk.Scrollbar(progress_frame, orient=tk.VERTICAL, command=self.progress_table_canvas.yview)
+        progress_xscroll = ttk.Scrollbar(progress_frame, orient=tk.HORIZONTAL, command=self.progress_table_canvas.xview)
+        self.progress_table_canvas.configure(yscrollcommand=progress_yscroll.set, xscrollcommand=progress_xscroll.set)
+        self.progress_table_inner = tk.Frame(self.progress_table_canvas, bg="#f0f0f0")
+        self.progress_table_inner_window = self.progress_table_canvas.create_window((0, 0), window=self.progress_table_inner, anchor="nw")
+        self.progress_table_canvas.grid(row=0, column=0, sticky="nsew")
+        progress_yscroll.grid(row=0, column=1, sticky="ns")
+        progress_xscroll.grid(row=1, column=0, sticky="ew")
         progress_frame.grid_rowconfigure(0, weight=1)
         progress_frame.grid_columnconfigure(0, weight=1)
-        
-        # Configure tag colors for progress table
-        self.progress_table.tag_configure("complete", background="#90EE90")
-        self.progress_table.tag_configure("partial", background="#FFE4B5")
-        self.progress_table.tag_configure("missing", background="#FFB6C1")
-        self.progress_table.tag_configure("missing_file", background="#D3D3D3", foreground="#666666")
-        
-        # Click on Include column toggles selection for that sample
-        self.progress_table.bind("<ButtonRelease-1>", self._on_progress_table_click)
-        
+
+        def _on_progress_frame_configure(event):
+            self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
+        def _on_canvas_configure(event):
+            self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=event.width)
+        self.progress_table_inner.bind("<Configure>", _on_progress_frame_configure)
+        self.progress_table_canvas.bind("<Configure>", _on_canvas_configure)
+        self.progress_table = self.progress_table_inner  # so "if progress_table" checks still work
+
+        # Legend for progress table colours
+        legend_frame = ttk.Frame(progress_section)
+        legend_frame.pack(fill=tk.X, padx=5, pady=(2, 0))
+        _legends = (
+            ("#90EE90", "Complete (composite saved)"),
+            ("#FFE4B5", "Partial (statistics only)"),
+            ("#FFB6C1", "Not started"),
+            ("#D3D3D3", "No input file (!)"),
+        )
+        for bg, text in _legends:
+            row = ttk.Frame(legend_frame)
+            row.pack(side=tk.LEFT, padx=(0, 12))
+            swatch = tk.Frame(row, width=14, height=14, bg=bg, relief="solid", borderwidth=1)
+            swatch.pack(side=tk.LEFT, padx=(0, 4))
+            swatch.pack_propagate(False)
+            ttk.Label(row, text=text, style="Hint.TLabel").pack(side=tk.LEFT)
+
+        # Include column cells are bound to _toggle_sample_include in update_progress_table()
+
         # Add refresh button for progress table
         refresh_frame = ttk.Frame(progress_section)
         refresh_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
@@ -697,9 +716,11 @@ class CompositeApp:
             self.log_print("Status: Idle - No progress data found.")
     
     def _on_progress_table_click(self, event):
-        """Toggle sample include when user clicks the Include (checkbox) column."""
+        """Toggle sample include when user clicks the Include (checkbox) column. No-op when using grid (Include cells bound separately)."""
         if not hasattr(self, 'progress_table') or self.progress_table is None:
             return
+        if not hasattr(self.progress_table, 'identify_region'):
+            return  # Grid of Labels, not Treeview; Include handled by _toggle_sample_include
         region = self.progress_table.identify_region(event.x, event.y)
         if region != "cell":
             return
@@ -905,122 +926,79 @@ class CompositeApp:
             )
             self.stats_table.insert('', tk.END, values=values)
     
+    def _toggle_sample_include(self, sample):
+        """Toggle include state for a sample (called when user clicks Include cell)."""
+        if sample not in self.progress_samples:
+            return
+        self.sample_include[sample] = not self.sample_include.get(sample, True)
+        self.update_progress_table()
+
     def update_progress_table(self):
-        """Update the progress table display."""
-        if not hasattr(self, 'progress_table') or self.progress_table is None:
-            # Widget not initialized yet - this is normal during startup
-            # Don't log an error, just return silently
+        """Update the progress table display. Uses a grid of Labels so each cell has its own colour."""
+        if not hasattr(self, 'progress_table_inner') or self.progress_table_inner is None:
             return
-        
-        try:
-            # Clear existing - handle case where columns might be empty
-            current_columns = self.progress_table["columns"]
-            if current_columns:
-                for col in current_columns:
-                    try:
-                        self.progress_table.heading(col, text="")
-                    except:
-                        pass
-            # Clear all rows
-            for item in self.progress_table.get_children():
-                try:
-                    self.progress_table.delete(item)
-                except:
-                    pass
-        except Exception as e:
-            try:
-                self.log_print(f"⚠️ Error clearing progress table: {e}")
-                import traceback
-                self.log_print(traceback.format_exc())
-            except:
-                pass
-            return
-        
+
+        inner = self.progress_table_inner
+        for w in inner.winfo_children():
+            w.destroy()
+
+        # Status colours (per-cell)
+        _bg_complete = "#90EE90"
+        _bg_partial = "#FFE4B5"
+        _bg_missing = "#FFB6C1"
+        _bg_missing_file = "#D3D3D3"
+        _bg_header = "#e0e0e0"
+        _bg_include_sample = "#f0f0f0"
+
         if not self.progress_elements:
-            # Add a message row if no elements
-            try:
-                # Configure a single column for the message
-                self.progress_table.configure(columns=("message",))
-                self.progress_table.heading("message", text="")
-                self.progress_table.column("message", width=400)
-                self.progress_table.insert('', tk.END, values=["No elements found. Please calculate statistics first."])
-            except Exception as e:
-                try:
-                    self.log_print(f"⚠️ Error adding message to progress table: {e}")
-                except:
-                    pass
+            tk.Label(inner, text="No elements found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+            inner.update_idletasks()
+            if hasattr(self, 'progress_table_canvas'):
+                self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
             return
-        
+
         if not self.progress_samples:
-            # Add a message row if no samples
-            try:
-                # Configure a single column for the message
-                self.progress_table.configure(columns=("message",))
-                self.progress_table.heading("message", text="")
-                self.progress_table.column("message", width=400)
-                self.progress_table.insert('', tk.END, values=["No samples found. Please calculate statistics first."])
-            except Exception as e:
-                try:
-                    self.log_print(f"⚠️ Error adding message to progress table: {e}")
-                except:
-                    pass
+            tk.Label(inner, text="No samples found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+            inner.update_idletasks()
+            if hasattr(self, 'progress_table_canvas'):
+                self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
             return
-        
-        # Set up columns: Include (checkbox) + Sample + elements
-        all_cols = ["Include", "Sample"] + self.progress_elements
-        self.progress_table.configure(columns=all_cols)
-        
-        for col in all_cols:
-            self.progress_table.heading(col, text="✓" if col == "Include" else col)
-            if col == "Include":
-                self.progress_table.column(col, width=36, anchor="center", minwidth=32)
-            elif col == "Sample":
-                # Auto-size sample column based on longest sample name
-                max_sample_len = max([len(s) for s in self.progress_samples] + [6])  # "Sample" header
-                self.progress_table.column(col, width=min(max_sample_len * 8 + 20, 200), anchor="w", minwidth=80)
-            else:
-                # Element columns - just wide enough for checkmark or element name
-                self.progress_table.column(col, width=50, anchor="center", minwidth=40)
-        
-        # Add rows
-        for sample in self.progress_samples:
+
+        all_cols = ["Include", "Sample"] + list(self.progress_elements)
+        max_sample_len = max([len(s) for s in self.progress_samples] + [6])
+        col_widths = [4, max(8, min(max_sample_len + 1, 24))] + [5] * len(self.progress_elements)
+
+        # Header row
+        for c, (col_name, wd) in enumerate(zip(all_cols, col_widths)):
+            text = "✓" if col_name == "Include" else col_name
+            tk.Label(inner, text=text, bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=wd, anchor="center" if col_name != "Sample" else "w").grid(row=0, column=c, sticky="nsew", padx=1, pady=1)
+
+        # Data rows: each cell is a Label with its own background
+        for r, sample in enumerate(self.progress_samples, start=1):
             incl = self.sample_include.get(sample, True)
-            values = ["☑" if incl else "☐", sample]
-            cell_statuses = []
-            for element in self.progress_elements:
+            incl_text = "☑" if incl else "☐"
+            incl_lbl = tk.Label(inner, text=incl_text, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[0], anchor="center", cursor="hand2")
+            incl_lbl.grid(row=r, column=0, sticky="nsew", padx=1, pady=1)
+            incl_lbl.bind("<ButtonRelease-1>", lambda e, s=sample: self._toggle_sample_include(s))
+
+            tk.Label(inner, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[1], anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
+
+            for c, element in enumerate(self.progress_elements):
                 status = self.progress_data.get((sample, element))
                 if status == 'complete':
-                    values.append("✓")
-                    cell_statuses.append('complete')
+                    bg, text = _bg_complete, "✓"
                 elif status == 'partial':
-                    values.append("~")
-                    cell_statuses.append('partial')
+                    bg, text = _bg_partial, ""  # Partial: colour only, no symbol
                 elif status == 'missing_file':
-                    values.append("X")
-                    cell_statuses.append('missing_file')
+                    bg, text = _bg_missing_file, "!"  # No input file
                 else:
-                    values.append("")
-                    cell_statuses.append('missing')
-            
-            # Determine row color based on status distribution
-            # Only mark row as complete if ALL elements are complete (and no missing files)
-            # Mark as partial if any are partial or complete (but not all complete)
-            # Mark as missing only if all are missing or missing_file
-            if all(s == 'complete' for s in cell_statuses):
-                row_tag = "complete"
-            elif any(s == 'complete' for s in cell_statuses) or any(s == 'partial' for s in cell_statuses):
-                row_tag = "partial"
-            elif all(s in ('missing', 'missing_file') for s in cell_statuses):
-                row_tag = "missing"
-            else:
-                row_tag = "missing"  # Default
-            
-            self.progress_table.insert("", tk.END, values=values, tags=(row_tag,))
-            
-            # Apply per-cell tags for missing_file cells (ttk.Treeview limitation - we'll use row tag for now)
-            # Note: Individual cell coloring would require custom drawing, so missing_file cells
-            # will show "X" but use row-level coloring
-    
+                    bg, text = _bg_missing, ""  # Not started
+                tk.Label(inner, text=text, bg=bg, font=("TkDefaultFont", 11), width=col_widths[2 + c], anchor="center").grid(row=r, column=2 + c, sticky="nsew", padx=1, pady=1)
+
+        inner.update_idletasks()
+        if hasattr(self, 'progress_table_canvas'):
+            self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
+
     def update_sample_element_progress(self, sample, element, status='complete'):
         """Update progress for a specific sample-element pair."""
         if (sample, element) in self.progress_data:
@@ -1256,8 +1234,8 @@ class CompositeApp:
         write_to_log(self.log if hasattr(self, 'log') else None)
         write_to_log(self.log_preview if hasattr(self, 'log_preview') else None)
         
-        # During batch, process events so Status Log and progress bar update in real time
-        if getattr(self, '_batch_running', False):
+        # During batch or Calculate Statistics, process events so Status Log and progress bar update in real time
+        if getattr(self, '_batch_running', False) or getattr(self, '_stats_calculating', False):
             self.master.update()
         else:
             self.master.update_idletasks()
@@ -1385,168 +1363,196 @@ class CompositeApp:
             messagebox.showerror("Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
             return
 
-        # Check for existing statistics.csv to enable incremental processing
-        stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
-        existing_stats_df = None
-        existing_samples = set()
-        
-        if os.path.exists(stats_path):
-            try:
-                existing_stats_df = pd.read_csv(stats_path)
-                if 'Sample' in existing_stats_df.columns:
-                    existing_samples = set(existing_stats_df['Sample'].tolist())
-                    # Progress table will show this information
-            except Exception as e:
-                self.log_print(f"⚠️ Could not read existing statistics: {e}")
-        
-        # Determine if we need to calculate statistics
-        # Get list of samples from files
-        samples_from_files = set()
-        for f in files:
-            parsed = self.parse_matrix_filename(f)
-            if parsed:
-                sample, parsed_element, _ = parsed
-                if parsed_element == element:
-                    samples_from_files.add(sample)
-        
-        # Check if all samples already have statistics
-        all_samples_exist = existing_samples and samples_from_files.issubset(existing_samples)
-        
-        if all_samples_exist:
-            self.log_print("Status: Busy - Loading matrices (statistics already exist, skipping calculation)...")
-        else:
-            self.log_print("Status: Busy - Loading matrices and calculating statistics...")
+        # Share progress bar with Batch so user sees live progress (same as batch processing)
+        num_files = len(files)
+        self._stats_calculating = True
+        if hasattr(self, 'summarize_btn'):
+            self.summarize_btn.config(state=tk.DISABLED)
+        if hasattr(self, 'batch_progress_bar'):
+            self.batch_progress_bar['value'] = 0
+            self.batch_progress_bar['maximum'] = 100
+        if hasattr(self, 'batch_progress_label'):
+            self.batch_progress_label.config(text="Calculate statistics: Starting...")
+        self.master.update()
 
-        self.matrices = []
-        self.labels = []
-        self.current_element_unit = None  # ppm, CPS, or raw (for color bar label)
-        self.pixel_sizes_by_sample = {}
-        percentiles = []
-        iqrs = []
-        means = []
-        new_samples = []  # Track which samples are new
+        try:
+            # Check for existing statistics.csv to enable incremental processing
+            stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
+            existing_stats_df = None
+            existing_samples = set()
 
-        # If using custom pixel sizes, only load data for samples present in the custom file
-        samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
+            if os.path.exists(stats_path):
+                try:
+                    existing_stats_df = pd.read_csv(stats_path)
+                    if 'Sample' in existing_stats_df.columns:
+                        existing_samples = set(existing_stats_df['Sample'].tolist())
+                        # Progress table will show this information
+                except Exception as e:
+                    self.log_print(f"⚠️ Could not read existing statistics: {e}")
 
-        for f in files:
-            parsed = self.parse_matrix_filename(f)
-            if parsed:
-                sample, parsed_element, unit_type = parsed
-                # Verify the element matches (safety check)
-                if parsed_element != element:
-                    continue
-                if samples_to_load is None or sample in samples_to_load:
-                    if self.current_element_unit is None:
-                        self.current_element_unit = unit_type
-                    # Check if this sample is new
-                    is_new = sample not in existing_samples
-                    
-                    try:
-                        matrix = self.load_matrix_2d(f)
-                        self.labels.append(sample)
-                        self.matrices.append(matrix)
-                    except (FileNotFoundError, Exception) as e:
-                        # Handle Dropbox sync issues or other file loading errors
-                        error_msg = str(e)
-                        self.log_print(f"❌ Failed to load {sample}: {error_msg}")
-                        # Continue processing other files instead of stopping
+            # Determine if we need to calculate statistics
+            # Get list of samples from files
+            samples_from_files = set()
+            for f in files:
+                parsed = self.parse_matrix_filename(f)
+                if parsed:
+                    sample, parsed_element, _ = parsed
+                    if parsed_element == element:
+                        samples_from_files.add(sample)
+
+            # Check if all samples already have statistics
+            all_samples_exist = existing_samples and samples_from_files.issubset(existing_samples)
+
+            if all_samples_exist:
+                self.log_print("Status: Busy - Loading matrices (statistics already exist, skipping calculation)...")
+            else:
+                self.log_print("Status: Busy - Loading matrices and calculating statistics...")
+
+            self.matrices = []
+            self.labels = []
+            self.current_element_unit = None  # ppm, CPS, or raw (for color bar label)
+            self.pixel_sizes_by_sample = {}
+            percentiles = []
+            iqrs = []
+            means = []
+            new_samples = []  # Track which samples are new
+
+            # If using custom pixel sizes, only load data for samples present in the custom file
+            samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
+
+            for idx, f in enumerate(files, 1):
+                display_name = os.path.basename(f)
+                parsed = self.parse_matrix_filename(f)
+                if parsed:
+                    sample, parsed_element, unit_type = parsed
+                    display_name = sample
+                    # Verify the element matches (safety check)
+                    if parsed_element != element:
                         continue
-                    
-                    # Get the pixel size for this sample
-                    if self.use_custom_pixel_sizes.get() and sample in self.custom_pixel_sizes:
-                        pixel_size = self.custom_pixel_sizes[sample]
-                    else:
-                        pixel_size = self.pixel_size.get()
+                    if samples_to_load is None or sample in samples_to_load:
+                        if self.current_element_unit is None:
+                            self.current_element_unit = unit_type
+                        # Check if this sample is new
+                        is_new = sample not in existing_samples
 
-                    self.pixel_sizes_by_sample[sample] = pixel_size
+                        try:
+                            matrix = self.load_matrix_2d(f)
+                            self.labels.append(sample)
+                            self.matrices.append(matrix)
+                        except (FileNotFoundError, Exception) as e:
+                            # Handle Dropbox sync issues or other file loading errors
+                            error_msg = str(e)
+                            self.log_print(f"❌ Failed to load {sample}: {error_msg}")
+                            # Continue processing other files instead of stopping
+                            continue
 
-                    # Only process statistics and histograms for new samples
-                    if is_new:
-                        new_samples.append(sample)
-                        
-                        # Calculate percentiles, IQR, and mean
-                        p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
-                        iqr = p75 - p25
-                        mean = np.nanmean(matrix)
-                        percentiles.append((sample, p25, p50, p75, p99))
-                        iqrs.append((sample, iqr))
-                        means.append((sample, mean))
-                        
-                        # Generate and save histogram
-                        plt.figure(figsize=(10, 6))
-                        plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
-                        plt.title(f"Histogram for {sample}")
-                        plt.xlabel("Value")
-                        plt.ylabel("Frequency")
-                        hist_path = os.path.join(self.output_dir, element, 'Histograms', f"{sample}_histogram.png")
-                        os.makedirs(os.path.dirname(hist_path), exist_ok=True)
-                        plt.savefig(hist_path)
-                        plt.close()
-                        
-                        # Update progress table for this sample
-                        if hasattr(self, 'progress_table') and self.progress_table:
-                            self.update_sample_element_progress(sample, element, 'partial')
-                            self.update_progress_table()
+                        # Get the pixel size for this sample
+                        if self.use_custom_pixel_sizes.get() and sample in self.custom_pixel_sizes:
+                            pixel_size = self.custom_pixel_sizes[sample]
+                        else:
+                            pixel_size = self.pixel_size.get()
 
-        # Merge new statistics with existing ones
-        if existing_stats_df is not None and new_samples:
-            # Create new statistics DataFrame
-            new_percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
-            new_iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
-            new_mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
-            new_stats_df = new_percentiles_df.merge(new_iqr_df, on='Sample').merge(new_mean_df, on='Sample')
-            
-            # Combine with existing
-            stats_df = pd.concat([existing_stats_df, new_stats_df], ignore_index=True)
-            
-            # Round statistics and save
-            stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
-            os.makedirs(os.path.dirname(stats_path), exist_ok=True)
-            stats_df.to_csv(stats_path, index=False)
-        elif existing_stats_df is not None:
-            # No new samples, use existing (don't need to recalculate or save)
-            stats_df = existing_stats_df
-            self.log_print(f"✓ Using existing statistics for {len(existing_samples)} sample(s)")
-        else:
-            # No existing stats, create new
-            percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
-            iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
-            mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
-            stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
-            
-            # Round statistics and save
-            stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
-            os.makedirs(os.path.dirname(stats_path), exist_ok=True)
-            stats_df.to_csv(stats_path, index=False)
-        
-        # Update statistics table display
-        self.update_statistics_table(stats_df)
-        
-        # Update progress table
-        if hasattr(self, 'progress_table') and self.progress_table:
-            self._check_existing_progress()
-            self.update_progress_table()
-        
-        self.set_status("Idle")
-        self.log_print("Status: Idle - Statistics calculation complete.")
+                        self.pixel_sizes_by_sample[sample] = pixel_size
 
-        # Set scale_max based on 99th percentile of ALL data (existing + new)
-        overall_99th = np.nanpercentile(np.hstack([m.flatten() for m in self.matrices]), 99)
-        self.scale_max.set(round(overall_99th,3))
-        self.log_print(f"Scale max set to {self.scale_max.get():.2f} based on overall 99th percentile (all {len(self.matrices)} sample(s))")
-        
-        # Progress table will show this information - no need to log
-        
-        # Update progress table - mark as partial (histograms and stats done)
-        element = self.element.get()
-        for sample in self.labels:
-            self.update_sample_element_progress(sample, element, 'partial')
-        
-        # Update progress table display
-        if hasattr(self, 'progress_table') and self.progress_table:
-            self._check_existing_progress()
-            self.update_progress_table()
+                        # Only process statistics and histograms for new samples
+                        if is_new:
+                            new_samples.append(sample)
+
+                            # Calculate percentiles, IQR, and mean
+                            p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
+                            iqr = p75 - p25
+                            mean = np.nanmean(matrix)
+                            percentiles.append((sample, p25, p50, p75, p99))
+                            iqrs.append((sample, iqr))
+                            means.append((sample, mean))
+
+                            # Generate and save histogram
+                            plt.figure(figsize=(10, 6))
+                            plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
+                            plt.title(f"Histogram for {sample}")
+                            plt.xlabel("Value")
+                            plt.ylabel("Frequency")
+                            hist_path = os.path.join(self.output_dir, element, 'Histograms', f"{sample}_histogram.png")
+                            os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+                            plt.savefig(hist_path)
+                            plt.close()
+
+                            # Update progress table for this sample
+                            if hasattr(self, 'progress_table') and self.progress_table:
+                                self.update_sample_element_progress(sample, element, 'partial')
+                                self.update_progress_table()
+
+                # Update shared progress bar every file so user sees live progress (same as batch)
+                if hasattr(self, 'batch_progress_bar'):
+                    self.batch_progress_bar['value'] = (idx / num_files) * 100
+                if hasattr(self, 'batch_progress_label'):
+                    self.batch_progress_label.config(text=f"Sample {idx} of {num_files}: {display_name}")
+                self.master.update()
+
+            # Merge new statistics with existing ones
+            if existing_stats_df is not None and new_samples:
+                # Create new statistics DataFrame
+                new_percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
+                new_iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
+                new_mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
+                new_stats_df = new_percentiles_df.merge(new_iqr_df, on='Sample').merge(new_mean_df, on='Sample')
+
+                # Combine with existing
+                stats_df = pd.concat([existing_stats_df, new_stats_df], ignore_index=True)
+
+                # Round statistics and save
+                stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
+                os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+                stats_df.to_csv(stats_path, index=False)
+            elif existing_stats_df is not None:
+                # No new samples, use existing (don't need to recalculate or save)
+                stats_df = existing_stats_df
+                self.log_print(f"✓ Using existing statistics for {len(existing_samples)} sample(s)")
+            else:
+                # No existing stats, create new
+                percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
+                iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
+                mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
+                stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
+
+                # Round statistics and save
+                stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
+                os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+                stats_df.to_csv(stats_path, index=False)
+
+            # Update statistics table display
+            self.update_statistics_table(stats_df)
+
+            # Update progress table
+            if hasattr(self, 'progress_table') and self.progress_table:
+                self._check_existing_progress()
+                self.update_progress_table()
+
+            self.set_status("Idle")
+            self.log_print("Status: Idle - Statistics calculation complete.")
+
+            # Set scale_max based on 99th percentile of ALL data (existing + new)
+            overall_99th = np.nanpercentile(np.hstack([m.flatten() for m in self.matrices]), 99)
+            self.scale_max.set(round(overall_99th,3))
+            self.log_print(f"Scale max set to {self.scale_max.get():.2f} based on overall 99th percentile (all {len(self.matrices)} sample(s))")
+
+            # Update progress table - mark as partial (histograms and stats done)
+            element = self.element.get()
+            for sample in self.labels:
+                self.update_sample_element_progress(sample, element, 'partial')
+
+            # Update progress table display
+            if hasattr(self, 'progress_table') and self.progress_table:
+                self._check_existing_progress()
+                self.update_progress_table()
+        finally:
+            self._stats_calculating = False
+            if hasattr(self, 'summarize_btn'):
+                self.summarize_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar['value'] = 100
+            if hasattr(self, 'batch_progress_label'):
+                self.batch_progress_label.config(text="Complete")
 
     def show_preview_window(self):
         """Display the preview image in a separate window."""

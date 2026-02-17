@@ -11,7 +11,8 @@ This guide is for anyone who wants to run the **development version** of ScaleBa
   - During setup, check **“Add Python to PATH”** so you can use `python` and `pip` from Command Prompt or PowerShell.
 
 - **Git** (to clone the repo)  
-  - Download from [git-scm.com/download/win](https://git-scm.com/download/win) if you don’t have it.
+  - Download from [git-scm.com/download/win](https://git-scm.com/download/win) if you don’t have it.  
+  - A **GitHub account is not required** to clone this public repo; the clone command works without logging in.
 
 ---
 
