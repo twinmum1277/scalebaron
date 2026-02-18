@@ -166,9 +166,10 @@ class CompositeApp:
         
         # Progress tracking
         self.progress_samples = []  # List of sample names
-        self.progress_elements = []  # List of element names
-        self.progress_table = None  # Treeview widget
-        self.progress_data = {}  # {(sample, element): status} where status is 'complete', 'partial', or None
+        self.progress_elements = []  # List of element names (unique, for dropdown)
+        self.progress_columns = []   # List of (element, unit_type) for table columns, grouped: ppm, then CPS, then raw
+        self.progress_table = None
+        self.progress_data = {}  # {(sample, element, unit_type): status} where status is 'complete', 'partial', 'missing_file', or None
         self.sample_include = {}  # sample name -> bool; which samples to include in scaling/preview (default True)
         
         # Status tracking for simplified log
@@ -528,7 +529,14 @@ class CompositeApp:
         
         # Save Composite Matrix button (for Muad'Data)
         ttk.Label(action_frame, text="Save Composite Matrix (for Muad'Data)", style="Hint.TLabel").pack(pady=(5, 0))
-        save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
+        save_matrix_icon = self.button_icons.get('save_matrix')
+        if save_matrix_icon:
+            save_matrix_btn = tk.Button(action_frame, image=save_matrix_icon, command=self.save_composite_matrix,
+                                        padx=2, pady=8, bg='#f0f0f0', relief='raised',
+                                        activebackground='#4CAF50')
+            save_matrix_btn.image = save_matrix_icon
+        else:
+            save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
         save_matrix_btn.pack(pady=(0, 5))
         
         # Progress Log at bottom of control panel
@@ -608,6 +616,7 @@ class CompositeApp:
             'preview': 'preview.png',
             'add_label': 'add_label.png',  # Also check for 'label.png' as fallback
             'save': 'save.png',
+            'save_matrix': 'save_matrix.png',
             'batch': 'batch.png',
             'progress': 'progress.png'
         }
@@ -811,47 +820,60 @@ class CompositeApp:
         return selected
     
     def scan_progress_table(self):
-        """Scan input folder and build initial progress table."""
+        """Scan input folder and build initial progress table. Columns grouped by unit: ppm, CPS, raw."""
         if not self.input_dir or not os.path.isdir(self.input_dir):
             return
-        
+
         samples = set()
-        elements = set()
-        files_found = set()  # Track which sample-element pairs have input files
-        
-        # Scan for all matrix files (both old format with ppm/CPS and new format without)
+        columns_seen = set()  # (element, unit_type)
+        files_found = set()   # (sample, element, unit_type)
+
+        # Scan for all matrix files (old format ppm/CPS, new format raw)
         for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
             parsed = self.parse_matrix_filename(file)
             if parsed:
-                sample, element, _ = parsed
+                sample, element, unit_type = parsed
                 samples.add(sample)
-                elements.add(element)
-                files_found.add((sample, element))
-        
-        # Sort elements (symbol + mass)
-        def sort_key(elem):
+                columns_seen.add((element, unit_type))
+                files_found.add((sample, element, unit_type))
+
+        def elem_sort_key(elem):
             m = re.search(r"(\D+)(\d+)$", elem)
             if m:
                 return (m.group(1), int(m.group(2)))
             return (elem, 0)
-        
+
+        unit_order = ('ppm', 'CPS', 'raw')
+        # Build progress_columns: ppm first, then CPS, then raw; within each group sort by element
+        by_unit = {}
+        for (element, unit_type) in columns_seen:
+            by_unit.setdefault(unit_type, []).append(element)
+        self.progress_columns = []
+        for ut in unit_order:
+            if ut in by_unit:
+                for elem in sorted(by_unit[ut], key=elem_sort_key):
+                    self.progress_columns.append((elem, ut))
+        # Any unit type not in unit_order (e.g. future) at end
+        for ut, elems in by_unit.items():
+            if ut not in unit_order:
+                for elem in sorted(elems, key=elem_sort_key):
+                    self.progress_columns.append((elem, ut))
+
         self.progress_samples = sorted(samples)
-        self.progress_elements = sorted(elements, key=sort_key)
-        # Preserve selection for existing samples; default new samples to included
+        self.progress_elements = sorted(set(e for e, _ in self.progress_columns), key=elem_sort_key)
         for sample in self.progress_samples:
             if sample not in self.sample_include:
                 self.sample_include[sample] = True
-        
-        # Build complete grid: mark files that exist vs missing
+
+        # Build progress_data: (sample, element, unit_type) -> status
         self.progress_data = {}
         for sample in self.progress_samples:
-            for element in self.progress_elements:
-                if (sample, element) in files_found:
-                    self.progress_data[(sample, element)] = None  # File exists, not processed yet
+            for (element, unit_type) in self.progress_columns:
+                if (sample, element, unit_type) in files_found:
+                    self.progress_data[(sample, element, unit_type)] = None
                 else:
-                    self.progress_data[(sample, element)] = 'missing_file'  # Input file doesn't exist
-        
-        # Check existing output files to determine initial status
+                    self.progress_data[(sample, element, unit_type)] = 'missing_file'
+
         self._check_existing_progress()
         # Only update table if widget exists
         if hasattr(self, 'progress_table') and self.progress_table is not None:
@@ -883,37 +905,34 @@ class CompositeApp:
                                 samples.add(sample)
         
         if samples and elements:
-            # Sort elements
             def sort_key(elem):
                 m = re.search(r"(\D+)(\d+)$", elem)
                 if m:
                     return (m.group(1), int(m.group(2)))
                 return (elem, 0)
-            
+
             self.progress_samples = sorted(samples)
             self.progress_elements = sorted(elements, key=sort_key)
+            # No unit info from output; use single column per element (default 'ppm')
+            self.progress_columns = [(e, 'ppm') for e in self.progress_elements]
             for sample in self.progress_samples:
                 if sample not in self.sample_include:
                     self.sample_include[sample] = True
-            # Build progress data - all will be checked by _check_existing_progress
             self.progress_data = {}
             for sample in self.progress_samples:
-                for element in self.progress_elements:
-                    self.progress_data[(sample, element)] = None
-            
+                for (element, unit_type) in self.progress_columns:
+                    self.progress_data[(sample, element, unit_type)] = None
+
             self._check_existing_progress()
-            # Only update table if widget exists
             if hasattr(self, 'progress_table') and self.progress_table is not None:
                 self.update_progress_table()
             self.log_print(f"📊 Inferred progress from output: {len(self.progress_samples)} samples, {len(self.progress_elements)} elements")
     
     def _check_existing_progress(self):
-        """Check output folder for existing files to determine progress status."""
+        """Check output folder for existing files to determine progress status. Output is per-element (not per unit)."""
         if not self.output_dir or not os.path.isdir(self.output_dir):
-            # No output dir means nothing is processed yet - keep all as None
             return
-        
-        # Group by element to check composites (which are per-element, not per-sample)
+
         elements_with_composite = set()
         for element in self.progress_elements:
             element_dir = os.path.join(self.output_dir, element)
@@ -922,31 +941,23 @@ class CompositeApp:
             composite_path = os.path.join(element_dir, f"{element}_composite.png")
             if os.path.exists(composite_path) and os.path.getsize(composite_path) > 0:
                 elements_with_composite.add(element)
-                # Progress table will show this information, no need to log
-        
-        # Update status for each sample-element pair
-        for (sample, element), current_status in list(self.progress_data.items()):
-            # Don't override 'missing_file' status - file doesn't exist, can't be processed
+
+        for (sample, element, unit_type), current_status in list(self.progress_data.items()):
             if current_status == 'missing_file':
                 continue
-            
-            # If composite exists for this element, all samples are complete
             if element in elements_with_composite:
-                self.progress_data[(sample, element)] = 'complete'
+                self.progress_data[(sample, element, unit_type)] = 'complete'
             else:
-                # Check if histogram exists for this specific sample (indicates partial processing)
                 element_dir = os.path.join(self.output_dir, element)
                 hist_dir = os.path.join(element_dir, 'Histograms')
                 if os.path.isdir(hist_dir):
                     hist_path = os.path.join(hist_dir, f"{sample}_histogram.png")
                     if os.path.exists(hist_path) and os.path.getsize(hist_path) > 0:
-                        self.progress_data[(sample, element)] = 'partial'
+                        self.progress_data[(sample, element, unit_type)] = 'partial'
                     else:
-                        # No files found - keep as None (not started, but file exists)
-                        self.progress_data[(sample, element)] = None
+                        self.progress_data[(sample, element, unit_type)] = None
                 else:
-                    # No histograms directory - keep as None (not started, but file exists)
-                    self.progress_data[(sample, element)] = None
+                    self.progress_data[(sample, element, unit_type)] = None
     
     def update_statistics_table(self, stats_df=None):
         """Update the statistics table display with current element's statistics."""
@@ -1010,7 +1021,8 @@ class CompositeApp:
         _bg_header = "#e0e0e0"
         _bg_include_sample = "#f0f0f0"
 
-        if not self.progress_elements:
+        progress_cols = getattr(self, 'progress_columns', None) or [(e, '') for e in self.progress_elements]
+        if not progress_cols:
             tk.Label(inner, text="No elements found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
             inner.update_idletasks()
             if hasattr(self, 'progress_table_canvas'):
@@ -1024,17 +1036,24 @@ class CompositeApp:
                 self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
             return
 
-        all_cols = ["Include", "Sample"] + list(self.progress_elements)
         max_sample_len = max([len(s) for s in self.progress_samples] + [6])
-        col_widths = [4, max(8, min(max_sample_len + 1, 24))] + [5] * len(self.progress_elements)
+        col_widths = [4, max(8, min(max_sample_len + 1, 24))] + [5] * len(progress_cols)
 
-        # Header row
-        for c, (col_name, wd) in enumerate(zip(all_cols, col_widths)):
-            text = "✓" if col_name == "Include" else col_name
-            tk.Label(inner, text=text, bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=wd, anchor="center" if col_name != "Sample" else "w").grid(row=0, column=c, sticky="nsew", padx=1, pady=1)
+        # Header row 0: unit labels (ppm, CPS, raw) above element columns
+        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=0, column=1, sticky="nsew", padx=1, pady=1)
+        for c, (element, unit_type) in enumerate(progress_cols):
+            unit_label = unit_type.upper() if unit_type else ""
+            tk.Label(inner, text=unit_label, bg=_bg_header, font=("TkDefaultFont", 9, "bold"), width=col_widths[2 + c], anchor="center").grid(row=0, column=2 + c, sticky="nsew", padx=1, pady=1)
+
+        # Header row 1: Include, Sample, element names
+        tk.Label(inner, text="✓", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+        tk.Label(inner, text="Sample", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=1, column=1, sticky="nsew", padx=1, pady=1)
+        for c, (element, unit_type) in enumerate(progress_cols):
+            tk.Label(inner, text=element, bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2 + c], anchor="center").grid(row=1, column=2 + c, sticky="nsew", padx=1, pady=1)
 
         # Data rows: each cell is a Label with its own background
-        for r, sample in enumerate(self.progress_samples, start=1):
+        for r, sample in enumerate(self.progress_samples, start=2):
             incl = self.sample_include.get(sample, True)
             incl_text = "☑" if incl else "☐"
             incl_lbl = tk.Label(inner, text=incl_text, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[0], anchor="center", cursor="hand2")
@@ -1043,8 +1062,8 @@ class CompositeApp:
 
             tk.Label(inner, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[1], anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
 
-            for c, element in enumerate(self.progress_elements):
-                status = self.progress_data.get((sample, element))
+            for c, (element, unit_type) in enumerate(progress_cols):
+                status = self.progress_data.get((sample, element, unit_type))
                 if status == 'complete':
                     bg, text = _bg_complete, "✓"
                 elif status == 'partial':
@@ -1060,15 +1079,14 @@ class CompositeApp:
             self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
 
     def update_sample_element_progress(self, sample, element, status='complete'):
-        """Update progress for a specific sample-element pair."""
-        if (sample, element) in self.progress_data:
-            # Don't override 'missing_file' status - can't process what doesn't exist
-            if self.progress_data[(sample, element)] == 'missing_file':
-                return
-            self.progress_data[(sample, element)] = status
-            # Only update table if window is open
-            if self.progress_table and self.progress_table_window and self.progress_table_window.winfo_exists():
-                self.update_progress_table()
+        """Update progress for a specific sample-element pair. Updates all (sample, element, unit_type) entries."""
+        for (s, e, ut), current in list(self.progress_data.items()):
+            if s == sample and e == element:
+                if current == 'missing_file':
+                    continue
+                self.progress_data[(s, e, ut)] = status
+        if hasattr(self, 'progress_table') and self.progress_table is not None:
+            self.update_progress_table()
     
     def check_sample_element_status(self, sample, element):
         """Check the current status of a sample-element pair based on output files."""
