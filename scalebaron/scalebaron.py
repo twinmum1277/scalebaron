@@ -143,6 +143,14 @@ class CompositeApp:
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max, constrained to 2 decimal places
         self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
         self.use_button_icons = tk.BooleanVar(value=False)  # Toggle for icon buttons
+        # Optional credit text overlay on exported images (opt-in)
+        self.add_credit_to_exports = tk.BooleanVar(value=False)
+        self.credit_text = tk.StringVar(
+            value=(
+                "Collected at the Biomedical National Elemental Imaging Resource (BNEIR): "
+                "NIGMS R24GM141194 & NIH 1S10OD032352"
+            )
+        )
 
         self.input_dir = None
         self.output_dir = "./OUTPUT"
@@ -168,11 +176,15 @@ class CompositeApp:
         
         # Button icons storage
         self.button_icons = {}  # Dictionary to store loaded button icons
+        # BNEIR logo (GUI header)
+        self.bneir_logo_image = None
         
         style = ttk.Style()
         style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         # Load icons BEFORE creating buttons so they're available when buttons are created
         self.load_button_icons()
+        # Load BNEIR logo if available
+        self._load_bneir_logo()
         self.setup_widgets()
 
     def setup_widgets(self):
@@ -215,6 +227,8 @@ class CompositeApp:
         left_frame = ttk.Frame(self.setup_tab, width=280)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         left_frame.pack_propagate(False)  # Maintain fixed width
+        # BNEIR logo at top of control panel (outside shaded groups)
+        self._add_bneir_logo(left_frame)
         
         # Right side: Two-panel layout (Statistics Table, Progress Table)
         right_frame = ttk.Frame(self.setup_tab)
@@ -403,6 +417,8 @@ class CompositeApp:
         control_frame = ttk.Frame(self.preview_tab, width=280)
         control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         control_frame.pack_propagate(False)  # Maintain fixed width
+        # BNEIR logo at top of control panel (outside shaded groups)
+        self._add_bneir_logo(control_frame)
         
         # Right side: Preview pane
         preview_frame = ttk.Frame(self.preview_tab)
@@ -454,8 +470,8 @@ class CompositeApp:
         # Log Scale
         ttk.Checkbutton(display_frame, text="Log Scale", variable=self.use_log).grid(row=2, column=0, columnspan=2, pady=2)
         
-        # Font controls: same style for each — (None) = off/default, then point sizes
-        font_frame = ttk.LabelFrame(control_frame, text="Fonts", padding=10)
+        # Label font size: same style for each — (None) = off/default, then point sizes
+        font_frame = ttk.LabelFrame(control_frame, text="Label font size", padding=10)
         font_frame.pack(fill=tk.X, pady=5)
         font_frame.columnconfigure(0, weight=1)
         font_frame.columnconfigure(1, weight=0, minsize=80)
@@ -469,14 +485,16 @@ class CompositeApp:
         self.element_label_font_combobox = _make_font_row(1, "Element label:", self.element_label_font)
         _make_font_row(2, "Scale bar:", self.scale_bar_font)
         _make_font_row(3, "Color bar:", self.color_bar_font)
-        # When any font dropdown changes, refresh preview if one exists (so font size changes apply without re-clicking Preview)
+        ttk.Checkbutton(font_frame, text="Add BNEIR credit", variable=self.add_credit_to_exports).grid(row=4, column=0, columnspan=2, sticky="", padx=5, pady=(4, 0))
+        # When any font dropdown or credit checkbox changes, refresh preview if one exists
         def _refresh_preview_on_font_change(*args):
             self._on_font_change_refresh_preview()
         self.element_label_font.trace_add("write", _refresh_preview_on_font_change)
         self.sample_name_font.trace_add("write", _refresh_preview_on_font_change)
         self.scale_bar_font.trace_add("write", _refresh_preview_on_font_change)
         self.color_bar_font.trace_add("write", _refresh_preview_on_font_change)
-        
+        self.add_credit_to_exports.trace_add("write", _refresh_preview_on_font_change)
+
         # Action buttons
         action_frame = ttk.Frame(control_frame)
         action_frame.pack(fill=tk.X, pady=10)
@@ -536,6 +554,52 @@ class CompositeApp:
         
         # Bind resize event to update the preview image's aspect ratio
         self.preview_container.bind("<Configure>", self.on_resize)
+
+    def _load_bneir_logo(self):
+        """Load BNEIR logo image (used as small header in control panels) if file is available."""
+        self.bneir_logo_image = None
+        try:
+            # Prefer package-relative icons folder; fall back to user-specific path if present
+            candidates = [
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
+                # Fallback to user workspace asset path (development)
+                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_1-ab04aad1-b6cf-48ac-a035-2a5fcce0d8c8.png",
+            ]
+            logo_path = None
+            for path in candidates:
+                if os.path.exists(path):
+                    logo_path = path
+                    break
+            if not logo_path:
+                return
+            img = Image.open(logo_path)
+            max_width = 220
+            w, h = img.size
+            if w > max_width:
+                new_w = max_width
+                new_h = int(h * new_w / float(w))
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+            self.bneir_logo_image = ImageTk.PhotoImage(img)
+        except Exception:
+            self.bneir_logo_image = None
+
+    def _add_bneir_logo(self, parent):
+        """Add BNEIR logo at the top of a control panel if logo is loaded. Centered; background matches panel (no grey box)."""
+        if not getattr(self, "bneir_logo_image", None):
+            return
+        try:
+            # Match the ttk control panel background so no light grey strip shows
+            style = ttk.Style()
+            bg = style.lookup("TFrame", "background")
+            if not bg:
+                bg = self.master.cget("bg")
+        except Exception:
+            bg = self.master.cget("bg") if hasattr(self.master, "cget") else "#f0f0f0"
+        container = tk.Frame(parent, bg=bg)
+        container.pack(fill=tk.X, pady=(0, 5))
+        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
+        lbl.pack(anchor=tk.CENTER)
 
     def load_button_icons(self):
         """
@@ -1631,7 +1695,7 @@ class CompositeApp:
         # Left side: show current font size (set in Fonts group)
         font_frame = tk.Frame(control_panel, bg='#f0f0f0')
         font_frame.pack(side=tk.LEFT, padx=10, pady=8)
-        tk.Label(font_frame, text="Element label (Fonts tab):", font=("Arial", 9), bg='#f0f0f0').pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(font_frame, text="Element label (Label font size):", font=("Arial", 9), bg='#f0f0f0').pack(side=tk.LEFT, padx=(0, 5))
         font_value_label = tk.Label(font_frame, text=f"{self._pt_from_font(self.element_label_font, 16)} pt", font=("Arial", 9), bg='#f0f0f0', width=4)
         font_value_label.pack(side=tk.LEFT)
         
@@ -1932,6 +1996,9 @@ class CompositeApp:
         draw_element_label=False,
         element_label_text="",
         element_label_font_pt=16,
+        draw_credit=False,
+        credit_text="",
+        credit_font_pt=8,
         dpi=300,
     ):
         """
@@ -2007,6 +2074,27 @@ class CompositeApp:
                     el_font = font
             x_el, y_el = 50, H - 50
             draw.text((x_el, y_el), element_label_text, fill=fill, font=el_font, anchor="lb")
+
+        # Optional credit / grant text in lower-right corner (subtle, not bright white)
+        if draw_credit and credit_text:
+            cr_font_pt = max(6, min(48, credit_font_pt))
+            cr_font_px = max(6, int(cr_font_pt * dpi / 72))
+            try:
+                cr_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", cr_font_px)
+            except Exception:
+                try:
+                    cr_font = ImageFont.truetype("arial.ttf", cr_font_px)
+                except Exception:
+                    cr_font = font
+            margin = max(10, int(12 * dpi / 150))
+            x_cr = W - margin
+            y_cr = H - margin
+            # Subtle mid-gray so it doesn't compete with data
+            credit_color = "#666666"
+            try:
+                draw.text((x_cr, y_cr), credit_text, fill=credit_color, font=cr_font, anchor="rd")
+            except Exception:
+                draw.text((x_cr - 5, y_cr - 5), credit_text, fill=credit_color, font=cr_font)
 
         return overlay
 
@@ -2247,6 +2335,9 @@ class CompositeApp:
                         break
             element_label_text = f"{element_name} ({units})"
         element_label_font_pt = self._pt_from_font_str(el_val, 16) if draw_element_label else 16
+        # Optional credit / grant text in lower-right corner (opt-in)
+        credit_text = (self.credit_text.get() or "").strip()
+        draw_credit = bool(self.add_credit_to_exports.get() and credit_text)
         # Use full figure as bbox so (0,0)-(1,1) figure coords map to (0,0)-(W,H) pixels
         full_fig_bbox = type("Bbox", (), {"x0": 0, "y0": 0, "x1": 1, "y1": 1})()
         overlay = self._build_overlay_image(
@@ -2268,6 +2359,9 @@ class CompositeApp:
             draw_element_label=draw_element_label,
             element_label_text=element_label_text,
             element_label_font_pt=element_label_font_pt,
+            draw_credit=draw_credit,
+            credit_text=credit_text,
+            credit_font_pt=8,
             dpi=dpi,
         )
         composited = Image.alpha_composite(base_image.convert("RGBA"), overlay).convert("RGB")
