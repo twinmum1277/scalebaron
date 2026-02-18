@@ -181,6 +181,9 @@ class CompositeApp:
         
         style = ttk.Style()
         style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
+        # Single GUI background grey so control panels and logo area match (no light grey box around logo)
+        self._gui_bg = "#f0f0f0"
+        style.configure("TFrame", background=self._gui_bg)
         # Load icons BEFORE creating buttons so they're available when buttons are created
         self.load_button_icons()
         # Load BNEIR logo if available
@@ -585,17 +588,10 @@ class CompositeApp:
             self.bneir_logo_image = None
 
     def _add_bneir_logo(self, parent):
-        """Add BNEIR logo at the top of a control panel if logo is loaded. Centered; background matches panel (no grey box)."""
+        """Add BNEIR logo at the top of a control panel if logo is loaded. Centered; uses same GUI default grey as panels."""
         if not getattr(self, "bneir_logo_image", None):
             return
-        try:
-            # Match the ttk control panel background so no light grey strip shows
-            style = ttk.Style()
-            bg = style.lookup("TFrame", "background")
-            if not bg:
-                bg = self.master.cget("bg")
-        except Exception:
-            bg = self.master.cget("bg") if hasattr(self.master, "cget") else "#f0f0f0"
+        bg = getattr(self, "_gui_bg", "#f0f0f0")
         container = tk.Frame(parent, bg=bg)
         container.pack(fill=tk.X, pady=(0, 5))
         lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
