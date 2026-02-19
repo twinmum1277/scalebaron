@@ -127,6 +127,7 @@ class CompositeApp:
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
+        self._set_app_icon()
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -603,9 +604,31 @@ class CompositeApp:
             return
         bg = getattr(self, "_gui_bg", "#f0f0f0")
         container = tk.Frame(parent, bg=bg)
-        container.pack(fill=tk.X, pady=(0, 5))
+        container.pack(pady=(0, 5))
         lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
         lbl.pack(anchor=tk.CENTER)
+
+    def _set_app_icon(self):
+        """Set the ScaleBarOn logo for the main window and dialogs (replaces default Python logo)."""
+        try:
+            candidates = [
+                os.path.join(os.path.dirname(__file__), "icons", "scalebaron_icon.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "ScaleBarOn LOGO.png"),
+            ]
+            icon_path = None
+            for path in candidates:
+                if os.path.exists(path):
+                    icon_path = path
+                    break
+            if not icon_path:
+                return
+            img = Image.open(icon_path)
+            if img.size[0] > 64 or img.size[1] > 64:
+                img = img.resize((64, 64), Image.LANCZOS)
+            self._app_icon = ImageTk.PhotoImage(img)
+            self.master.iconphoto(True, self._app_icon)
+        except Exception:
+            pass
 
     def load_button_icons(self):
         """

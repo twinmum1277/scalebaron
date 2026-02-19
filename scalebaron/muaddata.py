@@ -276,6 +276,7 @@ class MuadDataViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
+        self._set_app_icon()
 
         # Single Element Viewer state
         self.single_matrix = None
@@ -469,9 +470,34 @@ class MuadDataViewer:
             return
         bg = getattr(self, "_gui_bg", "#f0f0f0")
         container = tk.Frame(parent, bg=bg)
-        container.pack(fill=tk.X, pady=(0, 5))
+        container.pack(pady=(0, 5))
         lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
         lbl.pack(anchor=tk.CENTER)
+
+    def _set_app_icon(self):
+        """Set the Muad'Data gas-mask icon for the main window and dialogs (replaces default Python logo)."""
+        if not PIL_AVAILABLE:
+            return
+        try:
+            candidates = [
+                os.path.join(os.path.dirname(__file__), "icons", "muaddata_icon.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "muaddata ICON.png"),
+            ]
+            icon_path = None
+            for path in candidates:
+                if os.path.exists(path):
+                    icon_path = path
+                    break
+            if not icon_path:
+                return
+            img = Image.open(icon_path)
+            # Resize to standard icon size for best cross-platform display
+            if img.size[0] > 64 or img.size[1] > 64:
+                img = img.resize((64, 64), Image.LANCZOS)
+            self._app_icon = ImageTk.PhotoImage(img)
+            self.root.iconphoto(True, self._app_icon)
+        except Exception:
+            pass
 
     def _load_button_icons(self):
         """Load viewmap, save, and clear icons (ScaleBarOn style). Used in Element Viewer and RGB tab."""
@@ -480,7 +506,7 @@ class MuadDataViewer:
         if not PIL_AVAILABLE:
             return
         icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'bin.svg')]:
+        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'clear.png')]:
             path = os.path.join(icons_dir, filename)
             if not os.path.exists(path):
                 continue
