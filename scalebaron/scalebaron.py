@@ -142,6 +142,7 @@ class CompositeApp:
         self.color_bar_font = tk.StringVar(value="10")     # (None) = default 10, else pt
         self.scale_max = tk.DoubleVar(value=1.0)  # New variable for scale_max, constrained to 2 decimal places
         self.use_custom_pixel_sizes = tk.BooleanVar(value=False)  # New variable for custom pixel sizes
+        self.use_custom_pixel_sizes.trace_add('write', lambda *a: self._update_save_matrix_button_state())
         self.use_button_icons = tk.BooleanVar(value=False)  # Toggle for icon buttons
         # Optional credit text overlay on exported images (opt-in)
         self.add_credit_to_exports = tk.BooleanVar(value=False)
@@ -527,17 +528,18 @@ class CompositeApp:
             self.save_btn = ttk.Button(action_frame, text="💾", command=self.save_composite, width=1)
         self.save_btn.pack(pady=(0, 10))
         
-        # Save Composite Matrix button (for Muad'Data)
+        # Save Composite Matrix button (for Muad'Data); disabled when multiple pixel sizes (file has no per-panel scale)
         ttk.Label(action_frame, text="Save Composite Matrix (for Muad'Data)", style="Hint.TLabel").pack(pady=(5, 0))
         save_matrix_icon = self.button_icons.get('save_matrix')
         if save_matrix_icon:
-            save_matrix_btn = tk.Button(action_frame, image=save_matrix_icon, command=self.save_composite_matrix,
-                                        padx=2, pady=8, bg='#f0f0f0', relief='raised',
-                                        activebackground='#4CAF50')
-            save_matrix_btn.image = save_matrix_icon
+            self.save_matrix_btn = tk.Button(action_frame, image=save_matrix_icon, command=self.save_composite_matrix,
+                                             padx=2, pady=8, bg='#f0f0f0', relief='raised',
+                                             activebackground='#4CAF50')
+            self.save_matrix_btn.image = save_matrix_icon
         else:
-            save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
-        save_matrix_btn.pack(pady=(0, 5))
+            self.save_matrix_btn = ttk.Button(action_frame, text="💾 Matrix", command=self.save_composite_matrix, width=15)
+        self.save_matrix_btn.pack(pady=(0, 5))
+        self._update_save_matrix_button_state()
         
         # Progress Log at bottom of control panel
         log_group_preview = ttk.LabelFrame(control_frame, text="Status Log", padding=5)
@@ -1039,12 +1041,26 @@ class CompositeApp:
         max_sample_len = max([len(s) for s in self.progress_samples] + [6])
         col_widths = [4, max(8, min(max_sample_len + 1, 24))] + [5] * len(progress_cols)
 
-        # Header row 0: unit labels (ppm, CPS, raw) above element columns
+        # Header row 0: unit labels grouped over element columns (PPM | CPS | RAW)
         tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=0, column=1, sticky="nsew", padx=1, pady=1)
-        for c, (element, unit_type) in enumerate(progress_cols):
-            unit_label = unit_type.upper() if unit_type else ""
-            tk.Label(inner, text=unit_label, bg=_bg_header, font=("TkDefaultFont", 9, "bold"), width=col_widths[2 + c], anchor="center").grid(row=0, column=2 + c, sticky="nsew", padx=1, pady=1)
+        col_start = 2
+        idx = 0
+        while idx < len(progress_cols):
+            element, unit_type = progress_cols[idx]
+            group_ut = unit_type or ""
+            run_start = idx
+            while idx < len(progress_cols) and progress_cols[idx][1] == unit_type:
+                idx += 1
+            span = idx - run_start
+            label_text = group_ut.upper() if group_ut else ""
+            if label_text:
+                # Compute approximate total width of this unit group for nicer centering
+                group_width = sum(col_widths[2 + c] for c in range(col_start - 2, col_start - 2 + span))
+                tk.Label(inner, text=label_text, bg=_bg_header, font=("TkDefaultFont", 9, "bold"),
+                         width=group_width, anchor="center").grid(row=0, column=col_start,
+                                                                 columnspan=span, sticky="nsew", padx=1, pady=1)
+            col_start += span
 
         # Header row 1: Include, Sample, element names
         tk.Label(inner, text="✓", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -1623,6 +1639,8 @@ class CompositeApp:
             if hasattr(self, 'progress_table') and self.progress_table:
                 self._check_existing_progress()
                 self.update_progress_table()
+
+            self._update_save_matrix_button_state()
         finally:
             self._stats_calculating = False
             if hasattr(self, 'summarize_btn'):
@@ -1828,8 +1846,17 @@ class CompositeApp:
             self.set_status("Idle")
             self.log_print(f"❌ Error generating preview: {e}")
 
+    def _update_save_matrix_button_state(self):
+        """Disable Save Composite Matrix when no data or when multiple pixel sizes (saved file has no per-panel scale)."""
+        if not hasattr(self, 'save_matrix_btn') or not self.save_matrix_btn.winfo_exists():
+            return
+        no_data = not getattr(self, 'matrices', None) or len(self.matrices) == 0
+        multiple_sizes = self.use_custom_pixel_sizes.get()
+        self.save_matrix_btn.config(state=tk.DISABLED if (no_data or multiple_sizes) else tk.NORMAL)
+
     def save_composite_matrix(self):
-        """Save a composite matrix file that can be opened in muaddata for polygon selection."""
+        """Save a composite matrix file that can be opened in muaddata for polygon selection.
+        Output is a grid of matrices (with NaN padding/separators); pixel size is not stored in the file."""
         if not self.matrices:
             messagebox.showerror("Error", "No data loaded. Please load data first.")
             return

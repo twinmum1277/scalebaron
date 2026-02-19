@@ -364,6 +364,12 @@ class MuadDataViewer:
         _style.configure("Red.TButton", background="#f44336", foreground="black")
         _style.map("Red.TButton", background=[("active", "#d32f2f")])
 
+        # BNEIR logo (control panel header, same as ScaleBarOn)
+        self._gui_bg = "#f0f0f0"
+        self.bneir_logo_image = None
+        self._load_bneir_logo()
+        self._load_button_icons()
+
         self.single_tab = tk.Frame(self.tabs)
         self.rgb_tab = tk.Frame(self.tabs)
         self.zstack_tab = tk.Frame(self.tabs)
@@ -424,7 +430,78 @@ class MuadDataViewer:
         canvas.bind("<MouseWheel>", on_mousewheel)
         canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
         canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+        self._add_bneir_logo(content)
         return container, content
+
+    def _load_bneir_logo(self):
+        """Load BNEIR logo image (control panel header) if file is available. Requires PIL."""
+        self.bneir_logo_image = None
+        if not PIL_AVAILABLE:
+            return
+        try:
+            candidates = [
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
+                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_small-8a92b83b-b9a5-4c31-acf1-933cfc9214e0.png",
+            ]
+            logo_path = None
+            for path in candidates:
+                if os.path.exists(path):
+                    logo_path = path
+                    break
+            if not logo_path:
+                return
+            img = Image.open(logo_path)
+            max_width = 220
+            w, h = img.size
+            if w > max_width:
+                new_w = max_width
+                new_h = int(h * new_w / float(w))
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+            self.bneir_logo_image = ImageTk.PhotoImage(img)
+        except Exception:
+            self.bneir_logo_image = None
+
+    def _add_bneir_logo(self, parent):
+        """Add BNEIR logo at the top of the control panel if loaded. Matches panel background, no extra shading."""
+        if not getattr(self, "bneir_logo_image", None):
+            return
+        bg = getattr(self, "_gui_bg", "#f0f0f0")
+        container = tk.Frame(parent, bg=bg)
+        container.pack(fill=tk.X, pady=(0, 5))
+        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
+        lbl.pack(anchor=tk.CENTER)
+
+    def _load_button_icons(self):
+        """Load viewmap, save, and clear icons (ScaleBarOn style). Used in Element Viewer and RGB tab."""
+        self.button_icons = {}
+        self.rgb_button_icons = {}
+        if not PIL_AVAILABLE:
+            return
+        icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
+        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'bin.svg')]:
+            path = os.path.join(icons_dir, filename)
+            if not os.path.exists(path):
+                continue
+            try:
+                if filename.lower().endswith('.svg'):
+                    try:
+                        import cairosvg
+                        import io
+                        png_data = cairosvg.svg2png(url=path, output_width=28, output_height=28)
+                        img = Image.open(io.BytesIO(png_data))
+                    except Exception:
+                        continue
+                else:
+                    img = Image.open(path)
+                    if img.size[0] != 28 or img.size[1] != 28:
+                        img = img.resize((28, 28), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.button_icons[key] = photo
+                self.rgb_button_icons[key] = photo
+            except Exception:
+                pass
 
     def pad_slices_to_same_size(self, slices):
         """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
@@ -826,9 +903,39 @@ class MuadDataViewer:
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
         ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar).pack(anchor='w')
         ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar).pack(anchor='w')
-        ttk.Button(load_group, text="View Map", command=self.view_single_map, width=10).pack(pady=(4, 2))
-        ttk.Button(load_group, text="Save PNG", command=self.save_single_image, width=10).pack(pady=(0, 2))
-        ttk.Button(load_group, text="Map Math", command=self.open_map_math, style="Green.TButton", width=10).pack(pady=(4, 0))
+        # View Map / Save PNG as icon buttons (ScaleBarOn style)
+        elem_action_frame = ttk.Frame(load_group)
+        elem_action_frame.pack(fill=tk.X, pady=(4, 2))
+        viewmap_icon = self.button_icons.get('viewmap')
+        view_cell = ttk.Frame(elem_action_frame)
+        view_cell.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(view_cell, text="View Map", style="Hint.TLabel").pack(pady=(0, 2))
+        if viewmap_icon:
+            view_btn = tk.Button(view_cell, image=viewmap_icon, command=self.view_single_map, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            view_btn.image = viewmap_icon
+            view_btn.pack(anchor=tk.CENTER)
+        else:
+            ttk.Button(view_cell, text="View", command=self.view_single_map, width=6).pack(anchor=tk.CENTER)
+        save_icon = self.button_icons.get('save')
+        save_cell = ttk.Frame(elem_action_frame)
+        save_cell.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(save_cell, text="Save PNG", style="Hint.TLabel").pack(pady=(0, 2))
+        if save_icon:
+            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_single_image, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            save_btn.image = save_icon
+            save_btn.pack(anchor=tk.CENTER)
+        else:
+            ttk.Button(save_cell, text="Save", command=self.save_single_image, width=6).pack(anchor=tk.CENTER)
+        map_math_icon = self.button_icons.get('map_math')
+        map_math_cell = ttk.Frame(elem_action_frame)
+        map_math_cell.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(map_math_cell, text="Map Math", style="Hint.TLabel").pack(pady=(0, 2))
+        if map_math_icon:
+            math_btn = tk.Button(map_math_cell, image=map_math_icon, command=self.open_map_math, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            math_btn.image = map_math_icon
+            math_btn.pack(anchor=tk.CENTER)
+        else:
+            ttk.Button(map_math_cell, text="Map Math", command=self.open_map_math, style="Green.TButton", width=8).pack(anchor=tk.CENTER)
 
         # --- Scale bar ---
         scale_group = ttk.LabelFrame(control_frame, text="Scale bar", padding=10)
@@ -1777,35 +1884,7 @@ class MuadDataViewer:
 
     # --- The rest of the code (RGB tab, etc) remains unchanged ---
 
-    def _load_rgb_button_icons(self):
-        """Load preview, save, and clear (trash) icons from Scalebaron icons folder (saves GUI space)."""
-        self.rgb_button_icons = {}
-        if not PIL_AVAILABLE:
-            return
-        icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-        for key, filename in [('preview', 'preview.png'), ('save', 'save.png'), ('clear', 'bin.svg')]:
-            path = os.path.join(icons_dir, filename)
-            if not os.path.exists(path):
-                continue
-            try:
-                if filename.lower().endswith('.svg'):
-                    try:
-                        import cairosvg
-                        import io
-                        png_data = cairosvg.svg2png(url=path, output_width=28, output_height=28)
-                        img = Image.open(io.BytesIO(png_data))
-                    except Exception:
-                        continue
-                else:
-                    img = Image.open(path)
-                    if img.size[0] != 28 or img.size[1] != 28:
-                        img = img.resize((28, 28), Image.LANCZOS)
-                self.rgb_button_icons[key] = ImageTk.PhotoImage(img)
-            except Exception:
-                pass
-
     def build_rgb_tab(self):
-        self._load_rgb_button_icons()
         control_container, control_frame = self._make_scrollable_control_panel(self.rgb_tab)
         control_container.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -1881,15 +1960,15 @@ class MuadDataViewer:
         overlay_group.pack(fill=tk.X, pady=(0, 5))
         rgb_action_frame = ttk.Frame(overlay_group)
         rgb_action_frame.pack(fill=tk.X)
-        preview_icon = getattr(self, 'rgb_button_icons', {}).get('preview')
+        viewmap_icon = getattr(self, 'rgb_button_icons', {}).get('viewmap')
         save_icon = getattr(self, 'rgb_button_icons', {}).get('save')
-        # View overlay: hint label + centered icon button (Scalebaron-style)
+        # View overlay: hint label + viewmap (eye) icon button (ScaleBarOn style)
         view_cell = ttk.Frame(rgb_action_frame)
         view_cell.pack(side=tk.LEFT, padx=(0, 8))
         ttk.Label(view_cell, text="View overlay", style="Hint.TLabel").pack(pady=(0, 2))
-        if preview_icon:
-            view_btn = tk.Button(view_cell, image=preview_icon, command=self.view_rgb_overlay, padx=2, pady=8, bg='#f0f0f0', relief='flat', highlightthickness=0, bd=0)
-            view_btn.image = preview_icon
+        if viewmap_icon:
+            view_btn = tk.Button(view_cell, image=viewmap_icon, command=self.view_rgb_overlay, padx=2, pady=8, bg='#f0f0f0', relief='flat', highlightthickness=0, bd=0)
+            view_btn.image = viewmap_icon
             view_btn.pack(anchor=tk.CENTER)
         else:
             view_btn = ttk.Button(view_cell, text="View", command=self.view_rgb_overlay, width=6)
@@ -1909,7 +1988,7 @@ class MuadDataViewer:
         clear_cell = ttk.Frame(rgb_action_frame)
         clear_cell.pack(side=tk.LEFT)
         ttk.Label(clear_cell, text="Clear data", style="Hint.TLabel").pack(pady=(0, 2))
-        clear_icon = getattr(self, 'rgb_button_icons', {}).get('clear')
+        clear_icon = getattr(self, 'rgb_button_icons', {}).get('clear')  # bin.svg
         if clear_icon:
             clear_btn = tk.Button(clear_cell, image=clear_icon, command=self.clear_rgb_data, padx=2, pady=8, bg='#f44336', fg='black', relief='flat', highlightthickness=0, bd=0)
             clear_btn.image = clear_icon
