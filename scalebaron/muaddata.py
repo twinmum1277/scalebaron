@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # Muad'Data v18 - Element Viewer + RGB Overlay + Zoom/Crop Feature
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox, colorchooser, simpledialog
+from tkinter import filedialog, ttk, colorchooser, simpledialog
+from . import custom_dialogs
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -28,7 +29,7 @@ except ImportError:
 class MathExpressionDialog:
     def __init__(self, parent, title="Enter Mathematical Expression"):
         self.result = None
-        
+        self.parent = parent
         # Create dialog window
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
@@ -108,7 +109,7 @@ class MathExpressionDialog:
     def apply_expression(self):
         expression = self.expression_entry.get().strip()
         if not expression:
-            messagebox.showerror("Error", "Please enter a mathematical expression.")
+            custom_dialogs.showerror(self.parent, "Error", "Please enter a mathematical expression.")
             return
         
         # Validate expression
@@ -119,7 +120,7 @@ class MathExpressionDialog:
             self.result = expression
             self.dialog.destroy()
         except Exception as e:
-            messagebox.showerror("Invalid Expression", f"The expression contains an error:\n{str(e)}\n\nPlease check your syntax.")
+            custom_dialogs.showerror(self.parent, "Invalid Expression", f"The expression contains an error:\n{str(e)}\n\nPlease check your syntax.")
     
     def cancel(self):
         self.dialog.destroy()
@@ -707,7 +708,7 @@ class MuadDataViewer:
             self.zstack_render_preview()
             self.update_zstack_offset_label()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load slice:\n{e}")
+            custom_dialogs.showerror(self.root, "Error", f"Failed to load slice:\n{e}")
 
     def set_zmax_slider_limit(self):
         try:
@@ -826,7 +827,7 @@ class MuadDataViewer:
 
     def zstack_sum_slices(self):
         if not self.zstack_slices:
-            messagebox.showwarning("No Slices", "Please add at least one slice.")
+            custom_dialogs.showwarning(self.root, "No Slices", "Please add at least one slice.")
             return
         slices = [np.array(s, dtype=float) for s in self.zstack_slices]
         for s in slices:
@@ -857,11 +858,11 @@ class MuadDataViewer:
         self._zstack_colorbar.ax.tick_params(labelsize=12)
         self.zstack_figure.tight_layout()
         self.zstack_canvas.draw()
-        messagebox.showinfo("Done", f"Summed {len(slices)} slice(s).")
+        custom_dialogs.showinfo(self.root, "Done", f"Summed {len(slices)} slice(s).")
 
     def zstack_save_sum(self):
         if self.zstack_sum_matrix is None:
-            messagebox.showwarning("Nothing to Save", "Please sum slices first.")
+            custom_dialogs.showwarning(self.root, "Nothing to Save", "Please sum slices first.")
             return
         out_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv"), ("Excel", "*.xlsx")])
         if not out_path:
@@ -874,9 +875,9 @@ class MuadDataViewer:
             else:
                 # Default to CSV
                 np.savetxt(out_path, self.zstack_sum_matrix, delimiter=",", fmt='%g')
-            messagebox.showinfo("Saved", f"Saved summed matrix to: {out_path}")
+            custom_dialogs.showinfo(self.root, "Saved", f"Saved summed matrix to: {out_path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save summed matrix:\n{e}")
+            custom_dialogs.showerror(self.root, "Error", f"Failed to save summed matrix:\n{e}")
 
     def build_single_tab(self):
         control_container, control_frame = self._make_scrollable_control_panel(self.single_tab)
@@ -1050,7 +1051,7 @@ class MuadDataViewer:
     def open_map_math(self):
         """Open the map math dialog and apply mathematical expressions to the loaded matrix."""
         if self.single_matrix is None:
-            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
             return
         
         # Create and show the math expression dialog
@@ -1082,7 +1083,7 @@ class MuadDataViewer:
                                 result = eval(dialog.result, {"__builtins__": {}}, {"x": x, "np": np})
                                 result_mat[i, j] = result
                             except Exception as e:
-                                messagebox.showerror("Evaluation Error", f"Error evaluating expression for cell [{i},{j}]:\n{str(e)}")
+                                custom_dialogs.showerror(self.root, "Evaluation Error", f"Error evaluating expression for cell [{i},{j}]:\n{str(e)}")
                                 return
                 
                 # Update the current matrix with the result
@@ -1108,14 +1109,14 @@ class MuadDataViewer:
                 self.update_file_label()
                 
                 # Ask user if they want to save the result
-                save_result = messagebox.askyesno("Save Result", 
+                save_result = custom_dialogs.askyesno(self.root, "Save Result", 
                                                 "Expression applied successfully!\n\nWould you like to save the result to a file?")
                 
                 if save_result:
                     self.save_math_result(result_mat, dialog.result)
                 
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to apply expression:\n{str(e)}")
+                custom_dialogs.showerror(self.root, "Error", f"Failed to apply expression:\n{str(e)}")
 
     def save_math_result(self, result_matrix, expression):
         """Save the math result to a file with automatic naming."""
@@ -1148,14 +1149,14 @@ class MuadDataViewer:
                     df = pd.DataFrame(result_matrix)
                     df.to_csv(save_path, header=False, index=False)
                 
-                messagebox.showinfo("Saved", 
+                custom_dialogs.showinfo(self.root, "Saved", 
                                   f"Math result saved successfully!\n\n"
                                   f"File: {os.path.basename(save_path)}\n"
                                   f"Expression: {expression}\n"
                                   f"Matrix shape: {result_matrix.shape}")
                 
             except Exception as e:
-                messagebox.showerror("Save Error", f"Failed to save the result:\n{str(e)}")
+                custom_dialogs.showerror(self.root, "Save Error", f"Failed to save the result:\n{str(e)}")
 
     def update_file_label(self):
         """Update the file label to show loaded file and math status."""
@@ -1175,7 +1176,7 @@ class MuadDataViewer:
     def toggle_zoom_mode(self):
         """Toggle zoom selection mode on/off."""
         if self.single_matrix is None:
-            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
             return
         
         if not self.zoom_active:
@@ -1226,11 +1227,11 @@ class MuadDataViewer:
         
         # Validate bounds
         if x1 < 0 or y1 < 0 or x2 > self.single_matrix.shape[1] or y2 > self.single_matrix.shape[0]:
-            messagebox.showerror("Invalid Selection", "Selection is out of bounds. Please try again.")
+            custom_dialogs.showerror(self.root, "Invalid Selection", "Selection is out of bounds. Please try again.")
             return
         
         if x2 - x1 < 5 or y2 - y1 < 5:
-            messagebox.showwarning("Selection Too Small", "Please select a larger region.")
+            custom_dialogs.showwarning(self.root, "Selection Too Small", "Please select a larger region.")
             return
         
         # Store the crop bounds
@@ -1286,7 +1287,7 @@ class MuadDataViewer:
     def save_cropped_matrix(self):
         """Save the cropped matrix to a file."""
         if self.cropped_matrix is None:
-            messagebox.showwarning("No Cropped Data", "Please select and zoom to a region first.")
+            custom_dialogs.showwarning(self.root, "No Cropped Data", "Please select and zoom to a region first.")
             return
         
         # Generate default filename
@@ -1317,7 +1318,7 @@ class MuadDataViewer:
                     df.to_csv(save_path, header=False, index=False)
                 
                 x1, x2, y1, y2 = self.crop_bounds
-                messagebox.showinfo("Saved", 
+                custom_dialogs.showinfo(self.root, "Saved", 
                                   f"Cropped matrix saved successfully!\n\n"
                                   f"File: {os.path.basename(save_path)}\n"
                                   f"Region: ({x1}, {y1}) to ({x2}, {y2})\n"
@@ -1325,7 +1326,7 @@ class MuadDataViewer:
                                   f"You can now import this into ScaleBaron!")
                 
             except Exception as e:
-                messagebox.showerror("Save Error", f"Failed to save cropped matrix:\n{str(e)}")
+                custom_dialogs.showerror(self.root, "Save Error", f"Failed to save cropped matrix:\n{str(e)}")
     
     def reset_zoom(self):
         """Reset to the full matrix view."""
@@ -1369,7 +1370,7 @@ class MuadDataViewer:
     def toggle_polygon_mode(self):
         """Toggle polygon selection mode on/off."""
         if self.single_matrix is None:
-            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
             return
         
         if not self.polygon_active:
@@ -1385,7 +1386,7 @@ class MuadDataViewer:
             # Connect event handlers (single handler handles both single and double click)
             self.polygon_cid = self.single_canvas.mpl_connect('button_press_event', self.on_polygon_click)
             
-            messagebox.showinfo("Polygon Selection", 
+            custom_dialogs.showinfo(self.root, "Polygon Selection", 
                               "Click to place vertices.\n"
                               "Double-click the last vertex (or click the first vertex) to complete the polygon.")
         else:
@@ -1449,7 +1450,7 @@ class MuadDataViewer:
     def complete_polygon(self):
         """Complete the polygon and calculate statistics."""
         if len(self.polygon_vertices) < 3:
-            messagebox.showwarning("Invalid Polygon", "A polygon needs at least 3 vertices.")
+            custom_dialogs.showwarning(self.root, "Invalid Polygon", "A polygon needs at least 3 vertices.")
             self.polygon_vertices = []
             self.view_single_map()
             return
@@ -1495,7 +1496,7 @@ class MuadDataViewer:
         if self.polygon_results_window:
             self.update_polygon_results_table()
         
-        messagebox.showinfo("Polygon Complete", f"Region '{name}' added. Statistics calculated.")
+        custom_dialogs.showinfo(self.root, "Polygon Complete", f"Region '{name}' added. Statistics calculated.")
     
     def calculate_polygon_statistics(self, vertices):
         """Calculate statistics for pixels inside the polygon."""
@@ -1737,7 +1738,7 @@ class MuadDataViewer:
     def export_polygon_results(self):
         """Export polygon statistics to CSV."""
         if not self.polygon_data:
-            messagebox.showwarning("No Data", "No polygon regions to export.")
+            custom_dialogs.showwarning(self.root, "No Data", "No polygon regions to export.")
             return
         
         file_path = filedialog.asksaveasfilename(
@@ -1758,17 +1759,17 @@ class MuadDataViewer:
             
             df = pd.DataFrame(rows)
             df.to_csv(file_path, index=False)
-            messagebox.showinfo("Export Complete", f"Statistics exported to:\n{file_path}")
+            custom_dialogs.showinfo(self.root, "Export Complete", f"Statistics exported to:\n{file_path}")
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export:\n{e}")
+            custom_dialogs.showerror(self.root, "Export Error", f"Failed to export:\n{e}")
     
     def clear_all_polygons(self):
         """Clear all polygon selections."""
         if not self.polygon_data:
-            messagebox.showinfo("No Polygons", "No polygons to clear.")
+            custom_dialogs.showinfo(self.root, "No Polygons", "No polygons to clear.")
             return
         
-        result = messagebox.askyesno("Clear All Polygons", 
+        result = custom_dialogs.askyesno(self.root, "Clear All Polygons", 
                                     f"Are you sure you want to clear all {len(self.polygon_data)} polygon region(s)?")
         if result:
             self.polygon_data = []
@@ -1784,7 +1785,7 @@ class MuadDataViewer:
             self.view_single_map()
             if self.polygon_results_table:
                 self.update_polygon_results_table()
-            messagebox.showinfo("Cleared", "All polygon regions have been cleared.")
+            custom_dialogs.showinfo(self.root, "Cleared", "All polygon regions have been cleared.")
 
     def get_polygon_file_path(self):
         """Get the path to the polygon JSON file for the current matrix file."""
@@ -1899,7 +1900,7 @@ class MuadDataViewer:
             if loaded_count > 0:
                 self.view_single_map()
                 if skipped_count > 0:
-                    messagebox.showinfo("Polygons Loaded", 
+                    custom_dialogs.showinfo(self.root, "Polygons Loaded", 
                                       f"Loaded {loaded_count} polygon region(s).\n"
                                       f"{skipped_count} polygon(s) skipped (out of bounds).")
         except Exception as e:
@@ -2134,7 +2135,7 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.axis('off')
             if hasattr(self, 'rgb_colorbar_canvas'):
                 self.rgb_colorbar_canvas.draw()
-        messagebox.showinfo("Cleared", "All RGB data has been cleared.")
+        custom_dialogs.showinfo(self.root, "Cleared", "All RGB data has been cleared.")
 
     def set_rgb_max_slider_limit(self, channel):
         try:
@@ -2234,7 +2235,7 @@ class MuadDataViewer:
             
             self.view_single_map()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load matrix file:\n{e}")
+            custom_dialogs.showerror(self.root, "Error", f"Failed to load matrix file:\n{e}")
             self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
             self.single_file_path = None
@@ -2412,9 +2413,9 @@ class MuadDataViewer:
                     self.rgb_max_limits[channel].set(round(max_val))
                 # Update max value display
                 self.update_rgb_max_value_display(channel)
-            messagebox.showinfo("Loaded", f"{channel} channel loaded with shape {mat.shape}")
+            custom_dialogs.showinfo(self.root, "Loaded", f"{channel} channel loaded with shape {mat.shape}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load {channel} channel:\n{e}")
+            custom_dialogs.showerror(self.root, "Error", f"Failed to load {channel} channel:\n{e}")
 
     def view_rgb_overlay(self, event=None):
         def rescale(mat, vmax):
@@ -2434,7 +2435,7 @@ class MuadDataViewer:
                 shape = self.rgb_data[ch].shape
                 break
         if shape is None:
-            messagebox.showwarning("No Data", "Please load at least one channel.")
+            custom_dialogs.showwarning(self.root, "No Data", "Please load at least one channel.")
             return
         composite = []
         for ch in 'RGB':
@@ -2601,19 +2602,19 @@ class MuadDataViewer:
 
     def save_rgb_image(self):
         if all(self.rgb_data[c] is None for c in 'RGB'):
-            messagebox.showwarning("No Data", "Please load at least one RGB channel before saving.")
+            custom_dialogs.showwarning(self.root, "No Data", "Please load at least one RGB channel before saving.")
             return
         try:
             # Check if RGB image exists
             if not hasattr(self, 'rgb_ax') or self.rgb_ax is None:
-                messagebox.showerror("Error", "No RGB image to save. Please view the overlay first.")
+                custom_dialogs.showerror(self.root, "Error", "No RGB image to save. Please view the overlay first.")
                 return
             images = self.rgb_ax.get_images()
             if not images:
-                messagebox.showerror("Error", "No RGB image to save. Please view the overlay first.")
+                custom_dialogs.showerror(self.root, "Error", "No RGB image to save. Please view the overlay first.")
                 return
         except Exception as e:
-            messagebox.showerror("Error", f"Error accessing RGB image: {str(e)}")
+            custom_dialogs.showerror(self.root, "Error", f"Error accessing RGB image: {str(e)}")
             return
         
         out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
@@ -2622,7 +2623,7 @@ class MuadDataViewer:
         
         try:
             # Check if we should save with or without colorbar
-            save_with_colorbar = messagebox.askyesno(
+            save_with_colorbar = custom_dialogs.askyesno(
                 "Save Options",
                 "Would you like to save the image with the colorbar?\n\n"
                 "Yes: Save RGB image + colorbar combined\n"
@@ -2811,10 +2812,10 @@ class MuadDataViewer:
                 fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black', pad_inches=0)
                 plt.close(fig)
             
-            messagebox.showinfo("Success", f"RGB image saved successfully to:\n{out_path}")
+            custom_dialogs.showinfo(self.root, "Success", f"RGB image saved successfully to:\n{out_path}")
         except Exception as e:
             error_msg = f"Error saving RGB image:\n{str(e)}\n\nPlease try again. If the problem persists, ensure the overlay is displayed first."
-            messagebox.showerror("Save Error", error_msg)
+            custom_dialogs.showerror(self.root, "Save Error", error_msg)
             # Try to close any open figures to prevent resource leaks
             try:
                 plt.close('all')
@@ -2829,15 +2830,15 @@ class MuadDataViewer:
         
         # Check if both elements are loaded
         if self.rgb_data[elem1] is None:
-            messagebox.showwarning("Missing Data", f"Please load data for {elem1} channel first.")
+            custom_dialogs.showwarning(self.root, "Missing Data", f"Please load data for {elem1} channel first.")
             return
         if self.rgb_data[elem2] is None:
-            messagebox.showwarning("Missing Data", f"Please load data for {elem2} channel first.")
+            custom_dialogs.showwarning(self.root, "Missing Data", f"Please load data for {elem2} channel first.")
             return
         
         # Check if trying to divide element by itself
         if elem1 == elem2:
-            messagebox.showwarning("Invalid Selection", "Please select two different elements.")
+            custom_dialogs.showwarning(self.root, "Invalid Selection", "Please select two different elements.")
             return
         
         # Get the matrices
@@ -2846,7 +2847,7 @@ class MuadDataViewer:
         
         # Check if matrices have the same shape
         if mat1.shape != mat2.shape:
-            messagebox.showerror("Shape Mismatch", 
+            custom_dialogs.showerror(self.root, "Shape Mismatch", 
                                 f"Element matrices have different shapes:\n"
                                 f"{elem1}: {mat1.shape}\n{elem2}: {mat2.shape}\n"
                                 f"Cannot calculate ratio.")
@@ -2946,7 +2947,7 @@ class MuadDataViewer:
     def save_ratio_matrix(self):
         """Save the ratio matrix to an Excel or CSV file."""
         if self.ratio_matrix is None:
-            messagebox.showwarning("No Ratio Data", "Please calculate a ratio map first.")
+            custom_dialogs.showwarning(self.root, "No Ratio Data", "Please calculate a ratio map first.")
             return
         
         # Get element names for filename
@@ -2985,21 +2986,21 @@ class MuadDataViewer:
                 if self.correlation_coefficient is not None:
                     corr_text = f"\nPearson r = {self.correlation_coefficient:.4f}"
                 
-                messagebox.showinfo("Saved", 
+                custom_dialogs.showinfo(self.root, "Saved", 
                                   f"Ratio matrix saved successfully!\n\n"
                                   f"File: {os.path.basename(save_path)}\n"
                                   f"Ratio: {elem1_name} / {elem2_name}\n"
                                   f"Matrix shape: {self.ratio_matrix.shape}{corr_text}")
                 
             except Exception as e:
-                messagebox.showerror("Save Error", f"Failed to save ratio matrix:\n{str(e)}")
+                custom_dialogs.showerror(self.root, "Save Error", f"Failed to save ratio matrix:\n{str(e)}")
     
     def save_ratio_image(self, figure):
         """Save the ratio map figure as a PNG."""
         out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if out_path:
             figure.savefig(out_path, dpi=300, bbox_inches='tight')
-            messagebox.showinfo("Saved", f"Ratio map image saved to:\n{os.path.basename(out_path)}")
+            custom_dialogs.showinfo(self.root, "Saved", f"Ratio map image saved to:\n{os.path.basename(out_path)}")
     
     # --- End Correlation & Ratio Analysis Functions ---
 

@@ -4,7 +4,8 @@
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, font
+from tkinter import filedialog, ttk, font
+from . import custom_dialogs
 import numpy as np  # pyright: ignore[reportMissingImports]
 import matplotlib  # pyright: ignore[reportMissingImports]
 import matplotlib.pyplot as plt
@@ -136,6 +137,7 @@ class CompositeApp:
         self.use_log = tk.BooleanVar(value=False)
         self.color_scheme = tk.StringVar(value="jet")
         self.element = tk.StringVar()
+        self.unit = tk.StringVar()  # ppm, CPS, or raw; filters files when element has multiple units
         # Fonts: same style for each — (None) = off/default, then point sizes
         self.sample_name_font = tk.StringVar(value="12")   # (None) = off, else pt
         self.element_label_font = tk.StringVar(value="16")  # (None) = default 16 when adding, else pt
@@ -264,19 +266,24 @@ class CompositeApp:
         ttk.Label(element_pixel_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.element_dropdown = ttk.Combobox(element_pixel_frame, textvariable=self.element, state="disabled", width=12)
         self.element_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-        # Update statistics table when element changes
-        self.element.trace('w', lambda *args: self.update_statistics_table())
+        # Unit dropdown (ppm, CPS, raw); filters files when element has multiple units
+        ttk.Label(element_pixel_frame, text="Unit:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        self.unit_dropdown = ttk.Combobox(element_pixel_frame, textvariable=self.unit, state="readonly", width=12)
+        self.unit_dropdown.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        # Update unit dropdown and statistics when element changes; statistics when unit changes
+        self.element.trace('w', lambda *args: (self.update_unit_dropdown(), self.update_statistics_table()))
+        self.unit.trace('w', lambda *args: self.update_statistics_table())
         
         # Pixel Size input
-        ttk.Label(element_pixel_frame, text="Pixel Size (µm):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(element_pixel_frame, text="Pixel Size (µm):").grid(row=2, column=0, sticky="e", padx=5, pady=2)
         pixel_entry_frame = ttk.Frame(element_pixel_frame)
-        pixel_entry_frame.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        pixel_entry_frame.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         ttk.Entry(pixel_entry_frame, textvariable=self.pixel_size, width=10).pack(side="top", anchor="w")
         ttk.Label(pixel_entry_frame, text="Hint: In your metadata", style="Hint.TLabel").pack(side="top", anchor="w", pady=(2, 0))
         
         # Multiple sizes checkbox
         multi_size_frame = ttk.Frame(element_pixel_frame)
-        multi_size_frame.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
+        multi_size_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
         ttk.Checkbutton(multi_size_frame, text="Multiple sizes?", variable=self.use_custom_pixel_sizes).pack(side="top", anchor="w")
         ttk.Button(multi_size_frame, text="Pixel Sizes", command=self.handle_pixel_sizes).pack(side="top", anchor="w", pady=(5, 0))
         
@@ -430,13 +437,15 @@ class CompositeApp:
         preview_frame = ttk.Frame(self.preview_tab)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Element dropdown at top
+        # Element and Unit dropdowns at top
         element_group = ttk.Frame(control_frame)
         element_group.pack(pady=5)
         ttk.Label(element_group, text="Element:").pack(side=tk.LEFT, padx=5)
         self.element_dropdown_preview = ttk.Combobox(element_group, textvariable=self.element, state="readonly", width=12)
         self.element_dropdown_preview.pack(side=tk.LEFT, padx=5)
-        # Update statistics table when element changes (same trace as in setup tab)
+        ttk.Label(element_group, text="Unit:").pack(side=tk.LEFT, padx=(10, 2))
+        self.unit_dropdown_preview = ttk.Combobox(element_group, textvariable=self.unit, state="readonly", width=8)
+        self.unit_dropdown_preview.pack(side=tk.LEFT, padx=2)
         
         # Layout controls
         layout_frame = ttk.LabelFrame(control_frame, text="Layout", padding=10)
@@ -905,31 +914,34 @@ class CompositeApp:
             self.update_progress_table()
     
     def _scan_progress_from_output(self):
-        """Scan output folder to infer progress when input folder is not available."""
+        """Scan output folder to infer progress when input folder is not available. Folders are element_unit (e.g. Fe_ppm)."""
         if not self.output_dir or not os.path.isdir(self.output_dir):
             return
         
         samples = set()
-        elements = set()
+        progress_cols = []  # (element, unit_type)
         
-        # Scan output directories for element folders
+        # Scan output directories (element_unit folders e.g. Fe_ppm, Fe_CPS)
         for item in os.listdir(self.output_dir):
             element_dir = os.path.join(self.output_dir, item)
             if os.path.isdir(element_dir):
-                # Check if this looks like an element folder (has composite or histograms)
                 composite_path = os.path.join(element_dir, f"{item}_composite.png")
                 hist_dir = os.path.join(element_dir, 'Histograms')
                 
                 if os.path.exists(composite_path) or (os.path.isdir(hist_dir) and os.listdir(hist_dir)):
-                    elements.add(item)
-                    # Try to find samples from histogram files
+                    # Parse element_unit: "Fe_ppm" -> (Fe, ppm)
+                    if "_" in item and item.rsplit("_", 1)[1] in ('ppm', 'CPS', 'raw'):
+                        elem, ut = item.rsplit("_", 1)
+                        progress_cols.append((elem, ut))
+                    else:
+                        progress_cols.append((item, 'ppm'))  # legacy: no unit in folder name
                     if os.path.isdir(hist_dir):
                         for hist_file in os.listdir(hist_dir):
                             if hist_file.endswith('_histogram.png'):
                                 sample = hist_file.replace('_histogram.png', '')
                                 samples.add(sample)
         
-        if samples and elements:
+        if samples and progress_cols:
             def sort_key(elem):
                 m = re.search(r"(\D+)(\d+)$", elem)
                 if m:
@@ -937,9 +949,8 @@ class CompositeApp:
                 return (elem, 0)
 
             self.progress_samples = sorted(samples)
-            self.progress_elements = sorted(elements, key=sort_key)
-            # No unit info from output; use single column per element (default 'ppm')
-            self.progress_columns = [(e, 'ppm') for e in self.progress_elements]
+            self.progress_columns = sorted(set(progress_cols), key=lambda x: (('ppm', 'CPS', 'raw').index(x[1]) if x[1] in ('ppm', 'CPS', 'raw') else 99, sort_key(x[0])))
+            self.progress_elements = sorted(set(e for e, _ in self.progress_columns), key=sort_key)
             for sample in self.progress_samples:
                 if sample not in self.sample_include:
                     self.sample_include[sample] = True
@@ -954,33 +965,36 @@ class CompositeApp:
             self.log_print(f"📊 Inferred progress from output: {len(self.progress_samples)} samples, {len(self.progress_elements)} elements")
     
     def _check_existing_progress(self):
-        """Check output folder for existing files to determine progress status. Output is per-element (not per unit)."""
+        """Check output folder for existing files. Supports both new (element_unit) and legacy (element) folder structure."""
         if not self.output_dir or not os.path.isdir(self.output_dir):
             return
 
-        elements_with_composite = set()
-        for element in self.progress_elements:
-            element_dir = os.path.join(self.output_dir, element)
-            if not os.path.isdir(element_dir):
-                continue
-            composite_path = os.path.join(element_dir, f"{element}_composite.png")
-            if os.path.exists(composite_path) and os.path.getsize(composite_path) > 0:
-                elements_with_composite.add(element)
+        elem_units_with_composite = set()
+        for (element, unit_type) in self.progress_columns:
+            # New format: output_dir/Fe_ppm/Fe_ppm_composite.png
+            elem_out = f"{element}_{unit_type}"
+            new_dir = os.path.join(self.output_dir, elem_out)
+            new_composite = os.path.join(new_dir, f"{elem_out}_composite.png")
+            # Legacy format: output_dir/Fe/Fe_composite.png
+            legacy_dir = os.path.join(self.output_dir, element)
+            legacy_composite = os.path.join(legacy_dir, f"{element}_composite.png")
+            if (os.path.exists(new_composite) and os.path.getsize(new_composite) > 0) or \
+               (os.path.exists(legacy_composite) and os.path.getsize(legacy_composite) > 0):
+                elem_units_with_composite.add((element, unit_type))
 
         for (sample, element, unit_type), current_status in list(self.progress_data.items()):
             if current_status == 'missing_file':
                 continue
-            if element in elements_with_composite:
+            if (element, unit_type) in elem_units_with_composite:
                 self.progress_data[(sample, element, unit_type)] = 'complete'
             else:
-                element_dir = os.path.join(self.output_dir, element)
-                hist_dir = os.path.join(element_dir, 'Histograms')
-                if os.path.isdir(hist_dir):
-                    hist_path = os.path.join(hist_dir, f"{sample}_histogram.png")
-                    if os.path.exists(hist_path) and os.path.getsize(hist_path) > 0:
-                        self.progress_data[(sample, element, unit_type)] = 'partial'
-                    else:
-                        self.progress_data[(sample, element, unit_type)] = None
+                # Check for partial (histogram exists): new or legacy path
+                elem_out = f"{element}_{unit_type}"
+                new_hist = os.path.join(self.output_dir, elem_out, 'Histograms', f"{sample}_histogram.png")
+                legacy_hist = os.path.join(self.output_dir, element, 'Histograms', f"{sample}_histogram.png")
+                if (os.path.exists(new_hist) and os.path.getsize(new_hist) > 0) or \
+                   (os.path.exists(legacy_hist) and os.path.getsize(legacy_hist) > 0):
+                    self.progress_data[(sample, element, unit_type)] = 'partial'
                 else:
                     self.progress_data[(sample, element, unit_type)] = None
     
@@ -995,11 +1009,11 @@ class CompositeApp:
         
         # If no stats_df provided, try to load from file
         if stats_df is None:
-            element = self.element.get()
-            if not element:
+            elem_out = self.get_element_output_subdir()
+            if not elem_out:
                 return
             
-            stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
+            stats_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_statistics.csv")
             if os.path.exists(stats_path):
                 try:
                     stats_df = pd.read_csv(stats_path)
@@ -1127,14 +1141,15 @@ class CompositeApp:
         if hasattr(self, 'progress_table') and self.progress_table is not None:
             self.update_progress_table()
     
-    def check_sample_element_status(self, sample, element):
-        """Check the current status of a sample-element pair based on output files."""
+    def check_sample_element_status(self, sample, element, unit_type='ppm'):
+        """Check the current status of a sample-element-unit based on output files."""
         if not self.output_dir:
             return None
         
-        element_dir = os.path.join(self.output_dir, element)
+        elem_out = f"{element}_{unit_type}"
+        element_dir = os.path.join(self.output_dir, elem_out)
         # Check if composite exists (complete)
-        composite_path = os.path.join(element_dir, f"{element}_composite.png")
+        composite_path = os.path.join(element_dir, f"{elem_out}_composite.png")
         if os.path.exists(composite_path):
             return 'complete'
         
@@ -1148,7 +1163,7 @@ class CompositeApp:
     def batch_process_all_elements(self):
         """Process all elements found in the input folder automatically."""
         if not self.input_dir:
-            messagebox.showerror("Error", "Please select an input folder first.")
+            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
             return
         
         # Only prompt for output folder if not already selected
@@ -1157,34 +1172,21 @@ class CompositeApp:
             if not self.output_dir or not os.path.isdir(self.output_dir):
                 return  # User cancelled
         
-        # Get all elements from input folder
-        elements = set()
-        for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
-            parsed = self.parse_matrix_filename(file)
-            if parsed:
-                _, element, _ = parsed
-                elements.add(element)
-        
-        if not elements:
-            messagebox.showwarning("No Elements", "No element files found in the input folder.")
+        # Use progress_columns (element, unit) so ppm and CPS are processed separately
+        self.scan_progress_table()
+        pairs = getattr(self, 'progress_columns', [])
+        if not pairs:
+            custom_dialogs.showwarning(self.master, "No Elements", "No element files found in the input folder.")
             return
         
-        # Sort elements
-        def sort_key(elem):
-            m = re.search(r"(\D+)(\d+)$", elem)
-            if m:
-                return (m.group(1), int(m.group(2)))
-            return (elem, 0)
-        
-        sorted_elements = sorted(elements, key=sort_key)
-        
         # Ask for confirmation
-        num_elements = len(sorted_elements)
-        result = messagebox.askyesno(
-            "Batch Process Confirmation",
-            f"This will process {num_elements} element(s):\n\n" +
-            ", ".join(sorted_elements) +
-            "\n\nEach element will:\n" +
+        num_pairs = len(pairs)
+        pair_labels = [f"{e} ({u})" for e, u in pairs]
+        result = custom_dialogs.askyesno(
+            self.master, "Batch Process Confirmation",
+            f"This will process {num_pairs} element-unit combination(s):\n\n" +
+            ", ".join(pair_labels) +
+            "\n\nEach will:\n" +
             "1. Load data and generate histograms/statistics\n" +
             "2. Use the suggested 99th percentile as scale max\n" +
             "3. Generate and save the composite\n\n" +
@@ -1206,24 +1208,26 @@ class CompositeApp:
         self.master.update()
         
         try:
-            # Process each element
-            self.log_print(f"\n🚀 Starting batch processing of {num_elements} element(s)...")
+            # Process each (element, unit) pair
+            self.log_print(f"\n🚀 Starting batch processing of {num_pairs} element-unit combination(s)...")
             successful = 0
             failed = []
             
-            for idx, elem in enumerate(sorted_elements, 1):
+            for idx, (elem, ut) in enumerate(pairs, 1):
+                pair_label = f"{elem} ({ut})"
                 try:
                     # Update progress bar and label so user sees live progress
                     if hasattr(self, 'batch_progress_bar'):
-                        self.batch_progress_bar['value'] = (idx - 1) / num_elements * 100
+                        self.batch_progress_bar['value'] = (idx - 1) / num_pairs * 100
                     if hasattr(self, 'batch_progress_label'):
-                        self.batch_progress_label.config(text=f"Element {idx} of {num_elements}: {elem}")
+                        self.batch_progress_label.config(text=f"{idx}/{num_pairs}: {pair_label}")
                     self.master.update()
                     
-                    self.log_print(f"\n[{idx}/{num_elements}] Processing {elem}...")
+                    self.log_print(f"\n[{idx}/{num_pairs}] Processing {pair_label}...")
                     
-                    # Set the element
+                    # Set element and unit
                     self.element.set(elem)
+                    self.unit.set(ut)
                     self.master.update()
                     
                     # Load data (this sets scale_max automatically to 99th percentile)
@@ -1231,42 +1235,42 @@ class CompositeApp:
                     
                     # Check if data was loaded successfully
                     if not self.matrices:
-                        self.log_print(f"⚠️  No data loaded for {elem}, skipping...")
-                        failed.append((elem, "No data found"))
+                        self.log_print(f"⚠️  No data loaded for {pair_label}, skipping...")
+                        failed.append((pair_label, "No data found"))
                         continue
                     
                     # Generate and save composite directly (no preview); use best layout (no extra blank rows)
-                    self.log_print(f"  Generating composite for {elem}...")
+                    self.log_print(f"  Generating composite for {pair_label}...")
                     best_rows = self._best_composite_rows(len(self.matrices))
                     self.generate_composite(preview=False, override_rows=best_rows)
                     
                     successful += 1
-                    self.log_print(f"✅ Completed {elem} ({idx}/{num_elements})")
+                    self.log_print(f"✅ Completed {pair_label} ({idx}/{num_pairs})")
                     
-                    # Move progress bar to completed for this element
+                    # Move progress bar to completed
                     if hasattr(self, 'batch_progress_bar'):
-                        self.batch_progress_bar['value'] = idx / num_elements * 100
+                        self.batch_progress_bar['value'] = idx / num_pairs * 100
                     self.master.update()
                     
                 except Exception as e:
                     error_msg = str(e)
-                    self.log_print(f"❌ Error processing {elem}: {error_msg}")
-                    failed.append((elem, error_msg))
+                    self.log_print(f"❌ Error processing {pair_label}: {error_msg}")
+                    failed.append((pair_label, error_msg))
                     import traceback
                     self.log_print(traceback.format_exc())
                     if hasattr(self, 'batch_progress_bar'):
-                        self.batch_progress_bar['value'] = idx / num_elements * 100
+                        self.batch_progress_bar['value'] = idx / num_pairs * 100
                     self.master.update()
                     continue
 
             # Summary (after loop completes)
             self.log_print(f"\n{'='*50}")
             self.log_print(f"Batch processing complete!")
-            self.log_print(f"✅ Successful: {successful}/{num_elements}")
+            self.log_print(f"✅ Successful: {successful}/{num_pairs}")
             if failed:
                 self.log_print(f"❌ Failed: {len(failed)}")
-                for elem, reason in failed:
-                    self.log_print(f"   - {elem}: {reason}")
+                for pair_label, reason in failed:
+                    self.log_print(f"   - {pair_label}: {reason}")
             self.log_print(f"{'='*50}")
         finally:
             self._batch_running = False
@@ -1280,15 +1284,15 @@ class CompositeApp:
         
         # Show completion message
         if failed:
-            messagebox.showwarning(
-                "Batch Processing Complete",
-                f"Processed {successful}/{num_elements} elements successfully.\n\n"
-                f"{len(failed)} element(s) failed. Check the log for details."
+            custom_dialogs.showwarning(
+                self.master, "Batch Processing Complete",
+                f"Processed {successful}/{num_pairs} element-unit combination(s) successfully.\n\n"
+                f"{len(failed)} failed. Check the log for details."
             )
         else:
-            messagebox.showinfo(
-                "Batch Processing Complete",
-                f"Successfully processed all {num_elements} element(s)!"
+            custom_dialogs.showinfo(
+                self.master, "Batch Processing Complete",
+                f"Successfully processed all {num_pairs} element-unit combination(s)!"
             )
 
     def update_element_dropdown(self):
@@ -1311,8 +1315,54 @@ class CompositeApp:
             # Set the first element as default if no element is currently selected
             if not self.element.get() or self.element.get() not in element_list:
                 self.element.set(next(iter(elements)))
+            self.update_unit_dropdown()
         else:
             self.log_print("No valid element files found in the selected directory.")
+
+    def get_element_output_subdir(self):
+        """Return output subdirectory for current element+unit, e.g. 'Fe_ppm' or 'Ca_raw'."""
+        element = self.element.get()
+        unit = self.unit.get()
+        if not element:
+            return ""
+        if unit:
+            return f"{element}_{unit}"
+        return element  # fallback for backward compat
+
+    def update_unit_dropdown(self):
+        """Populate unit dropdown with units that exist for the selected element."""
+        element = self.element.get()
+        units = []
+        for (e, u) in getattr(self, 'progress_columns', []):
+            if e == element:
+                units.append(u)
+        # Fallback: scan files if progress_columns not populated
+        if not units and self.input_dir and os.path.isdir(self.input_dir):
+            seen = set()
+            for file in glob.glob(os.path.join(self.input_dir, f"* {element}_* matrix.xlsx")):
+                parsed = self.parse_matrix_filename(file)
+                if parsed:
+                    _, _, ut = parsed
+                    seen.add(ut)
+            for file in glob.glob(os.path.join(self.input_dir, f"* {element} matrix.xlsx")):
+                parsed = self.parse_matrix_filename(file)
+                if parsed:
+                    _, _, ut = parsed
+                    seen.add(ut)
+            units = sorted(seen, key=lambda u: ('ppm', 'CPS', 'raw').index(u) if u in ('ppm', 'CPS', 'raw') else 99)
+        if units:
+            for w in [getattr(self, 'unit_dropdown', None), getattr(self, 'unit_dropdown_preview', None)]:
+                if w and w.winfo_exists():
+                    w['values'] = units
+                    w['state'] = 'readonly'
+            if not self.unit.get() or self.unit.get() not in units:
+                self.unit.set(units[0])
+        else:
+            for w in [getattr(self, 'unit_dropdown', None), getattr(self, 'unit_dropdown_preview', None)]:
+                if w and w.winfo_exists():
+                    w['values'] = []
+                    w['state'] = 'readonly'
+            self.unit.set("")
 
     def on_resize(self, event):
         """Handle resize events for preview container (legacy - preview now in separate window)."""
@@ -1407,7 +1457,7 @@ class CompositeApp:
         return downsampled
 
     def import_custom_pixel_sizes(self):
-        messagebox.showinfo("Load Custom Physical Pixel Size", "Select CSV file with custom pixel sizes (Cancel to generate template)")
+        custom_dialogs.showinfo(self.master, "Load Custom Physical Pixel Size", "Select CSV file with custom pixel sizes (Cancel to generate template)")
 
         file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")], title="Select Custom Pixel Sizes CSV (Cancel to generate template)")
         if file_path:
@@ -1423,7 +1473,7 @@ class CompositeApp:
 
     def generate_pixel_size_template(self):
         if not self.input_dir:
-            messagebox.showerror("Error", "Please select an input folder first.")
+            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
             return
 
         samples = set()
@@ -1434,7 +1484,7 @@ class CompositeApp:
                 samples.add(sample)
 
         if not samples:
-            messagebox.showerror("Error", "No valid sample files found in the input directory.")
+            custom_dialogs.showerror(self.master, "Error", "No valid sample files found in the input directory.")
             return
 
         df = pd.DataFrame({'Sample': list(samples), 'Pixel Size': self.pixel_size.get()})
@@ -1450,14 +1500,14 @@ class CompositeApp:
 
     def handle_pixel_sizes(self):
         if not self.input_dir:
-            messagebox.showerror("Error", "Please select an input folder first.")
+            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
             return
 
         self.import_custom_pixel_sizes()
 
     def load_data(self):
         if not self.input_dir:
-            messagebox.showerror("Error", "Please select an input folder first.")
+            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
             return
         # Only prompt for output folder if not already selected
         if not self.output_dir or not os.path.isdir(self.output_dir):
@@ -1465,19 +1515,42 @@ class CompositeApp:
 
         self.set_status("Busy")
         element = self.element.get()
+        unit = self.unit.get()
         # Search for files with old format (ppm/CPS) and new format (raw, no unit)
-        pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
-        pattern_CPS = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
-        pattern_raw = os.path.join(self.input_dir, f"* {element} matrix.xlsx")
-        files = sorted(glob.glob(pattern_ppm) + glob.glob(pattern_CPS) + glob.glob(pattern_raw))
-        # Remove duplicates (in case a file matches multiple patterns)
-        files = list(dict.fromkeys(files))
+        # Filter by selected unit so ppm and CPS are never mixed
+        if unit == 'ppm':
+            pattern = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
+            files = sorted(glob.glob(pattern))
+        elif unit == 'CPS':
+            pattern = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
+            files = sorted(glob.glob(pattern))
+        elif unit == 'raw':
+            pattern = os.path.join(self.input_dir, f"* {element} matrix.xlsx")
+            files = [f for f in glob.glob(pattern) if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
+        else:
+            # No unit selected - check if both ppm and CPS exist (would mix units)
+            pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
+            pattern_CPS = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
+            has_ppm = bool(glob.glob(pattern_ppm))
+            has_CPS = bool(glob.glob(pattern_CPS))
+            if has_ppm and has_CPS:
+                custom_dialogs.showerror(self.master, "Unit Required",
+                    f"Element {element} has both ppm and CPS files. Please select a unit from the Unit dropdown.")
+                return
+            # Single unit or raw only - use appropriate pattern
+            if has_ppm:
+                files = sorted(glob.glob(pattern_ppm))
+            elif has_CPS:
+                files = sorted(glob.glob(pattern_CPS))
+            else:
+                pattern_raw = os.path.join(self.input_dir, f"* {element} matrix.xlsx")
+                files = [f for f in glob.glob(pattern_raw) if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
         # Restrict to selected samples (Progress table Include column)
         selected = set(self.get_selected_samples())
-        files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected]
+        files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected and (not unit or parsed[2] == unit)]
 
         if not files:
-            messagebox.showerror("Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
+            custom_dialogs.showerror(self.master, "Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
             return
 
         # Share progress bar with Batch so user sees live progress (same as batch processing)
@@ -1494,7 +1567,8 @@ class CompositeApp:
 
         try:
             # Check for existing statistics.csv to enable incremental processing
-            stats_path = os.path.join(self.output_dir, element, f"{element}_statistics.csv")
+            elem_out = self.get_element_output_subdir()
+            stats_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_statistics.csv")
             existing_stats_df = None
             existing_samples = set()
 
@@ -1589,7 +1663,7 @@ class CompositeApp:
                             plt.title(f"Histogram for {sample}")
                             plt.xlabel("Value")
                             plt.ylabel("Frequency")
-                            hist_path = os.path.join(self.output_dir, element, 'Histograms', f"{sample}_histogram.png")
+                            hist_path = os.path.join(self.output_dir, elem_out, 'Histograms', f"{sample}_histogram.png")
                             os.makedirs(os.path.dirname(hist_path), exist_ok=True)
                             plt.savefig(hist_path)
                             plt.close()
@@ -1861,8 +1935,8 @@ class CompositeApp:
     def preview_composite(self):
         try:
             self.generate_composite(preview=True)
-            # Track which element was last previewed for safety validation
-            self._last_previewed_element = self.element.get()
+            # Track which element+unit was last previewed for safety validation
+            self._last_previewed_element_unit = self.get_element_output_subdir()
             self.set_status("Idle")
             self.log_print("Status: Idle - Preview generated.")
         except Exception as e:
@@ -1881,7 +1955,7 @@ class CompositeApp:
         """Save a composite matrix file that can be opened in muaddata for polygon selection.
         Output is a grid of matrices (with NaN padding/separators); pixel size is not stored in the file."""
         if not self.matrices:
-            messagebox.showerror("Error", "No data loaded. Please load data first.")
+            custom_dialogs.showerror(self.master, "Error", "No data loaded. Please load data first.")
             return
         
         self.set_status("Busy")
@@ -1941,7 +2015,8 @@ class CompositeApp:
         composite_matrix = np.vstack(composite_rows) if composite_rows else np.array([])
         
         # Ask user for save location
-        default_name = f"{element}_composite_matrix.xlsx"
+        elem_out = self.get_element_output_subdir()
+        default_name = f"{elem_out}_composite_matrix.xlsx"
         save_path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
             filetypes=[
@@ -1964,7 +2039,7 @@ class CompositeApp:
                 self.log_print(f"✓ Composite matrix saved: {os.path.basename(save_path)}")
                 self.log_print(f"  Shape: {composite_matrix.shape} (arranged as {rows} rows × {cols} cols)")
                 self.log_print(f"  You can now open this file in Muad'Data for polygon selection!")
-                messagebox.showinfo("Saved", 
+                custom_dialogs.showinfo(self.master, "Saved", 
                                   f"Composite matrix saved successfully!\n\n"
                                   f"File: {os.path.basename(save_path)}\n"
                                   f"Shape: {composite_matrix.shape}\n"
@@ -1973,7 +2048,7 @@ class CompositeApp:
                                   f"Element Viewer tab for polygon selection.")
                 
             except Exception as e:
-                messagebox.showerror("Save Error", f"Failed to save composite matrix:\n{str(e)}")
+                custom_dialogs.showerror(self.master, "Save Error", f"Failed to save composite matrix:\n{str(e)}")
                 self.log_print(f"❌ Error saving composite matrix: {e}")
         
         self.set_status("Idle")
@@ -1983,15 +2058,17 @@ class CompositeApp:
         self.log_print("Status: Busy - Saving composite...")
         if self.preview_file:
             # Additional safety: Warn user if they're saving a preview that might be from a different element
-            if not hasattr(self, '_last_previewed_element') or self._last_previewed_element != self.element.get():
-                result = messagebox.askyesno("Potential Misidentification Warning", 
-                    f"Warning: The preview image may be from a different element than the currently selected '{self.element.get()}'. "
+            elem_out = self.get_element_output_subdir()
+            last_key = getattr(self, '_last_previewed_element_unit', None)
+            if last_key != elem_out:
+                result = custom_dialogs.askyesno(self.master, "Potential Misidentification Warning", 
+                    f"Warning: The preview image may be from a different element/unit than the currently selected '{elem_out}'. "
                     f"Do you want to proceed with saving? (It's recommended to generate a new preview first.)")
                 if not result:
                     self.log_print("Save cancelled by user due to potential misidentification.")
                     return
             
-            out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
+            out_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             
             # Save the modified preview image (which includes element labels if added)
@@ -2258,7 +2335,8 @@ class CompositeApp:
             ax.set_facecolor(bg_color)
 
             # Save individual subplot (only if it doesn't exist - incremental processing)
-            subplot_path = os.path.join(self.output_dir, self.element.get(), 'subplots', f"{label}.png")
+            elem_out = self.get_element_output_subdir()
+            subplot_path = os.path.join(self.output_dir, elem_out, 'subplots', f"{label}.png")
             os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
             
             if not os.path.exists(subplot_path) or os.path.getsize(subplot_path) == 0:
@@ -2364,7 +2442,8 @@ class CompositeApp:
             export_cbar.set_label(units_label, color=text_color, fontsize=cbar_pt)
 
         # Save
-        colorbar_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_colorbar.png")
+        elem_out = self.get_element_output_subdir()
+        colorbar_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_colorbar.png")
         colorbar_fig.savefig(colorbar_path, dpi=300, bbox_inches='tight', transparent=True)
         plt.close(colorbar_fig)
 
@@ -2447,14 +2526,15 @@ class CompositeApp:
             self.tabs.select(1)  # Index 1 is the Preview & Export tab
             self.set_status("Idle")
         else:
-            out_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_composite.png")
+            elem_out = self.get_element_output_subdir()
+            out_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_composite.png")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             composited.save(out_path)
             
             # Update progress table - mark as complete
-            element = self.element.get()
+            unit_type = self.unit.get() or 'ppm'
             for sample in self.labels:
-                self.update_sample_element_progress(sample, element, 'complete')
+                self.update_sample_element_progress(sample, self.element.get(), unit_type)
             
             # Update progress table display
             if hasattr(self, 'progress_table') and self.progress_table:
@@ -2466,7 +2546,7 @@ class CompositeApp:
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
             mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
-            stats_path = os.path.join(self.output_dir, self.element.get(), f"{self.element.get()}_statistics.csv")
+            stats_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_statistics.csv")
             stats_df.to_csv(stats_path, index=False)
             
             # Update statistics table display
