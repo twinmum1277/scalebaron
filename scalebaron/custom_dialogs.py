@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Custom modal dialogs that display the app icon (instead of the Python logo).
+Custom modal dialogs that display the app logo inside the dialog.
 Drop-in replacements for tkinter.messagebox.showinfo, showerror, showwarning, askyesno.
-Uses Toplevel windows so they inherit iconphoto() from the root.
+On macOS, iconphoto() does not show icons in window title bars; embedding the logo
+in the dialog content ensures it is visible regardless of platform.
 """
 import tkinter as tk
 from tkinter import ttk
+
+
+def _get_dialog_icon(parent):
+    """Get app icon from root for display inside dialogs. Returns PhotoImage or None."""
+    root = parent.winfo_toplevel()
+    return getattr(root, '_dialog_icon', None)
 
 
 def _show(parent, title, message, icon_type='info'):
@@ -18,6 +25,18 @@ def _show(parent, title, message, icon_type='info'):
 
     f = ttk.Frame(dialog, padding=20)
     f.pack(fill=tk.BOTH, expand=True)
+
+    # Show app logo at top of dialog (ScaleBarOn or Muad'Data) if available
+    icon = _get_dialog_icon(parent)
+    if icon:
+        try:
+            dialog.iconphoto(True, icon)  # Title bar icon (Windows/Linux; no effect on macOS)
+        except Exception:
+            pass
+        # Embed logo in dialog content (visible on all platforms including macOS)
+        icon_lbl = tk.Label(f, image=icon)
+        icon_lbl.image = icon  # Keep reference
+        icon_lbl.pack(pady=(0, 12))
 
     lbl = ttk.Label(f, text=message, wraplength=400, justify=tk.LEFT)
     lbl.pack(fill=tk.X, pady=(0, 15))
@@ -48,6 +67,17 @@ def _ask_yesno(parent, title, message):
 
     f = ttk.Frame(dialog, padding=20)
     f.pack(fill=tk.BOTH, expand=True)
+
+    # Show app logo at top of dialog if available
+    icon = _get_dialog_icon(parent)
+    if icon:
+        try:
+            dialog.iconphoto(True, icon)  # Title bar icon (Windows/Linux; no effect on macOS)
+        except Exception:
+            pass
+        icon_lbl = tk.Label(f, image=icon)
+        icon_lbl.image = icon  # Keep reference
+        icon_lbl.pack(pady=(0, 12))
 
     lbl = ttk.Label(f, text=message, wraplength=400, justify=tk.LEFT)
     lbl.pack(fill=tk.X, pady=(0, 15))

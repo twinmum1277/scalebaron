@@ -636,6 +636,7 @@ class CompositeApp:
                 img = img.resize((64, 64), Image.LANCZOS)
             self._app_icon = ImageTk.PhotoImage(img)
             self.master.iconphoto(True, self._app_icon)
+            self.master._dialog_icon = self._app_icon  # For custom_dialogs to show logo inside dialogs
         except Exception:
             pass
 

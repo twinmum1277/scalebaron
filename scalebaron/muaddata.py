@@ -497,6 +497,7 @@ class MuadDataViewer:
                 img = img.resize((64, 64), Image.LANCZOS)
             self._app_icon = ImageTk.PhotoImage(img)
             self.root.iconphoto(True, self._app_icon)
+            self.root._dialog_icon = self._app_icon  # For custom_dialogs to show logo inside dialogs
         except Exception:
             pass
 
@@ -507,7 +508,7 @@ class MuadDataViewer:
         if not PIL_AVAILABLE:
             return
         icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'clear.png')]:
+        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'clear.png'), ('load', 'load.png'), ('color_picker', 'color_picker.png')]:
             path = os.path.join(icons_dir, filename)
             if not os.path.exists(path):
                 continue
@@ -529,6 +530,26 @@ class MuadDataViewer:
                 self.rgb_button_icons[key] = photo
             except Exception:
                 pass
+
+    def _create_tooltip(self, widget, text):
+        """Show a small tooltip when the mouse hovers over the widget."""
+        tip = [None]
+        def show(event):
+            if tip[0] is not None:
+                return
+            x = widget.winfo_rootx() + 20
+            y = widget.winfo_rooty() + widget.winfo_height() + 4
+            tip[0] = tw = tk.Toplevel(widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tk.Label(tw, text=text, justify=tk.LEFT, background="#ffffe0", relief=tk.SOLID,
+                     borderwidth=1, font=("TkDefaultFont", 9), padx=4, pady=2).pack()
+        def hide(event):
+            if tip[0]:
+                tip[0].destroy()
+                tip[0] = None
+        widget.bind("<Enter>", show)
+        widget.bind("<Leave>", hide)
 
     def pad_slices_to_same_size(self, slices):
         """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
@@ -864,7 +885,18 @@ class MuadDataViewer:
         if self.zstack_sum_matrix is None:
             custom_dialogs.showwarning(self.root, "Nothing to Save", "Please sum slices first.")
             return
-        out_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv"), ("Excel", "*.xlsx")])
+        # Default filename: Muad'Data/ScaleBarOn convention (Element Viewer friendly)
+        default_name = "Summed Total matrix.xlsx"
+        if self.zstack_file_labels:
+            parsed = self.parse_matrix_filename(self.zstack_file_labels[0])
+            if parsed:
+                sample, element, unit_type = parsed
+                default_name = f"Summed {element} matrix.xlsx"
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")],
+            initialfile=default_name,
+        )
         if not out_path:
             return
         try:
@@ -1924,51 +1956,108 @@ class MuadDataViewer:
         self.file_root_label.pack(anchor='w')
 
         color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+        _chan_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        slider_height = 100
+        gradient_width = 12
+        col_width = 48  # Min width per column for alignment
+
         channels_group = ttk.LabelFrame(control_frame, text="Channels", padding=10)
         channels_group.pack(fill=tk.X, pady=(0, 5))
-        for ch in ['R', 'G', 'B']:
-            color = color_names[ch]
-            ttk.Button(channels_group, text=f"Load {color}", command=lambda c=ch: self.load_rgb_file(c), width=10).pack(anchor='w', pady=(2, 0))
-            elem_label = ttk.Label(channels_group, text=f"Loaded Element: None", style="Status.TLabel")
-            elem_label.pack(anchor='w')
-            max_value_label = ttk.Label(channels_group, text="", style="Status.TLabel")
-            max_value_label.pack(anchor='w', pady=(0, 1))
-            color_picker_frame = ttk.Frame(channels_group)
-            color_picker_frame.pack(fill=tk.X, pady=(0, 2))
-            color_btn = tk.Button(color_picker_frame, text="Color", bg=self.rgb_colors[ch], fg='black', font=("TkDefaultFont", 12),
-                                  command=lambda c=ch: self.pick_channel_color(c), width=6, padx=0, pady=0,
-                                  highlightthickness=0, bd=0, relief='flat')
-            color_btn.pack(side=tk.LEFT, padx=(0, 5))
-            _chan_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
-            gradient_canvas = tk.Canvas(color_picker_frame, height=8, width=180, bg=_chan_bg, highlightthickness=0)
-            gradient_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            self.draw_gradient(gradient_canvas, self.rgb_colors[ch])
-            self.rgb_color_buttons[ch] = color_btn
-            self.rgb_gradient_canvases[ch] = gradient_canvas
-            ttk.Label(channels_group, text=f"{color} max").pack(anchor='w')
-            rgb_slider_val_label = ttk.Label(channels_group, text="1.00")
-            rgb_slider_val_label.pack(anchor='w')
-            max_slider = ttk.Scale(channels_group, from_=0, to=1, orient=tk.HORIZONTAL)
+        channels_grid = ttk.Frame(channels_group)
+        channels_grid.pack(fill=tk.X)
+        for c in range(3):
+            channels_grid.columnconfigure(c, minsize=col_width, uniform='chan')
+
+        load_icon = getattr(self, 'rgb_button_icons', {}).get('load')
+        color_picker_icon = getattr(self, 'rgb_button_icons', {}).get('color_picker')
+        self.rgb_sliders = {}
+        self.rgb_labels = {}
+        self.rgb_color_buttons = {}
+        self.rgb_gradient_canvases = {}
+        elem_labels = {}
+        max_value_labels = {}
+
+        # Row 0: Load buttons
+        for i, ch in enumerate(['R', 'G', 'B']):
+            col = ttk.Frame(channels_grid)
+            col.grid(row=0, column=i, padx=4, pady=(0, 2), sticky='n')
+            if load_icon:
+                load_btn = tk.Button(col, image=load_icon, command=lambda c=ch: self.load_rgb_file(c), padx=2, pady=2, bg='#f0f0f0', relief='flat', highlightthickness=0, bd=0)
+                load_btn.image = load_icon
+                load_btn.pack(anchor='center')
+            else:
+                load_btn = ttk.Button(col, text="Load", command=lambda c=ch: self.load_rgb_file(c), width=4)
+                load_btn.pack(anchor='center')
+            self._create_tooltip(load_btn, f"Load {color_names[ch]} channel")
+
+        # Row 1: Element labels
+        for i, ch in enumerate(['R', 'G', 'B']):
+            col = ttk.Frame(channels_grid)
+            col.grid(row=1, column=i, padx=4, pady=(0, 2), sticky='n')
+            lbl = ttk.Label(col, text="", style="Status.TLabel")
+            lbl.pack(anchor='center')
+            elem_labels[ch] = lbl
+
+        # Row 2: "Slider max:" label (spanning above entries)
+        ttk.Label(channels_grid, text="Slider max:").grid(row=2, column=0, columnspan=3, sticky='n', pady=(0, 2))
+
+        # Row 3: Slider max entries
+        for i, ch in enumerate(['R', 'G', 'B']):
+            col = ttk.Frame(channels_grid)
+            col.grid(row=3, column=i, padx=4, pady=(0, 2), sticky='n')
+            self.rgb_max_limits[ch] = tk.DoubleVar(value=1.0)
+            cap_entry = ttk.Entry(col, textvariable=self.rgb_max_limits[ch], width=6)
+            cap_entry.pack(anchor='center')
+            cap_entry.bind("<Return>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
+            cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
+
+        # Row 4: Current values + vertical sliders + gradients
+        for i, ch in enumerate(['R', 'G', 'B']):
+            col = ttk.Frame(channels_grid)
+            col.grid(row=4, column=i, padx=4, pady=(0, 2), sticky='n')
+            max_value_label = ttk.Label(col, text="", style="Status.TLabel")
+            max_value_label.pack(anchor='center')
+            max_value_labels[ch] = max_value_label
+            rgb_slider_val_label = ttk.Label(col, text="1.00", width=6)
+            rgb_slider_val_label.pack(anchor='center', pady=(0, 2))
+            slider_cell = ttk.Frame(col)
+            slider_cell.pack(anchor='center')
+            max_slider = ttk.Scale(slider_cell, from_=0, to=1, orient=tk.VERTICAL, length=slider_height)
             max_slider.set(1)
-            max_slider.pack(fill=tk.X, pady=(0, 2))
-            def make_slider_handler(c, val_label):
+            max_slider.pack(side=tk.LEFT)
+            gradient_canvas = tk.Canvas(slider_cell, height=slider_height, width=gradient_width, bg=_chan_bg, highlightthickness=0)
+            gradient_canvas.pack(side=tk.LEFT)
+            self.draw_gradient_vertical(gradient_canvas, self.rgb_colors[ch], gradient_width, slider_height)
+            self.rgb_gradient_canvases[ch] = gradient_canvas
+
+            def make_slider_handler(c, val_label, slider):
                 def handler(event):
-                    val_label.config(text=f"{max_slider.get():.2f}")
+                    val_label.config(text=f"{slider.get():.2f}")
                     self.update_rgb_max_value_display(c)
                     self.view_rgb_overlay()
                 return handler
-            max_slider.bind("<B1-Motion>", make_slider_handler(ch, rgb_slider_val_label))
-            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch, rgb_slider_val_label))
+            max_slider.bind("<B1-Motion>", make_slider_handler(ch, rgb_slider_val_label, max_slider))
+            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch, rgb_slider_val_label, max_slider))
             self.rgb_sliders[ch] = {'max': max_slider}
-            self.rgb_labels[ch] = {'elem': elem_label, 'max_value': max_value_label, 'slider_value': rgb_slider_val_label}
-            cap_frame = ttk.Frame(channels_group)
-            cap_frame.pack(fill=tk.X, pady=(0, 4))
-            ttk.Label(cap_frame, text="Slider max:").pack(side=tk.LEFT)
-            self.rgb_max_limits[ch] = tk.DoubleVar(value=1.0)
-            cap_entry = ttk.Entry(cap_frame, textvariable=self.rgb_max_limits[ch], width=6)
-            cap_entry.pack(side=tk.LEFT, padx=(5, 0))
-            cap_entry.bind("<Return>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
-            cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
+            self.rgb_labels[ch] = {'elem': elem_labels[ch], 'max_value': max_value_labels[ch], 'slider_value': rgb_slider_val_label}
+
+        # Row 5: Color picker buttons
+        for i, ch in enumerate(['R', 'G', 'B']):
+            col = ttk.Frame(channels_grid)
+            col.grid(row=5, column=i, padx=4, pady=(0, 4), sticky='n')
+            if color_picker_icon:
+                color_btn = tk.Button(col, image=color_picker_icon, bg=self.rgb_colors[ch], fg='black',
+                                      command=lambda c=ch: self.pick_channel_color(c), padx=2, pady=2,
+                                      highlightthickness=0, bd=0, relief='flat')
+                color_btn.image = color_picker_icon
+            else:
+                color_btn = tk.Button(col, text="Color", bg=self.rgb_colors[ch], fg='black', font=("TkDefaultFont", 10),
+                                      command=lambda c=ch: self.pick_channel_color(c), width=4, padx=0, pady=0,
+                                      highlightthickness=0, bd=0, relief='flat')
+            color_btn.pack(anchor='center')
+            self.rgb_color_buttons[ch] = color_btn
+            self._create_tooltip(color_btn, f"Pick color for {color_names[ch]} channel")
+
         ttk.Checkbutton(channels_group, text="Normalize to 99th %", variable=self.normalize_var).pack(anchor='w', pady=(2, 0))
 
         scale_group = ttk.LabelFrame(control_frame, text="Spatial scale bar", padding=10)
@@ -2089,8 +2178,8 @@ class MuadDataViewer:
             self.rgb_colors[channel] = color_code[1]
             # Update button color
             self.rgb_color_buttons[channel].configure(bg=color_code[1])
-            # Redraw gradient
-            self.draw_gradient(self.rgb_gradient_canvases[channel], color_code[1])
+            # Redraw vertical gradient
+            self.draw_gradient_vertical(self.rgb_gradient_canvases[channel], color_code[1], 12, 100)
             # Update overlay if visible
             self.view_rgb_overlay()
 
@@ -2106,7 +2195,7 @@ class MuadDataViewer:
         for ch in ['R', 'G', 'B']:
             self.rgb_data[ch] = None
             # Reset element labels
-            self.rgb_labels[ch]['elem'].config(text="Loaded Element: None")
+            self.rgb_labels[ch]['elem'].config(text="")
             # Reset max value display
             if 'max_value' in self.rgb_labels[ch]:
                 self.rgb_labels[ch]['max_value'].config(text="")
@@ -2188,6 +2277,29 @@ class MuadDataViewer:
             for i in range(256):
                 c = {'red': f'#{i:02x}0000', 'green': f'#00{i:02x}00', 'blue': f'#0000{i:02x}'}[color]
                 canvas.create_line(i, 0, i, 10, fill=c)
+
+    def draw_gradient_vertical(self, canvas, color, width=12, height=100):
+        """Draw vertical gradient: bright at top, black at bottom."""
+        canvas.delete("all")
+        w = max(1, width)
+        h = max(1, height)
+        if isinstance(color, str) and color.startswith('#') and len(color) == 7:
+            r = int(color[1:3], 16)
+            g = int(color[3:5], 16)
+            b = int(color[5:7], 16)
+            for i in range(h):
+                frac = 1.0 - (i / max(1, h - 1))
+                rr = int(r * frac)
+                gg = int(g * frac)
+                bb = int(b * frac)
+                c = f'#{rr:02x}{gg:02x}{bb:02x}'
+                canvas.create_line(0, i, w, i, fill=c)
+        else:
+            for i in range(h):
+                frac = 1.0 - (i / max(1, h - 1))
+                ii = int(255 * frac)
+                c = {'red': f'#{ii:02x}0000', 'green': f'#00{ii:02x}00', 'blue': f'#0000{ii:02x}'}[color]
+                canvas.create_line(0, i, w, i, fill=c)
 
     def load_single_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
@@ -2400,7 +2512,7 @@ class MuadDataViewer:
                 elem = next((part for part in file_name.split() if any(e in part for e in ['ppm', 'CPS'])), 'Unknown')
                 elem_display = elem.split('_')[0] if '_' in elem else elem
             
-            self.rgb_labels[channel]['elem'].config(text=f"Loaded Element: {elem_display}")
+            self.rgb_labels[channel]['elem'].config(text=elem_display)
             # Always update dataset label when a new file is loaded
             self.file_root_label.config(text=f"Dataset: {root_name}")
             max_val = float(np.nanmax(mat))
@@ -2503,32 +2615,32 @@ class MuadDataViewer:
         loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
         colors = [self.rgb_colors[ch] for ch in loaded]
         labels = []
+        display_vals = []
         for ch in loaded:
-            label = self.rgb_labels[ch]['elem'].cget("text")
-            if label.startswith("Loaded Element: "):
-                label = label[len("Loaded Element: "):]
-            labels.append(label if label != "None" else ch)
+            label = (self.rgb_labels[ch]['elem'].cget("text") or "").strip()
+            labels.append(label if label else ch)
+            # Current slider position (display max), formatted as integer
+            val = int(round(self.rgb_sliders[ch]['max'].get()))
+            display_vals.append(val)
         self.rgb_colorbar_ax.clear()
         self.rgb_colorbar_ax.axis('off')
         if len(loaded) == 3:
-            # Draw a triangle with each vertex colored (3-channel = triangle)
+            # Equilateral triangle vertices (240x120 canvas: apex top, base bottom)
+            # height=100, base half-width = 100/√3 ≈ 58
+            v0 = np.array([120.0, 10.0])   # apex (top center)
+            v1 = np.array([178.0, 110.0])  # bottom right
+            v2 = np.array([62.0, 110.0])   # bottom left
+            # Draw triangle with barycentric interpolation
             triangle = np.zeros((120, 240, 3), dtype=float)
-            # Get RGB for each color
             rgb_vals = []
             for c in colors:
                 r = int(c[1:3], 16) / 255.0
                 g = int(c[3:5], 16) / 255.0
                 b = int(c[5:7], 16) / 255.0
                 rgb_vals.append([r, g, b])
-            # Triangle vertices
-            v0 = np.array([120, 10])   # left
-            v1 = np.array([230, 110])  # right
-            v2 = np.array([10, 110])   # bottom
-            # For each pixel, barycentric interpolation
             for y in range(120):
                 for x in range(240):
                     p = np.array([x, y])
-                    # Compute barycentric coordinates
                     denom = ((v1[1] - v2[1])*(v0[0] - v2[0]) + (v2[0] - v1[0])*(v0[1] - v2[1]))
                     if denom == 0:
                         continue
@@ -2538,16 +2650,29 @@ class MuadDataViewer:
                     if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
                         color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
                         triangle[y, x, :] = color
-            # Extent matches array aspect (240×120) so triangle isn't stretched
             self.rgb_colorbar_ax.imshow(triangle, origin='upper', extent=[0, 1, 0, 0.5], aspect='equal')
-            # Draw triangle outline (in same data coords: x 0-1, y 0-0.5)
             self.rgb_colorbar_ax.plot([v0[0]/240, v1[0]/240], [0.5 - v0[1]/120*0.5, 0.5 - v1[1]/120*0.5], color='k', lw=1)
             self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [0.5 - v1[1]/120*0.5, 0.5 - v2[1]/120*0.5], color='k', lw=1)
             self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [0.5 - v2[1]/120*0.5, 0.5 - v0[1]/120*0.5], color='k', lw=1)
-            # Place labels at vertices
-            self.rgb_colorbar_ax.text(v0[0]/240, 0.5 - v0[1]/120*0.5 - 0.03, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(v1[0]/240+0.03, 0.5 - v1[1]/120*0.5, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(v2[0]/240-0.03, 0.5 - v2[1]/120*0.5, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+            # Labels along outward normals: format "Channel: value"
+            def px_to_data(v):
+                return (v[0]/240, 0.5 - v[1]/120*0.5)
+            v0d, v1d, v2d = px_to_data(v0), px_to_data(v1), px_to_data(v2)
+            cend = ((v0d[0]+v1d[0]+v2d[0])/3, (v0d[1]+v1d[1]+v2d[1])/3)
+            offset = 0.08
+            for i, (vd, lbl, val) in enumerate(zip([v0d, v1d, v2d], labels, display_vals)):
+                out = (vd[0] - cend[0], vd[1] - cend[1])
+                n = np.hypot(out[0], out[1])
+                if n > 0:
+                    out = (out[0]/n, out[1]/n)
+                    lx, ly = vd[0] + offset*out[0], vd[1] + offset*out[1]
+                else:
+                    out = (0, 1)
+                    lx, ly = vd[0], vd[1] + offset
+                txt = f"{lbl}: {val}"
+                ha = 'center' if abs(out[0]) < 0.1 else ('left' if out[0] > 0 else 'right')
+                va = 'bottom' if out[1] >= 0 else 'top'
+                self.rgb_colorbar_ax.text(lx, ly, txt, color=colors[i], fontsize=10, ha=ha, va=va, fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_aspect('equal')
             self.rgb_colorbar_ax.set_xlim(-0.1, 1.1)
             self.rgb_colorbar_ax.set_ylim(-0.1, 0.6)
@@ -2572,9 +2697,8 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.set_aspect('equal')
             self.rgb_colorbar_ax.set_xlim(-0.25, 1.25)
             self.rgb_colorbar_ax.set_ylim(-0.05, 0.45)
-            # Labels above the bar
-            self.rgb_colorbar_ax.text(-0.15, 0.38, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-            self.rgb_colorbar_ax.text(1.15, 0.38, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(-0.15, 0.38, f"{labels[0]}: {display_vals[0]}", color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(1.15, 0.38, f"{labels[1]}: {display_vals[1]}", color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
         elif len(loaded) == 1:
             # Draw a single color bar
             width = 240
@@ -2590,7 +2714,7 @@ class MuadDataViewer:
             self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
             self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
-            self.rgb_colorbar_ax.text(1, 1.05, labels[0], color=colors[0], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+            self.rgb_colorbar_ax.text(1, 1.05, f"{labels[0]}: {display_vals[0]}", color=colors[0], fontsize=10, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
             self.rgb_colorbar_ax.set_xlim(0, 1)
             self.rgb_colorbar_ax.set_ylim(0, 1)
         else:
@@ -2683,21 +2807,16 @@ class MuadDataViewer:
                 loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
                 colors = [self.rgb_colors[ch] for ch in loaded]
                 labels = []
+                display_vals = []
                 for ch in loaded:
-                    label = self.rgb_labels[ch]['elem'].cget("text")
-                    if label.startswith("Loaded Element: "):
-                        label = label[len("Loaded Element: "):]
-                    if label == "None":
-                        label = ch
-                    # Get current slider max value
-                    max_val = self.rgb_sliders[ch]['max'].get()
-                    # Append max value to label
-                    labels.append(f"{label}\n(max: {max_val:.2f})")
+                    label = (self.rgb_labels[ch]['elem'].cget("text") or "").strip()
+                    labels.append(label if label else ch)
+                    display_vals.append(int(round(self.rgb_sliders[ch]['max'].get())))
                 
                 ax_cbar.axis('off')
                 
                 if len(loaded) == 3:
-                    # Draw triangle colorbar (aspect so triangle isn't stretched)
+                    # Equilateral triangle (200x100 canvas)
                     triangle = np.zeros((100, 200, 3), dtype=float)
                     rgb_vals = []
                     for c in colors:
@@ -2705,9 +2824,10 @@ class MuadDataViewer:
                         g = int(c[3:5], 16) / 255.0
                         b = int(c[5:7], 16) / 255.0
                         rgb_vals.append([r, g, b])
-                    v0 = np.array([100, 10])
-                    v1 = np.array([190, 90])
-                    v2 = np.array([10, 90])
+                    # height=80, base half-width = 80/√3 ≈ 46
+                    v0 = np.array([100.0, 10.0])
+                    v1 = np.array([146.0, 90.0])
+                    v2 = np.array([54.0, 90.0])
                     for y in range(100):
                         for x in range(200):
                             p = np.array([x, y])
@@ -2724,9 +2844,25 @@ class MuadDataViewer:
                     ax_cbar.plot([v0[0]/200, v1[0]/200], [0.5 - v0[1]/100*0.5, 0.5 - v1[1]/100*0.5], color='k', lw=1)
                     ax_cbar.plot([v1[0]/200, v2[0]/200], [0.5 - v1[1]/100*0.5, 0.5 - v2[1]/100*0.5], color='k', lw=1)
                     ax_cbar.plot([v2[0]/200, v0[0]/200], [0.5 - v2[1]/100*0.5, 0.5 - v0[1]/100*0.5], color='k', lw=1)
-                    ax_cbar.text(v0[0]/200, 0.5 - v0[1]/100*0.5 - 0.03, labels[0], color=colors[0], fontsize=8, ha='center', va='top', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(v1[0]/200+0.03, 0.5 - v1[1]/100*0.5, labels[1], color=colors[1], fontsize=8, ha='left', va='center', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(v2[0]/200-0.03, 0.5 - v2[1]/100*0.5, labels[2], color=colors[2], fontsize=8, ha='right', va='center', fontweight='bold', fontfamily='Arial')
+                    # Labels along outward normals: "Channel: value"
+                    def _px_to_data(v, w=200, h=100):
+                        return (v[0]/w, 0.5 - v[1]/h*0.5)
+                    v0d, v1d, v2d = _px_to_data(v0), _px_to_data(v1), _px_to_data(v2)
+                    cend = ((v0d[0]+v1d[0]+v2d[0])/3, (v0d[1]+v1d[1]+v2d[1])/3)
+                    offset = 0.08
+                    for i, (vd, lbl, val) in enumerate(zip([v0d, v1d, v2d], labels, display_vals)):
+                        out = (vd[0] - cend[0], vd[1] - cend[1])
+                        n = np.hypot(out[0], out[1])
+                        if n > 0:
+                            out = (out[0]/n, out[1]/n)
+                            lx, ly = vd[0] + offset*out[0], vd[1] + offset*out[1]
+                        else:
+                            out = (0, 1)
+                            lx, ly = vd[0], vd[1] + offset
+                        txt = f"{lbl}: {val}"
+                        ha = 'center' if abs(out[0]) < 0.1 else ('left' if out[0] > 0 else 'right')
+                        va = 'bottom' if out[1] >= 0 else 'top'
+                        ax_cbar.text(lx, ly, txt, color=colors[i], fontsize=8, ha=ha, va=va, fontweight='bold', fontfamily='Arial')
                     ax_cbar.set_aspect('equal')
                     ax_cbar.set_xlim(-0.1, 1.1)
                     ax_cbar.set_ylim(-0.1, 0.6)
@@ -2749,8 +2885,8 @@ class MuadDataViewer:
                     ax_cbar.set_aspect('equal')
                     ax_cbar.set_xlim(-0.25, 1.25)
                     ax_cbar.set_ylim(-0.05, 0.45)
-                    ax_cbar.text(-0.15, 0.38, labels[0], color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
-                    ax_cbar.text(1.15, 0.38, labels[1], color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(-0.15, 0.38, f"{labels[0]}: {display_vals[0]}", color=colors[0], fontsize=8, ha='left', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(1.15, 0.38, f"{labels[1]}: {display_vals[1]}", color=colors[1], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
                 elif len(loaded) == 1:
                     # Draw single color bar
                     width = 200
@@ -2766,7 +2902,7 @@ class MuadDataViewer:
                     ax_cbar.plot([0, 1], [1, 1], color='k', lw=1)
                     ax_cbar.plot([0, 0], [0, 1], color='k', lw=1)
                     ax_cbar.plot([1, 1], [0, 1], color='k', lw=1)
-                    ax_cbar.text(1, 1.1, labels[0], color=colors[0], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
+                    ax_cbar.text(1, 1.1, f"{labels[0]}: {display_vals[0]}", color=colors[0], fontsize=8, ha='right', va='bottom', fontweight='bold', fontfamily='Arial')
                     ax_cbar.set_xlim(0, 1)
                     ax_cbar.set_ylim(0, 1.2)
                 
@@ -2877,12 +3013,8 @@ class MuadDataViewer:
             self.correlation_label.config(text="Pearson r: insufficient data")
         
         # Get element names from labels
-        elem1_name = self.rgb_labels[elem1]['elem'].cget("text").replace("Loaded Element: ", "")
-        elem2_name = self.rgb_labels[elem2]['elem'].cget("text").replace("Loaded Element: ", "")
-        if elem1_name == "None":
-            elem1_name = elem1
-        if elem2_name == "None":
-            elem2_name = elem2
+        elem1_name = (self.rgb_labels[elem1]['elem'].cget("text") or "").strip() or elem1
+        elem2_name = (self.rgb_labels[elem2]['elem'].cget("text") or "").strip() or elem2
         
         # Display the ratio map in a new window
         self.display_ratio_map(ratio, elem1_name, elem2_name)
@@ -2953,12 +3085,8 @@ class MuadDataViewer:
         # Get element names for filename
         elem1 = self.correlation_elem1.get()
         elem2 = self.correlation_elem2.get()
-        elem1_name = self.rgb_labels[elem1]['elem'].cget("text").replace("Loaded Element: ", "")
-        elem2_name = self.rgb_labels[elem2]['elem'].cget("text").replace("Loaded Element: ", "")
-        if elem1_name == "None":
-            elem1_name = elem1
-        if elem2_name == "None":
-            elem2_name = elem2
+        elem1_name = (self.rgb_labels[elem1]['elem'].cget("text") or "").strip() or elem1
+        elem2_name = (self.rgb_labels[elem2]['elem'].cget("text") or "").strip() or elem2
         
         # Generate default filename
         default_name = f"{elem1_name}_over_{elem2_name}_ratio.xlsx"
