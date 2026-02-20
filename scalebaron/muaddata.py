@@ -1957,7 +1957,7 @@ class MuadDataViewer:
 
         color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
         _chan_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
-        slider_height = 100
+        slider_height = 140
         gradient_width = 12
         col_width = 48  # Min width per column for alignment
 
@@ -2022,7 +2022,7 @@ class MuadDataViewer:
             rgb_slider_val_label.pack(anchor='center', pady=(0, 2))
             slider_cell = ttk.Frame(col)
             slider_cell.pack(anchor='center')
-            max_slider = ttk.Scale(slider_cell, from_=0, to=1, orient=tk.VERTICAL, length=slider_height)
+            max_slider = ttk.Scale(slider_cell, from_=1, to=0, orient=tk.VERTICAL, length=slider_height)
             max_slider.set(1)
             max_slider.pack(side=tk.LEFT)
             gradient_canvas = tk.Canvas(slider_cell, height=slider_height, width=gradient_width, bg=_chan_bg, highlightthickness=0)
@@ -2179,7 +2179,7 @@ class MuadDataViewer:
             # Update button color
             self.rgb_color_buttons[channel].configure(bg=color_code[1])
             # Redraw vertical gradient
-            self.draw_gradient_vertical(self.rgb_gradient_canvases[channel], color_code[1], 12, 100)
+            self.draw_gradient_vertical(self.rgb_gradient_canvases[channel], color_code[1], 12, 140)
             # Update overlay if visible
             self.view_rgb_overlay()
 
@@ -2199,8 +2199,8 @@ class MuadDataViewer:
             # Reset max value display
             if 'max_value' in self.rgb_labels[ch]:
                 self.rgb_labels[ch]['max_value'].config(text="")
-            # Reset sliders to default
-            self.rgb_sliders[ch]['max'].config(from_=0, to=1)
+            # Reset sliders to default (top=high, bottom=low to match gradient)
+            self.rgb_sliders[ch]['max'].config(from_=1, to=0)
             self.rgb_sliders[ch]['max'].set(1)
             self.rgb_labels[ch]['slider_value'].config(text="1.00")
             # Reset slider max limits
@@ -2229,10 +2229,8 @@ class MuadDataViewer:
     def set_rgb_max_slider_limit(self, channel):
         try:
             val = float(self.rgb_max_limits[channel].get())
-            val = float(val)
-            min_val = self.rgb_sliders[channel]['max'].cget('from')
-            if val > min_val:
-                self.rgb_sliders[channel]['max'].config(to=val)
+            if val > 0:
+                self.rgb_sliders[channel]['max'].config(from_=val, to=0)
                 if self.rgb_sliders[channel]['max'].get() > val:
                     self.rgb_sliders[channel]['max'].set(val)
                 self.rgb_labels[channel]['slider_value'].config(text=f"{self.rgb_sliders[channel]['max'].get():.2f}")
@@ -2240,9 +2238,9 @@ class MuadDataViewer:
                 self.update_rgb_max_value_display(channel)
                 self.view_rgb_overlay()
             else:
-                self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('to'))
+                self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('from'))
         except Exception:
-            self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('to'))
+            self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('from'))
 
     def pick_scalebar_color(self):
         """Open color chooser for scale bar color and update the scale bar."""
@@ -2517,7 +2515,7 @@ class MuadDataViewer:
             self.file_root_label.config(text=f"Dataset: {root_name}")
             max_val = float(np.nanmax(mat))
             if np.isfinite(max_val):
-                self.rgb_sliders[channel]['max'].config(from_=0, to=max_val)
+                self.rgb_sliders[channel]['max'].config(from_=max_val, to=0)
                 self.rgb_sliders[channel]['max'].set(max_val)
                 self.rgb_labels[channel]['slider_value'].config(text=f"{max_val:.2f}")
                 # initialize per-channel slider cap
