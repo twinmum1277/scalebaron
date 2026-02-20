@@ -277,7 +277,8 @@ class MuadDataViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("Muad'Data - Elemental Map Viewer")
-        self._set_app_icon()
+        # Defer icon setup so it runs after window is realized (fixes macOS dock icon)
+        self.root.after(100, self._set_app_icon)
 
         # Single Element Viewer state
         self.single_matrix = None
@@ -489,15 +490,31 @@ class MuadDataViewer:
                 if os.path.exists(path):
                     icon_path = path
                     break
-            if not icon_path:
-                return
-            img = Image.open(icon_path)
+            if icon_path:
+                img = Image.open(icon_path)
+            else:
+                # Fallback: load from package resource (e.g. when installed via pip)
+                try:
+                    from importlib.resources import files
+                    pkg = files("scalebaron")
+                    for name in ("muaddata_icon.png", "muaddata ICON.png"):
+                        try:
+                            with (pkg / "icons" / name).open("rb") as f:
+                                img = Image.open(f).copy()
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        return
+                except Exception:
+                    return
             # Resize to standard icon size for best cross-platform display
             if img.size[0] > 64 or img.size[1] > 64:
                 img = img.resize((64, 64), Image.LANCZOS)
             self._app_icon = ImageTk.PhotoImage(img)
             self.root.iconphoto(True, self._app_icon)
-            self.root._dialog_icon = self._app_icon  # For custom_dialogs to show logo inside dialogs
+            self.root._dialog_icon = self._app_icon
+            self.root._app_icon_ref = self._app_icon  # Keep ref on root so icon persists (macOS dock)
         except Exception:
             pass
 

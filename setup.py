@@ -16,6 +16,7 @@ setup(
     author_email='tracy.punshon@dartmouth.edu',
     license='MIT',
     packages=['scalebaron'],
+    package_data={'scalebaron': ['icons/*.png', 'icons/*.svg']},
     install_requires=requirements,
     entry_points={
         'console_scripts': [
