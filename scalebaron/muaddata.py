@@ -289,7 +289,6 @@ class MuadDataViewer:
         self.show_scalebar = tk.IntVar()
         self.pixel_size = tk.DoubleVar(value=1.0)
         self.scale_length = tk.DoubleVar(value=50)
-        self.scalebar_color = '#ffffff'  # Default to white for good contrast
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
         self.single_file_path = None   # Store full path to loaded file (for polygon persistence)
@@ -1016,11 +1015,6 @@ class MuadDataViewer:
         # --- Scale bar ---
         scale_group = ttk.LabelFrame(control_frame, text="Scale bar", padding=10)
         scale_group.pack(fill=tk.X, pady=(0, 5))
-        scalebar_color_frame = ttk.Frame(scale_group)
-        scalebar_color_frame.pack(fill=tk.X)
-        ttk.Label(scalebar_color_frame, text="Color:").pack(side=tk.LEFT)
-        self.scalebar_color_btn = tk.Button(scalebar_color_frame, text="Pick", bg=self.scalebar_color, fg='black', font=("TkDefaultFont", 12), width=6, padx=0, pady=0, highlightthickness=0, bd=0, relief='flat', command=self.pick_scalebar_color)
-        self.scalebar_color_btn.pack(side=tk.LEFT, padx=(5, 0))
         row1 = ttk.Frame(scale_group)
         row1.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(row1, text="Pixel size (µm):").pack(side=tk.LEFT)
@@ -2267,18 +2261,6 @@ class MuadDataViewer:
         except Exception:
             self.rgb_max_limits[channel].set(self.rgb_sliders[channel]['max'].cget('from'))
 
-    def pick_scalebar_color(self):
-        """Open color chooser for scale bar color and update the scale bar."""
-        initial_color = self.scalebar_color
-        color_code = colorchooser.askcolor(title="Pick Scale Bar Color", color=initial_color)
-        if color_code and color_code[1]:
-            self.scalebar_color = color_code[1]
-            # Update button color
-            self.scalebar_color_btn.configure(bg=color_code[1])
-            # Update scale bar if visible
-            if self.show_scalebar.get():
-                self.view_single_map()
-
     def draw_gradient(self, canvas, color):
         # Accepts either a color name ('red', 'green', 'blue') or a hex color
         canvas.delete("all")
@@ -2439,17 +2421,20 @@ class MuadDataViewer:
         if self.show_scalebar.get():
             scale_um = self.scale_length.get()
             ext = getattr(self, '_single_extent_um', None)
+            bar_color = 'white'
+            # Use axes coords so bar stays at bottom-left corner regardless of extent
+            x0_ax, y0_ax = 0.02, 0.02
             if ext is not None:
-                dx, _H, _W = ext
-                x0, y0 = 5 * dx, 15 * dx
-                self.single_ax.plot([x0, x0 + scale_um], [y0, y0], color=self.scalebar_color, lw=3)
-                self.single_ax.text(x0, y0 - 2 * dx, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+                dx, _H, W = ext
+                bar_frac = scale_um / (W * dx) if W * dx > 0 else 0.05
             else:
                 ps = self.pixel_size.get()
-                bar_length = (scale_um / ps) if ps and ps > 0 else scale_um
-                x, y = 5, H - 15
-                self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
-                self.single_ax.text(x, y - 10, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+                bar_px = (scale_um / ps) if ps and ps > 0 else scale_um
+                bar_frac = bar_px / W if W > 0 else 0.05
+            bar_frac = min(bar_frac, 0.4)
+            self.single_ax.plot([x0_ax, x0_ax + bar_frac], [y0_ax, y0_ax], color=bar_color, lw=3, transform=self.single_ax.transAxes)
+            self.single_ax.text(0.02, 0.05, f"{int(scale_um)} µm", color=bar_color, fontsize=10, ha='left', va='top',
+                               transform=self.single_ax.transAxes, fontfamily='Arial', clip_on=False)
         
         # Recalculate statistics for all existing polygons with the current element data
         self.recalculate_all_polygon_statistics()
