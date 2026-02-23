@@ -1462,6 +1462,7 @@ class MuadDataViewer:
         if event.xdata is None or event.ydata is None:
             return
         
+        # Data coords are matrix/pixel indices (same as ScaleBarOn)
         x, y = int(event.xdata), int(event.ydata)
         
         # Validate bounds
@@ -2372,12 +2373,14 @@ class MuadDataViewer:
             return
         mat = np.array(self.single_matrix, dtype=float)
         mat[np.isnan(mat)] = 0
+        H, W = mat.shape[0], mat.shape[1]
         # Update min/max values from sliders in case they changed
         vmin = self.single_min.get()
         vmax = self.single_max.get()
         self.single_ax.clear()
-        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='equal')
-        self.single_ax.set_aspect('equal')
+        # Match ScaleBarOn: display in matrix coordinates with aspect='auto' (image fills axes; no physical extent).
+        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
+        self.single_ax.set_aspect('auto')
         self.single_ax.axis('off')
         
         # Handle colorbar creation/removal
@@ -2416,11 +2419,12 @@ class MuadDataViewer:
                 pass
         
         if self.show_scalebar.get():
-            bar_length = self.scale_length.get() / self.pixel_size.get()
-            x = 5
-            y = mat.shape[0] - 15
+            scale_um = self.scale_length.get()
+            ps = self.pixel_size.get()
+            bar_length = (scale_um / ps) if ps and ps > 0 else scale_um
+            x, y = 5, H - 15
             self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
-            self.single_ax.text(x, y - 10, f"{int(self.scale_length.get())} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+            self.single_ax.text(x, y - 10, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
         
         # Recalculate statistics for all existing polygons with the current element data
         self.recalculate_all_polygon_statistics()
@@ -2441,8 +2445,7 @@ class MuadDataViewer:
             except:
                 pass
         self.polygon_patches = []
-        
-        # Draw completed polygons
+        # Draw completed polygons (vertices are in pixel/matrix coordinates)
         for poly_data in self.polygon_data:
             vertices = poly_data['vertices']
             color = poly_data['color']
@@ -2460,15 +2463,14 @@ class MuadDataViewer:
                 color_tuple = color
             
             # Create polygon patch with semi-transparent fill
-            polygon = Polygon(vertices, closed=True, 
-                            facecolor=color_tuple, edgecolor=color_tuple, 
+            polygon = Polygon(vertices, closed=True,
+                            facecolor=color_tuple, edgecolor=color_tuple,
                             alpha=0.3, linewidth=2)
             self.single_ax.add_patch(polygon)
             self.polygon_patches.append(polygon)
         
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
-            # Draw vertices as markers
             x_coords = [v[0] for v in self.polygon_vertices]
             y_coords = [v[1] for v in self.polygon_vertices]
             self.single_ax.plot(x_coords, y_coords, 'wo', markersize=8, markeredgecolor='black', markeredgewidth=1)
