@@ -2310,9 +2310,15 @@ class CompositeApp:
 
             # Get the pixel size for this sample
             pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
-
-            im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
-            ax.set_aspect('auto')
+            H, W = matrix.shape[0], matrix.shape[1]
+            if pixel_size and float(pixel_size) > 0:
+                dx = float(pixel_size)
+                extent = [0, W * dx, 0, H * dx]
+                im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
+                ax.set_aspect('equal')
+            else:
+                im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
+                ax.set_aspect('auto')
             if show_subplot_label:
                 # Sample names go on overlay layer (for future editing); keep title empty in base
                 ax.set_title("", color=text_color, fontsize=font_size)
@@ -2348,9 +2354,14 @@ class CompositeApp:
                 
                 # Create a masked array for NaN values
                 masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
-                
-                # Plot with transparency for NaN values
-                subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
+                if pixel_size and float(pixel_size) > 0:
+                    dx = float(pixel_size)
+                    extent = [0, W * dx, 0, H * dx]
+                    subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
+                    subplot_ax.set_aspect('equal')
+                else:
+                    subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
+                    subplot_ax.set_aspect('auto')
                 if show_subplot_label:
                     subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
                 else:

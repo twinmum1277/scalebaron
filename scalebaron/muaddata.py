@@ -1462,9 +1462,16 @@ class MuadDataViewer:
         if event.xdata is None or event.ydata is None:
             return
         
-        # Data coords are matrix/pixel indices (same as ScaleBarOn)
-        x, y = int(event.xdata), int(event.ydata)
-        
+        ext = getattr(self, '_single_extent_um', None)
+        if ext:
+            dx, H, W = ext
+            if dx <= 0:
+                return
+            x = int(round(event.xdata / dx))
+            y = int(round(H - event.ydata / dx))
+        else:
+            x, y = int(event.xdata), int(event.ydata)
+
         # Validate bounds
         if x < 0 or y < 0 or x >= self.single_matrix.shape[1] or y >= self.single_matrix.shape[0]:
             return
@@ -2378,9 +2385,20 @@ class MuadDataViewer:
         vmin = self.single_min.get()
         vmax = self.single_max.get()
         self.single_ax.clear()
-        # Match ScaleBarOn: display in matrix coordinates with aspect='auto' (image fills axes; no physical extent).
-        im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
-        self.single_ax.set_aspect('auto')
+        # Use physical extent when pixel size is set (1 µm = 1 µm on axes; publication-quality figures)
+        try:
+            pixel_size_um = float(self.pixel_size.get())
+        except (TypeError, ValueError):
+            pixel_size_um = 0.0
+        if pixel_size_um > 0:
+            extent = [0, W * pixel_size_um, 0, H * pixel_size_um]
+            im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax,
+                                       aspect='equal', extent=extent)
+            self._single_extent_um = (pixel_size_um, H, W)
+        else:
+            im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
+            self._single_extent_um = None
+        self.single_ax.set_aspect('equal' if pixel_size_um > 0 else 'auto')
         self.single_ax.axis('off')
         
         # Handle colorbar creation/removal
@@ -2420,11 +2438,18 @@ class MuadDataViewer:
         
         if self.show_scalebar.get():
             scale_um = self.scale_length.get()
-            ps = self.pixel_size.get()
-            bar_length = (scale_um / ps) if ps and ps > 0 else scale_um
-            x, y = 5, H - 15
-            self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
-            self.single_ax.text(x, y - 10, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+            ext = getattr(self, '_single_extent_um', None)
+            if ext is not None:
+                dx, _H, _W = ext
+                x0, y0 = 5 * dx, 15 * dx
+                self.single_ax.plot([x0, x0 + scale_um], [y0, y0], color=self.scalebar_color, lw=3)
+                self.single_ax.text(x0, y0 - 2 * dx, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
+            else:
+                ps = self.pixel_size.get()
+                bar_length = (scale_um / ps) if ps and ps > 0 else scale_um
+                x, y = 5, H - 15
+                self.single_ax.plot([x, x + bar_length], [y, y], color=self.scalebar_color, lw=3)
+                self.single_ax.text(x, y - 10, f"{int(scale_um)} µm", color=self.scalebar_color, fontsize=10, ha='left', fontfamily='Arial')
         
         # Recalculate statistics for all existing polygons with the current element data
         self.recalculate_all_polygon_statistics()
@@ -2445,9 +2470,17 @@ class MuadDataViewer:
             except:
                 pass
         self.polygon_patches = []
-        # Draw completed polygons (vertices are in pixel/matrix coordinates)
+        ext = getattr(self, '_single_extent_um', None)
+
+        def to_axes(vx, vy):
+            if ext:
+                dx, H, W = ext
+                return (vx * dx, (H - vy) * dx)
+            return (vx, vy)
+
         for poly_data in self.polygon_data:
             vertices = poly_data['vertices']
+            vert_axes = [to_axes(v[0], v[1]) for v in vertices]
             color = poly_data['color']
             # Convert color to tuple if it's an array (for matplotlib)
             if isinstance(color, np.ndarray):
@@ -2463,7 +2496,7 @@ class MuadDataViewer:
                 color_tuple = color
             
             # Create polygon patch with semi-transparent fill
-            polygon = Polygon(vertices, closed=True,
+            polygon = Polygon(vert_axes, closed=True,
                             facecolor=color_tuple, edgecolor=color_tuple,
                             alpha=0.3, linewidth=2)
             self.single_ax.add_patch(polygon)
@@ -2471,19 +2504,14 @@ class MuadDataViewer:
         
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
-            x_coords = [v[0] for v in self.polygon_vertices]
-            y_coords = [v[1] for v in self.polygon_vertices]
+            pts = [to_axes(v[0], v[1]) for v in self.polygon_vertices]
+            x_coords = [p[0] for p in pts]
+            y_coords = [p[1] for p in pts]
             self.single_ax.plot(x_coords, y_coords, 'wo', markersize=8, markeredgecolor='black', markeredgewidth=1)
-            
-            # Draw lines between vertices
             if len(self.polygon_vertices) > 1:
                 self.single_ax.plot(x_coords, y_coords, 'w-', linewidth=2, alpha=0.5)
-            
-            # Draw closing line back to first vertex if we have 3+ vertices (to show it will close)
             if len(self.polygon_vertices) >= 3:
-                first_x, first_y = self.polygon_vertices[0]
-                last_x, last_y = self.polygon_vertices[-1]
-                self.single_ax.plot([last_x, first_x], [last_y, first_y], 'w--', linewidth=2, alpha=0.5, linestyle='dashed')
+                self.single_ax.plot([pts[-1][0], pts[0][0]], [pts[-1][1], pts[0][1]], 'w--', linewidth=2, alpha=0.5, linestyle='dashed')
 
     def save_single_image(self):
         if self.single_matrix is None:
