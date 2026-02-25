@@ -5,6 +5,9 @@ from tkinter import filedialog, ttk, colorchooser, simpledialog
 from . import custom_dialogs
 import numpy as np
 import pandas as pd
+import matplotlib
+# Force TkAgg backend so we don't mix the macOS native (MacOSX) backend with Tk, which can segfault on save
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.widgets import RectangleSelector
@@ -323,6 +326,7 @@ class MuadDataViewer:
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
         self.rgb_sliders = {}
+        self.rgb_slider_max_var = {'R': tk.DoubleVar(value=1.0), 'G': tk.DoubleVar(value=1.0), 'B': tk.DoubleVar(value=1.0)}
         self.rgb_max_limits = {}
         self.rgb_labels = {}
         self.rgb_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}  # Default colors
@@ -1259,20 +1263,56 @@ class MuadDataViewer:
         """Callback when a rectangle selection is made."""
         if not self.zoom_active:
             return
-        
-        # Get the coordinates of the selection (in data coordinates)
-        x1, y1 = int(eclick.xdata), int(eclick.ydata)
-        x2, y2 = int(erelease.xdata), int(erelease.ydata)
-        
-        # Ensure coordinates are in the right order
-        x1, x2 = min(x1, x2), max(x1, x2)
-        y1, y2 = min(y1, y2), max(y1, y2)
-        
-        # Validate bounds
-        if x1 < 0 or y1 < 0 or x2 > self.single_matrix.shape[1] or y2 > self.single_matrix.shape[0]:
+        if eclick.xdata is None or eclick.ydata is None or erelease.xdata is None or erelease.ydata is None:
+            custom_dialogs.showwarning(self.root, "Invalid Selection", "Please complete the selection inside the image.")
+            return
+
+        H, W = self.single_matrix.shape[0], self.single_matrix.shape[1]
+        ext = getattr(self, '_single_extent_um', None)
+        if ext:
+            # Axes use physical extent (µm); convert to pixel indices (same as polygon tool)
+            dx, _H, _W = ext
+            if dx <= 0:
+                return
+            x1 = int(round(eclick.xdata / dx))
+            x2 = int(round(erelease.xdata / dx))
+            # Row 0 is at top (ydata = H*dx); matrix row = H - ydata/dx
+            r1 = int(round(H - eclick.ydata / dx))
+            r2 = int(round(H - erelease.ydata / dx))
+            y1, y2 = min(r1, r2), max(r1, r2)
+            x1, x2 = min(x1, x2), max(x1, x2)
+            # Clamp to valid pixel range
+            x1 = max(0, min(x1, W - 1))
+            x2 = max(0, min(x2, W))
+            if x1 >= x2:
+                x2 = min(x1 + 1, W)
+            y1 = max(0, min(y1, H - 1))
+            y2 = max(0, min(y2, H))
+            if y1 >= y2:
+                y2 = min(y1 + 1, H)
+        else:
+            # Default imshow: data coords are -0.5 to cols-0.5 (and similar for y); convert to indices
+            x1 = int(round(eclick.xdata + 0.5))
+            x2 = int(round(erelease.xdata + 0.5))
+            y1 = int(round(eclick.ydata + 0.5))
+            y2 = int(round(erelease.ydata + 0.5))
+            x1, x2 = min(x1, x2), max(x1, x2)
+            y1, y2 = min(y1, y2), max(y1, y2)
+            # Clamp to valid range (avoids "out of bounds" when selecting at edges)
+            x1 = max(0, min(x1, W - 1))
+            x2 = max(0, min(x2, W))
+            if x1 >= x2:
+                x2 = min(x1 + 1, W)
+            y1 = max(0, min(y1, H - 1))
+            y2 = max(0, min(y2, H))
+            if y1 >= y2:
+                y2 = min(y1 + 1, H)
+
+        # Validate bounds (should always pass after clamping; keep as safety)
+        if x1 < 0 or y1 < 0 or x2 > W or y2 > H or x1 >= x2 or y1 >= y2:
             custom_dialogs.showerror(self.root, "Invalid Selection", "Selection is out of bounds. Please try again.")
             return
-        
+
         if x2 - x1 < 5 or y2 - y1 < 5:
             custom_dialogs.showwarning(self.root, "Selection Too Small", "Please select a larger region.")
             return
@@ -1994,7 +2034,6 @@ class MuadDataViewer:
         self.rgb_color_buttons = {}
         self.rgb_gradient_canvases = {}
         elem_labels = {}
-        max_value_labels = {}
 
         # Row 0: Load buttons
         for i, ch in enumerate(['R', 'G', 'B']):
@@ -2030,35 +2069,46 @@ class MuadDataViewer:
             cap_entry.bind("<Return>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
             cap_entry.bind("<FocusOut>", lambda e, c=ch: self.set_rgb_max_slider_limit(c))
 
-        # Row 4: Current values + vertical sliders + gradients
+        # Row 4: Current slider value + vertical sliders + gradients
         for i, ch in enumerate(['R', 'G', 'B']):
             col = ttk.Frame(channels_grid)
             col.grid(row=4, column=i, padx=4, pady=(0, 2), sticky='n')
-            max_value_label = ttk.Label(col, text="", style="Status.TLabel")
-            max_value_label.pack(anchor='center')
-            max_value_labels[ch] = max_value_label
-            rgb_slider_val_label = ttk.Label(col, text="1.00", width=6)
+            rgb_slider_val_label = ttk.Label(col, text="1", width=7)  # fixed width for whole numbers (avoids resize)
             rgb_slider_val_label.pack(anchor='center', pady=(0, 2))
             slider_cell = ttk.Frame(col)
             slider_cell.pack(anchor='center')
-            max_slider = ttk.Scale(slider_cell, from_=1, to=0, orient=tk.VERTICAL, length=slider_height)
-            max_slider.set(1)
+            max_var = self.rgb_slider_max_var[ch]
+            max_var.set(1.0)
+
+            def on_slider_change(val, c=ch, val_label=rgb_slider_val_label):
+                v = float(val)
+                val_label.config(text=str(int(round(v))))
+                self.update_rgb_max_value_display(c)
+                self.view_rgb_overlay()
+
+            # Use classic tk.Scale for reliable thumb tracking (ttk.Scale can fail on Windows)
+            max_slider = tk.Scale(
+                slider_cell,
+                from_=1,
+                to=0,
+                orient=tk.VERTICAL,
+                length=slider_height,
+                variable=max_var,
+                command=on_slider_change,
+                resolution=0.01,
+                showvalue=0,
+                bg='#f0f0f0',
+                troughcolor='#e0e0e0',
+                highlightthickness=0,
+            )
             max_slider.pack(side=tk.LEFT)
             gradient_canvas = tk.Canvas(slider_cell, height=slider_height, width=gradient_width, bg=_chan_bg, highlightthickness=0)
             gradient_canvas.pack(side=tk.LEFT)
             self.draw_gradient_vertical(gradient_canvas, self.rgb_colors[ch], gradient_width, slider_height)
             self.rgb_gradient_canvases[ch] = gradient_canvas
 
-            def make_slider_handler(c, val_label, slider):
-                def handler(event):
-                    val_label.config(text=f"{slider.get():.2f}")
-                    self.update_rgb_max_value_display(c)
-                    self.view_rgb_overlay()
-                return handler
-            max_slider.bind("<B1-Motion>", make_slider_handler(ch, rgb_slider_val_label, max_slider))
-            max_slider.bind("<ButtonRelease-1>", make_slider_handler(ch, rgb_slider_val_label, max_slider))
             self.rgb_sliders[ch] = {'max': max_slider}
-            self.rgb_labels[ch] = {'elem': elem_labels[ch], 'max_value': max_value_labels[ch], 'slider_value': rgb_slider_val_label}
+            self.rgb_labels[ch] = {'elem': elem_labels[ch], 'slider_value': rgb_slider_val_label}
 
         # Row 5: Color picker buttons
         for i, ch in enumerate(['R', 'G', 'B']):
@@ -2203,10 +2253,8 @@ class MuadDataViewer:
             self.view_rgb_overlay()
 
     def update_rgb_max_value_display(self, channel):
-        """Update the max value display for the specified RGB channel."""
-        if channel in self.rgb_sliders and 'max_value' in self.rgb_labels[channel]:
-            current_max = self.rgb_sliders[channel]['max'].get()
-            self.rgb_labels[channel]['max_value'].config(text=f"Max: {current_max:.2f}")
+        """Update the slider value display for the specified RGB channel (no-op; value shown by slider callback)."""
+        pass
 
     def clear_rgb_data(self):
         """Clear all RGB data and reset the interface."""
@@ -2215,13 +2263,10 @@ class MuadDataViewer:
             self.rgb_data[ch] = None
             # Reset element labels
             self.rgb_labels[ch]['elem'].config(text="")
-            # Reset max value display
-            if 'max_value' in self.rgb_labels[ch]:
-                self.rgb_labels[ch]['max_value'].config(text="")
             # Reset sliders to default (top=high, bottom=low to match gradient)
             self.rgb_sliders[ch]['max'].config(from_=1, to=0)
-            self.rgb_sliders[ch]['max'].set(1)
-            self.rgb_labels[ch]['slider_value'].config(text="1.00")
+            self.rgb_slider_max_var[ch].set(1.0)
+            self.rgb_labels[ch]['slider_value'].config(text="1")
             # Reset slider max limits
             if ch in self.rgb_max_limits:
                 self.rgb_max_limits[ch].set(1.0)
@@ -2250,9 +2295,9 @@ class MuadDataViewer:
             val = float(self.rgb_max_limits[channel].get())
             if val > 0:
                 self.rgb_sliders[channel]['max'].config(from_=val, to=0)
-                if self.rgb_sliders[channel]['max'].get() > val:
-                    self.rgb_sliders[channel]['max'].set(val)
-                self.rgb_labels[channel]['slider_value'].config(text=f"{self.rgb_sliders[channel]['max'].get():.2f}")
+                if self.rgb_slider_max_var[channel].get() > val:
+                    self.rgb_slider_max_var[channel].set(val)
+                self.rgb_labels[channel]['slider_value'].config(text=str(int(round(self.rgb_slider_max_var[channel].get()))))
                 self.rgb_max_limits[channel].set(val)
                 self.update_rgb_max_value_display(channel)
                 self.view_rgb_overlay()
@@ -2548,8 +2593,8 @@ class MuadDataViewer:
             max_val = float(np.nanmax(mat))
             if np.isfinite(max_val):
                 self.rgb_sliders[channel]['max'].config(from_=max_val, to=0)
-                self.rgb_sliders[channel]['max'].set(max_val)
-                self.rgb_labels[channel]['slider_value'].config(text=f"{max_val:.2f}")
+                self.rgb_slider_max_var[channel].set(max_val)
+                self.rgb_labels[channel]['slider_value'].config(text=str(int(round(max_val))))
                 # initialize per-channel slider cap
                 if channel in self.rgb_max_limits:
                     self.rgb_max_limits[channel].set(round(max_val))
@@ -2564,7 +2609,7 @@ class MuadDataViewer:
             return np.clip(mat / (vmax + 1e-6), 0, 1)
         def get_scaled_matrix(channel):
             mat = self.rgb_data[channel]
-            vmax = self.rgb_sliders[channel]['max'].get()
+            vmax = self.rgb_slider_max_var[channel].get()
             if self.normalize_var.get():
                 p99 = np.nanpercentile(mat, 99)
                 vmax = min(vmax, p99)
@@ -2650,7 +2695,7 @@ class MuadDataViewer:
             label = (self.rgb_labels[ch]['elem'].cget("text") or "").strip()
             labels.append(label if label else ch)
             # Current slider position (display max), formatted as integer
-            val = int(round(self.rgb_sliders[ch]['max'].get()))
+            val = int(round(self.rgb_slider_max_var[ch].get()))
             display_vals.append(val)
         self.rgb_colorbar_ax.clear()
         self.rgb_colorbar_ax.axis('off')
@@ -2841,7 +2886,7 @@ class MuadDataViewer:
                 for ch in loaded:
                     label = (self.rgb_labels[ch]['elem'].cget("text") or "").strip()
                     labels.append(label if label else ch)
-                    display_vals.append(int(round(self.rgb_sliders[ch]['max'].get())))
+                    display_vals.append(int(round(self.rgb_slider_max_var[ch].get())))
                 
                 ax_cbar.axis('off')
                 

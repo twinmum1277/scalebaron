@@ -3,8 +3,9 @@
 # TP: THIS VERSION CLONED from Josh's most recent upload, with user-friendly GUI layout changes, 3 sig fig constraint, ppm or CPS input
 
 import os
+import sys
 import tkinter as tk
-from tkinter import filedialog, ttk, font
+from tkinter import filedialog, ttk, font, simpledialog
 from . import custom_dialogs
 import numpy as np  # pyright: ignore[reportMissingImports]
 import matplotlib  # pyright: ignore[reportMissingImports]
@@ -175,6 +176,7 @@ class CompositeApp:
         self.progress_table = None
         self.progress_data = {}  # {(sample, element, unit_type): status} where status is 'complete', 'partial', 'missing_file', or None
         self.sample_include = {}  # sample name -> bool; which samples to include in scaling/preview (default True)
+        self.sample_aliases = {}  # sample name -> alias used for labels/overlays (optional)
         
         # Status tracking for simplified log
         self.status = "Idle"  # Idle, Busy, Finishing
@@ -194,6 +196,9 @@ class CompositeApp:
         # Load BNEIR logo if available
         self._load_bneir_logo()
         self.setup_widgets()
+
+        # Load any existing sample aliases for this output directory
+        self._load_sample_aliases()
 
     def setup_widgets(self):
         # Create notebook for tabs (similar to Muad'Data style)
@@ -437,15 +442,24 @@ class CompositeApp:
         preview_frame = ttk.Frame(self.preview_tab)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Element and Unit dropdowns at top
+        # Element and Unit dropdowns at top (stacked, with aligned comboboxes)
         element_group = ttk.Frame(control_frame)
-        element_group.pack(pady=5)
-        ttk.Label(element_group, text="Element:").pack(side=tk.LEFT, padx=5)
-        self.element_dropdown_preview = ttk.Combobox(element_group, textvariable=self.element, state="readonly", width=12)
-        self.element_dropdown_preview.pack(side=tk.LEFT, padx=5)
-        ttk.Label(element_group, text="Unit:").pack(side=tk.LEFT, padx=(10, 2))
-        self.unit_dropdown_preview = ttk.Combobox(element_group, textvariable=self.unit, state="readonly", width=8)
-        self.unit_dropdown_preview.pack(side=tk.LEFT, padx=2)
+        element_group.pack(pady=5, fill=tk.X)
+
+        # Element row
+        ttk.Label(element_group, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=(0, 2))
+        # Element strings are short (e.g. 'Ca44', 'Total Ca'), so a narrow width is sufficient
+        self.element_dropdown_preview = ttk.Combobox(
+            element_group, textvariable=self.element, state="readonly", width=10
+        )
+        self.element_dropdown_preview.grid(row=0, column=1, sticky="w", padx=5, pady=(0, 2))
+
+        # Unit row (moved below element to prevent being cut off)
+        ttk.Label(element_group, text="Unit:").grid(row=1, column=0, sticky="e", padx=5, pady=(0, 0))
+        self.unit_dropdown_preview = ttk.Combobox(
+            element_group, textvariable=self.unit, state="readonly", width=10
+        )
+        self.unit_dropdown_preview.grid(row=1, column=1, sticky="w", padx=5, pady=(0, 0))
         
         # Layout controls
         layout_frame = ttk.LabelFrame(control_frame, text="Layout", padding=10)
@@ -637,6 +651,16 @@ class CompositeApp:
             self._app_icon = ImageTk.PhotoImage(img)
             self.master.iconphoto(True, self._app_icon)
             self.master._dialog_icon = self._app_icon  # For custom_dialogs to show logo inside dialogs
+            self.master._app_icon_ref = self._app_icon  # Keep ref on root so icon persists
+            # On macOS, iconphoto() only affects the window; set dock icon via Cocoa (requires PyObjC)
+            if sys.platform == "darwin":
+                try:
+                    from AppKit import NSApplication, NSImage
+                    nsimg = NSImage.alloc().initWithContentsOfFile_(icon_path)
+                    if nsimg is not None:
+                        NSApplication.sharedApplication().setApplicationIconImage_(nsimg)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -737,6 +761,9 @@ class CompositeApp:
             self.output_dir = folder_selected
             self.output_folder_label.config(text=f"Output: {self.output_dir}")
             self.log_print(f"Output folder updated to: {self.output_dir}")
+            # Reload sample aliases for the new output directory
+            self.sample_aliases.clear()
+            self._load_sample_aliases()
             # Re-check existing progress and update table
             if self.progress_samples:
                 self._check_existing_progress()
@@ -1018,6 +1045,13 @@ class CompositeApp:
             if os.path.exists(stats_path):
                 try:
                     stats_df = pd.read_csv(stats_path)
+                    # Ingest any stored aliases from the statistics file
+                    if 'Sample' in stats_df.columns and 'Alias' in stats_df.columns:
+                        for _, row in stats_df[['Sample', 'Alias']].dropna().iterrows():
+                            sample = str(row['Sample'])
+                            alias = str(row['Alias']).strip()
+                            if alias and alias != sample:
+                                self.sample_aliases[sample] = alias
                 except Exception as e:
                     self.log_print(f"⚠️ Could not load statistics: {e}")
                     return
@@ -1075,14 +1109,19 @@ class CompositeApp:
             if hasattr(self, 'progress_table_canvas'):
                 self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
             return
-
         max_sample_len = max([len(s) for s in self.progress_samples] + [6])
-        col_widths = [4, max(8, min(max_sample_len + 1, 24))] + [5] * len(progress_cols)
+        max_alias_len = max([len(self.sample_aliases.get(s, "")) for s in self.progress_samples] + [5])
+        col_widths = [
+            4,  # Include checkbox
+            max(8, min(max_sample_len + 1, 24)),   # Sample ID
+            max(8, min(max_alias_len + 1, 24)),    # Alias
+        ] + [5] * len(progress_cols)
 
         # Header row 0: unit labels grouped over element columns (PPM | CPS | RAW)
         tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=0, column=1, sticky="nsew", padx=1, pady=1)
-        col_start = 2
+        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2], anchor="w").grid(row=0, column=2, sticky="nsew", padx=1, pady=1)
+        col_start = 3
         idx = 0
         while idx < len(progress_cols):
             element, unit_type = progress_cols[idx]
@@ -1100,11 +1139,13 @@ class CompositeApp:
                                                                  columnspan=span, sticky="nsew", padx=1, pady=1)
             col_start += span
 
-        # Header row 1: Include, Sample, element names
+        # Header row 1: Include, Sample, Alias, element names
         tk.Label(inner, text="✓", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
         tk.Label(inner, text="Sample", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=1, column=1, sticky="nsew", padx=1, pady=1)
+        tk.Label(inner, text="Alias", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2], anchor="w").grid(row=1, column=2, sticky="nsew", padx=1, pady=1)
         for c, (element, unit_type) in enumerate(progress_cols):
-            tk.Label(inner, text=element, bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2 + c], anchor="center").grid(row=1, column=2 + c, sticky="nsew", padx=1, pady=1)
+            tk.Label(inner, text=element, bg=_bg_header, font=("TkDefaultFont", 11, "bold"),
+                     width=col_widths[3 + c], anchor="center").grid(row=1, column=3 + c, sticky="nsew", padx=1, pady=1)
 
         # Data rows: each cell is a Label with its own background
         for r, sample in enumerate(self.progress_samples, start=2):
@@ -1113,8 +1154,22 @@ class CompositeApp:
             incl_lbl = tk.Label(inner, text=incl_text, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[0], anchor="center", cursor="hand2")
             incl_lbl.grid(row=r, column=0, sticky="nsew", padx=1, pady=1)
             incl_lbl.bind("<ButtonRelease-1>", lambda e, s=sample: self._toggle_sample_include(s))
-
-            tk.Label(inner, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[1], anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
+            # Sample ID (read-only)
+            tk.Label(inner, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11),
+                     width=col_widths[1], anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
+            # Alias (clickable to edit)
+            alias_text = self.sample_aliases.get(sample, "")
+            alias_lbl = tk.Label(
+                inner,
+                text=alias_text,
+                bg=_bg_include_sample,
+                font=("TkDefaultFont", 11, "italic"),
+                width=col_widths[2],
+                anchor="w",
+                cursor="xterm",
+            )
+            alias_lbl.grid(row=r, column=2, sticky="nsew", padx=1, pady=1)
+            alias_lbl.bind("<ButtonRelease-1>", lambda e, s=sample: self._edit_sample_alias(s))
 
             for c, (element, unit_type) in enumerate(progress_cols):
                 status = self.progress_data.get((sample, element, unit_type))
@@ -1126,7 +1181,8 @@ class CompositeApp:
                     bg, text = _bg_missing_file, "!"  # No input file
                 else:
                     bg, text = _bg_missing, ""  # Not started
-                tk.Label(inner, text=text, bg=bg, font=("TkDefaultFont", 11), width=col_widths[2 + c], anchor="center").grid(row=r, column=2 + c, sticky="nsew", padx=1, pady=1)
+                tk.Label(inner, text=text, bg=bg, font=("TkDefaultFont", 11),
+                         width=col_widths[3 + c], anchor="center").grid(row=r, column=3 + c, sticky="nsew", padx=1, pady=1)
 
         inner.update_idletasks()
         if hasattr(self, 'progress_table_canvas'):
@@ -1139,6 +1195,25 @@ class CompositeApp:
                 if current == 'missing_file':
                     continue
                 self.progress_data[(s, e, ut)] = status
+        if hasattr(self, 'progress_table') and self.progress_table is not None:
+            self.update_progress_table()
+
+    def _edit_sample_alias(self, sample):
+        """Prompt user to edit the display alias for a sample."""
+        current = self.sample_aliases.get(sample, "")
+        initial = current or sample
+        new_alias = simpledialog.askstring("Rename sample", f"Alias for sample '{sample}':", initialvalue=initial)
+        if new_alias is None:
+            return  # User cancelled
+        new_alias = new_alias.strip()
+        if not new_alias or new_alias == sample:
+            # Clear alias if empty or identical to sample ID
+            if sample in self.sample_aliases:
+                del self.sample_aliases[sample]
+        else:
+            self.sample_aliases[sample] = new_alias
+        # Persist aliases and refresh table
+        self._save_sample_aliases()
         if hasattr(self, 'progress_table') and self.progress_table is not None:
             self.update_progress_table()
     
@@ -1688,6 +1763,12 @@ class CompositeApp:
                 new_iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
                 new_mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
                 new_stats_df = new_percentiles_df.merge(new_iqr_df, on='Sample').merge(new_mean_df, on='Sample')
+                # Attach aliases for new samples
+                new_stats_df['Alias'] = new_stats_df['Sample'].map(lambda s: self.sample_aliases.get(s, s))
+
+                # Ensure existing stats have Alias column as well
+                if 'Alias' not in existing_stats_df.columns:
+                    existing_stats_df['Alias'] = existing_stats_df['Sample'].map(lambda s: self.sample_aliases.get(s, s))
 
                 # Combine with existing
                 stats_df = pd.concat([existing_stats_df, new_stats_df], ignore_index=True)
@@ -1706,6 +1787,8 @@ class CompositeApp:
                 iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
                 mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
                 stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
+                # Attach aliases column
+                stats_df['Alias'] = stats_df['Sample'].map(lambda s: self.sample_aliases.get(s, s))
 
                 # Round statistics and save
                 stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
@@ -1747,6 +1830,49 @@ class CompositeApp:
                 self.batch_progress_bar['value'] = 100
             if hasattr(self, 'batch_progress_label'):
                 self.batch_progress_label.config(text="Complete")
+
+    def _sample_aliases_path(self):
+        """Return path to the CSV that stores global sample aliases for this output directory."""
+        return os.path.join(self.output_dir, "sample_aliases.csv")
+
+    def _load_sample_aliases(self):
+        """Load sample aliases from CSV if present."""
+        path = self._sample_aliases_path()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            df = pd.read_csv(path)
+            if 'Sample' in df.columns and 'Alias' in df.columns:
+                for _, row in df[['Sample', 'Alias']].dropna().iterrows():
+                    sample = str(row['Sample'])
+                    alias = str(row['Alias']).strip()
+                    if alias and alias != sample:
+                        self.sample_aliases[sample] = alias
+        except Exception as e:
+            self.log_print(f"⚠️ Could not load sample aliases: {e}")
+
+    def _save_sample_aliases(self):
+        """Persist current sample aliases to CSV."""
+        path = self._sample_aliases_path()
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if not self.sample_aliases:
+                # If there are no aliases, avoid writing an empty file
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                return
+            data = [{'Sample': s, 'Alias': a} for s, a in sorted(self.sample_aliases.items()) if a]
+            if not data:
+                return
+            df = pd.DataFrame(data)
+            df.to_csv(path, index=False)
+        except Exception as e:
+            self.log_print(f"⚠️ Could not save sample aliases: {e}")
 
     def show_preview_window(self):
         """Display the preview image in a separate window."""
@@ -2408,9 +2534,10 @@ class CompositeApp:
 
         # Scale bar in right column (below color bar): length from last image's data scale so it stays accurate
         if self.use_custom_pixel_sizes.get() and self.labels:
+            # Only include the reference sample ID in the caption; omit per-sample pixel size text
             reference_label = self.labels[0]
             pixel_size_um = self.pixel_sizes_by_sample.get(reference_label, self.pixel_size.get())
-            scale_bar_caption = f"{reference_label}: {pixel_size_um:.2f} µm/px"
+            scale_bar_caption = reference_label
         else:
             reference_label = None
             pixel_size_um = self.pixel_size.get()
@@ -2495,13 +2622,15 @@ class CompositeApp:
         draw_credit = bool(self.add_credit_to_exports.get() and credit_text)
         # Use full figure as bbox so (0,0)-(1,1) figure coords map to (0,0)-(W,H) pixels
         full_fig_bbox = type("Bbox", (), {"x0": 0, "y0": 0, "x1": 1, "y1": 1})()
+        # Use aliases (if defined) for overlay labels; fall back to raw sample IDs
+        overlay_labels = [self.sample_aliases.get(s, s) for s in self.labels]
         overlay = self._build_overlay_image(
             base_image,
             full_fig_bbox,
             image_positions,
             scale_bar_pos,
             last_ax_width_fig,
-            list(self.labels),
+            overlay_labels,
             show_subplot_label,
             font_size if font_size is not None else 12,
             text_color,
@@ -2523,7 +2652,7 @@ class CompositeApp:
 
         # Store for future editing of sample names (redraw overlay only)
         self._base_preview_image = base_image
-        self._overlay_sample_names = list(self.labels)
+        self._overlay_sample_names = list(overlay_labels)
 
         if preview:
             self.preview_image = composited.copy()
@@ -2553,11 +2682,12 @@ class CompositeApp:
                 self._check_existing_progress()
                 self.update_progress_table()
 
-            # Save percentiles, IQR, and mean table
+            # Save percentiles, IQR, and mean table (including aliases)
             percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
             iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
             mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
             stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
+            stats_df['Alias'] = stats_df['Sample'].map(lambda s: self.sample_aliases.get(s, s))
             stats_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_statistics.csv")
             stats_df.to_csv(stats_path, index=False)
             
