@@ -22,11 +22,16 @@ except ImportError:
 import os
 import re
 import json
+import base64
+import zlib
 try:
     from PIL import Image, ImageTk
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# Phase 1: Specimen selector UI only; set True when foreground-mask implementation is ready
+SPECIMEN_SELECTOR_ENABLED = True
 
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
@@ -317,14 +322,42 @@ class MuadDataViewer:
         self.polygon_active = False  # Whether polygon selection mode is active
         self.polygon_vertices = []  # List of (x, y) tuples for current polygon being drawn
         self.polygon_patches = []  # List of Polygon patches for visualization
-        self.polygon_data = []  # List of dicts: {'name': str, 'vertices': list, 'color': str, 'stats': dict}
+        # Polygon dicts: name, vertices, color, stats, optional source, optional specimen_mask (bool H×W),
+        # optional specimen_hole_loops (list of vertex rings for drawing voids).
+        self.polygon_data = []
         self.polygon_colors = plt.cm.tab20(np.linspace(0, 1, 20))  # 20 distinct colors
         self.polygon_color_index = 0
         self.polygon_results_window = None  # Results table window
         self.polygon_results_table = None  # Treeview widget for results
 
+        # Magic wand (beta) state for Element Viewer
+        self.magic_wand_active = False
+        # Foreground = values >= bg + k*noise (MAD-based). Lower k → larger mask (whole specimen);
+        # higher k → stricter, often only brighter sub-regions (e.g. folds). Default biased low
+        # based on typical elemental maps; raise k if the mask bleeds into substrate/noise.
+        self.magic_wand_k = tk.DoubleVar(value=0.75)
+        self.magic_wand_connectivity = tk.IntVar(value=4)  # 4- or 8-neighbor connectivity
+        self.magic_wand_background_mode = tk.StringVar(value="auto")  # 'auto' or 'sample'
+        self.magic_wand_background_value = None
+        self.magic_wand_noise_scale = None
+        self.magic_wand_last_mask = None
+        self.magic_wand_bg_set = False
+        self.magic_wand_seed_row = None
+        self.magic_wand_seed_col = None
+        # Phase 2 defaults for specimen masking
+        # Phase 2 defaults: keep holes (do not fill) and require reasonably large components
+        self.magic_wand_fill_holes = False
+        self.magic_wand_min_area_px = 500
+        # Limit how many separate components we turn into ROIs in one selection
+        self.magic_wand_max_components = 4
+
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
+        # RGB zoom/crop state (independent of Element Viewer zoom)
+        self.rgb_zoom_active = False
+        self.rgb_rectangle_selector = None
+        self.rgb_crop_bounds = None  # (x1, x2, y1, y2) in pixel indices
+        self.rgb_is_zoomed = False
         self.rgb_sliders = {}
         self.rgb_slider_max_var = {'R': tk.DoubleVar(value=1.0), 'G': tk.DoubleVar(value=1.0), 'B': tk.DoubleVar(value=1.0)}
         self.rgb_max_limits = {}
@@ -1054,6 +1087,59 @@ class MuadDataViewer:
         self.clear_polygons_button = ttk.Button(region_group, text="Clear polygons", command=self.clear_all_polygons, width=10)
         self.clear_polygons_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
+        # --- Specimen mask → ROI (beta) ---
+        wand_group = ttk.LabelFrame(control_frame, text="Specimen mask → ROI (beta)", padding=10)
+        wand_group.pack(fill=tk.X, pady=(0, 5))
+        self.magic_wand_button = ttk.Button(
+            wand_group,
+            text="Select",
+            command=self.toggle_magic_wand_mode,
+            width=10,
+        )
+        self.magic_wand_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        ttk.Label(wand_group, text="Threshold × noise:", style="Hint.TLabel").pack(anchor='w', pady=(2, 0))
+        wand_scale = ttk.Scale(
+            wand_group,
+            from_=0.0,
+            to=5.0,
+            orient=tk.HORIZONTAL,
+            variable=self.magic_wand_k,
+        )
+        wand_scale.pack(fill=tk.X, padx=5, pady=(0, 4))
+        # Live display of current threshold multiplier (contour level proxy)
+        self.magic_wand_k_value_label = ttk.Label(
+            wand_group,
+            text=f"{self.magic_wand_k.get():.2f}×",
+            style="Status.TLabel",
+        )
+        self.magic_wand_k_value_label.pack(anchor='e', padx=(0, 5), pady=(0, 2))
+        ttk.Label(
+            wand_group,
+            text="Lower = larger mask (typical tissue). Higher = stricter, bright features only; "
+            "use if the mask spills past the specimen.",
+            style="Hint.TLabel",
+            wraplength=220,
+        ).pack(anchor='w', pady=(0, 4))
+        ttk.Label(wand_group, text="Connectivity:", style="Hint.TLabel").pack(anchor='w')
+        conn_frame = ttk.Frame(wand_group)
+        conn_frame.pack(fill=tk.X, pady=(0, 0))
+        ttk.Radiobutton(
+            conn_frame,
+            text="4-neighbor",
+            value=4,
+            variable=self.magic_wand_connectivity,
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(
+            conn_frame,
+            text="8-neighbor",
+            value=8,
+            variable=self.magic_wand_connectivity,
+        ).pack(side=tk.LEFT)
+
+        self.magic_wand_k.trace_add("write", lambda *args: self._update_magic_wand_k_label())
+        self.magic_wand_k_scale = wand_scale
+        wand_scale.bind("<ButtonRelease-1>", self._on_magic_wand_slider_release)
+
         self.single_file_label = ttk.Label(control_frame, text="Loaded file: None", style="Status.TLabel", wraplength=200)
         self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
@@ -1061,6 +1147,9 @@ class MuadDataViewer:
         self.single_ax.axis('off')
         self.single_canvas = FigureCanvasTkAgg(self.single_figure, master=display_frame)
         self.single_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Connect click handler for specimen selector (enabled only when magic_wand_active is True)
+        self.single_canvas.mpl_connect("button_press_event", self.on_single_ax_click)
 
     def set_max_slider_limit(self):
         """Set the maximum value of the max slider from the entry box."""
@@ -1093,6 +1182,590 @@ class MuadDataViewer:
         self.view_single_map()
 
     # Removed histogram functions and UI per request
+
+    # --- Specimen selector (beta) for Element Viewer ---
+    def toggle_magic_wand_mode(self):
+        """Enable or disable specimen selector (Phase 1: disabled; shows 'not yet implemented')."""
+        if not SPECIMEN_SELECTOR_ENABLED:
+            custom_dialogs.showinfo(
+                self.root,
+                "Specimen mask → ROI (beta)",
+                "This specimen selector is not yet implemented.\nIt will be available in a future update.",
+            )
+            return
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        self.magic_wand_active = not self.magic_wand_active
+        if self.magic_wand_active:
+            # Visually emphasize active state via text and style
+            self.magic_wand_button.config(text="Cancel", style="Red.TButton")
+            # Reset background/seed state and prompt user
+            self.magic_wand_background_value = None
+            self.magic_wand_noise_scale = None
+            self.magic_wand_last_mask = None
+            self.magic_wand_bg_set = False
+            self.magic_wand_seed_row = None
+            self.magic_wand_seed_col = None
+            custom_dialogs.showinfo(
+                self.root,
+                "Specimen mask → ROI (beta)",
+                "Click on a background region (outside the sample) to set background.\n"
+                "Then click inside the sample to outline it.",
+            )
+            # Ensure polygon mode is off to avoid conflicting handlers
+            if self.polygon_active:
+                self.deactivate_polygon_mode()
+        else:
+            self.magic_wand_button.config(text="Select", style="TButton")
+
+    def _update_magic_wand_k_label(self):
+        """Update the small label showing the current threshold multiplier."""
+        try:
+            k_val = float(self.magic_wand_k.get())
+        except Exception:
+            k_val = 0.0
+        if hasattr(self, "magic_wand_k_value_label") and self.magic_wand_k_value_label is not None:
+            self.magic_wand_k_value_label.config(text=f"{k_val:.2f}×")
+
+    def _on_magic_wand_slider_release(self, event=None):
+        """Apply slider-driven refinement once the user releases the knob."""
+        if (
+            getattr(self, "magic_wand_active", False)
+            and self.magic_wand_bg_set
+            and self.magic_wand_seed_row is not None
+            and self.magic_wand_seed_col is not None
+        ):
+            # Refresh without popping dialogs
+            self.run_magic_wand_selection(
+                self.magic_wand_seed_row,
+                self.magic_wand_seed_col,
+                show_feedback=False,
+            )
+
+    def on_single_ax_click(self, event):
+        """Handle mouse clicks on the single-element map for magic-wand selection."""
+        if not self.magic_wand_active:
+            return
+        if event.inaxes is not self.single_ax:
+            return
+        if self.single_matrix is None:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        row, col = self._single_coords_to_indices(event.xdata, event.ydata)
+        if row is None or col is None:
+            return
+        # First click in wand mode sets background from a local patch
+        if not self.magic_wand_bg_set:
+            self._set_magic_wand_background_from_click(row, col)
+            return
+        # Subsequent clicks outline the sample region containing the seed
+        self.magic_wand_seed_row = row
+        self.magic_wand_seed_col = col
+        self.run_magic_wand_selection(row, col, show_feedback=True)
+
+    def _single_coords_to_indices(self, xdata, ydata):
+        """Convert Element Viewer data coords to (row, col) indices on self.single_matrix."""
+        if self.single_matrix is None:
+            return None, None
+        H, W = self.single_matrix.shape
+        ext = getattr(self, '_single_extent_um', None)
+        if ext:
+            dx, _H, _W = ext
+            if dx <= 0:
+                return None, None
+            col = int(round(xdata / dx))
+            row = int(round(H - ydata / dx))
+        else:
+            # Match polygon ROI coordinate convention (no +0.5 offset).
+            # The polygon tool uses `int(event.xdata)` / `int(event.ydata)` when ext is None.
+            col = int(xdata)
+            row = int(ydata)
+        # Clamp to valid indices
+        col = max(0, min(col, W - 1))
+        row = max(0, min(row, H - 1))
+        return row, col
+
+    def _compute_magic_wand_background_and_noise(self, mat):
+        """Estimate background and noise scale from matrix values."""
+        values = mat[~np.isnan(mat)]
+        if values.size == 0:
+            return 0.0, 1.0
+        # Robust intensity prior: median background and MAD noise scale.
+        # This is less sensitive to outliers/skew than percentile/IQR.
+        background = float(np.nanmedian(values))
+        mad = float(np.nanmedian(np.abs(values - background)))
+        if not np.isfinite(mad) or mad <= 0:
+            mad = float(np.nanstd(values))
+        noise_scale = mad if np.isfinite(mad) and mad > 0 else 1.0
+        return background, float(noise_scale)
+
+    def _set_magic_wand_background_from_click(self, row, col, patch_radius=5):
+        """Use a local patch around (row, col) to define background and noise."""
+        mat = self.single_matrix
+        if mat is None:
+            return
+        H, W = mat.shape
+        r0 = max(0, row - patch_radius)
+        r1 = min(H, row + patch_radius + 1)
+        c0 = max(0, col - patch_radius)
+        c1 = min(W, col + patch_radius + 1)
+        patch = mat[r0:r1, c0:c1]
+        vals = patch[~np.isnan(patch)]
+        if vals.size == 0:
+            # Fallback to global stats
+            bg, noise = self._compute_magic_wand_background_and_noise(mat)
+        else:
+            # Robust patch stats: median + MAD
+            bg = float(np.nanmedian(vals))
+            mad = float(np.nanmedian(np.abs(vals - bg)))
+            noise = mad if np.isfinite(mad) and mad > 0 else float(np.nanstd(vals))
+            if not np.isfinite(noise) or noise <= 0:
+                noise = 1.0
+        self.magic_wand_background_value = bg
+        self.magic_wand_noise_scale = noise
+        self.magic_wand_bg_set = True
+        custom_dialogs.showinfo(
+            self.root,
+            "Background set",
+            "Background level has been set from the clicked region.\n"
+            "Now click inside the sample to outline it.",
+        )
+
+    def _magic_wand_region_grow(self, mat, r0, c0, threshold):
+        """Return boolean mask of region connected to (r0, c0) with values >= threshold."""
+        H, W = mat.shape
+        if np.isnan(mat[r0, c0]) or mat[r0, c0] < threshold:
+            return np.zeros_like(mat, dtype=bool)
+        mask = np.zeros_like(mat, dtype=bool)
+        queue = [(r0, c0)]
+        conn = int(self.magic_wand_connectivity.get() or 4)
+        if conn == 8:
+            neighbors = [(-1, -1), (-1, 0), (-1, 1),
+                         (0, -1),           (0, 1),
+                         (1, -1),  (1, 0),  (1, 1)]
+        else:
+            neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        max_pixels = H * W
+        processed = 0
+        while queue:
+            r, c = queue.pop()
+            if mask[r, c]:
+                continue
+            v = mat[r, c]
+            if np.isnan(v) or v < threshold:
+                continue
+            mask[r, c] = True
+            processed += 1
+            if processed > max_pixels:
+                break
+            for dr, dc in neighbors:
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < H and 0 <= cc < W and not mask[rr, cc]:
+                    queue.append((rr, cc))
+        self.magic_wand_last_mask = mask
+        return mask
+
+    def run_magic_wand_selection(self, row, col, show_feedback=True):
+        """Phase 2: build a specimen mask from threshold + cleanup, then add ROI(s) from components."""
+        mat = self.single_matrix
+        if mat is None:
+            return
+        H, W = mat.shape
+        if row < 0 or col < 0 or row >= H or col >= W:
+            return
+        if np.isnan(mat[row, col]):
+            if show_feedback:
+                custom_dialogs.showwarning(self.root, "Invalid click", "Please click inside the specimen map area.")
+            return
+
+        # Prefer user-defined background from a click; fall back to auto if not set.
+        if self.magic_wand_background_value is not None and self.magic_wand_noise_scale is not None:
+            bg = self.magic_wand_background_value
+            noise = self.magic_wand_noise_scale
+        else:
+            bg, noise = self._compute_magic_wand_background_and_noise(mat)
+
+        k = float(self.magic_wand_k.get())
+        threshold = bg + k * noise
+
+        valid = ~np.isnan(mat)
+        fg = valid & (mat >= threshold)
+        if not np.any(fg):
+            if show_feedback:
+                custom_dialogs.showwarning(
+                    self.root,
+                    "No specimen found",
+                    "Nothing passed the current threshold. Try lowering Threshold × noise or clicking a brighter region.",
+                )
+            return
+
+        # Cleanup: close small gaps and (optionally) fill holes.
+        fg_clean = fg
+        try:
+            from scipy import ndimage
+            fg_clean = ndimage.binary_closing(fg_clean, structure=np.ones((3, 3), dtype=bool))
+            if getattr(self, "magic_wand_fill_holes", True):
+                fg_clean = ndimage.binary_fill_holes(fg_clean)
+        except Exception:
+            # Fallback: no morphological cleanup if scipy.ndimage isn't available.
+            fg_clean = fg
+
+        # Connected components labeling.
+        conn = int(self.magic_wand_connectivity.get() or 4)
+        structure = np.ones((3, 3), dtype=bool) if conn == 8 else np.array(
+            [[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool
+        )
+
+        labels = None
+        num = 0
+        try:
+            from scipy import ndimage
+            labels, num = ndimage.label(fg_clean, structure=structure)
+        except Exception:
+            # Pure-numpy BFS fallback labeling.
+            labels = np.zeros((H, W), dtype=int)
+            num = 0
+            if conn == 8:
+                neighbors = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+            else:
+                neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            current = 0
+            for r in range(H):
+                for c in range(W):
+                    if not fg_clean[r, c] or labels[r, c] != 0:
+                        continue
+                    current += 1
+                    num = current
+                    queue = [(r, c)]
+                    labels[r, c] = current
+                    while queue:
+                        rr, cc = queue.pop()
+                        for dr, dc in neighbors:
+                            r2, c2 = rr + dr, cc + dc
+                            if 0 <= r2 < H and 0 <= c2 < W and fg_clean[r2, c2] and labels[r2, c2] == 0:
+                                labels[r2, c2] = current
+                                queue.append((r2, c2))
+
+        if num <= 0:
+            return
+
+        seed_label = int(labels[row, col])
+        areas = np.bincount(labels.ravel(), minlength=num + 1)
+
+        min_area = int(getattr(self, "magic_wand_min_area_px", 0) or 0)
+        keep_labels = [lbl for lbl in range(1, num + 1) if areas[lbl] >= min_area]
+        if len(keep_labels) == 0:
+            # If everything was filtered out, at least keep the seed component.
+            if seed_label != 0:
+                keep_labels = [seed_label]
+            else:
+                if show_feedback:
+                    custom_dialogs.showwarning(
+                        self.root,
+                        "No specimen component",
+                        "No large specimen component was found. Try lowering Threshold × noise or lowering Min object area.",
+                    )
+                return
+        # Always include the seed component, but cap how many additional
+        # components we turn into ROIs to avoid clutter from noisy masks.
+        seed_in_keep = seed_label in keep_labels
+        candidates = [lbl for lbl in keep_labels if lbl != seed_label]
+        candidates = sorted(candidates, key=lambda l: areas[l], reverse=True)
+        max_total = int(getattr(self, "magic_wand_max_components", 4) or 4)
+        # Ensure seed component is included even if it didn't pass min_area filtering.
+        selected_labels = [seed_label] if seed_label != 0 else []
+        for lbl in candidates:
+            if len(selected_labels) >= max_total:
+                break
+            selected_labels.append(lbl)
+        selected_labels = [lbl for lbl in selected_labels if lbl != 0]
+
+        # Replace previously generated specimen selector ROIs.
+        self.polygon_data = [
+            p for p in self.polygon_data if p.get("source") not in ("magic_wand", "specimen_selector")
+        ]
+        self.polygon_color_index = len(self.polygon_data) % len(self.polygon_colors) if self.polygon_colors is not None else 0
+
+        added = 0
+        for lbl in selected_labels:
+            comp_mask = labels == lbl
+            vertices = self._mask_to_polygon_vertices(comp_mask)
+            if not vertices:
+                continue
+            # Phase 2: build specimen ROI geometry, but defer stats until "Tabulate" (user confirms).
+            self._add_magic_wand_polygon(
+                vertices,
+                compute_stats=False,
+                specimen_mask=np.asarray(comp_mask, dtype=bool).copy(),
+            )
+            added += 1
+
+        if added == 0:
+            if show_feedback:
+                custom_dialogs.showwarning(
+                    self.root,
+                    "Selection failed",
+                    "Could not extract a boundary from the selected specimen mask. Try adjusting Threshold × noise.",
+                )
+            return
+
+        # Refresh overlays once. Stats are computed only when the user clicks "Tabulate".
+        self.view_single_map()
+
+        if show_feedback:
+            custom_dialogs.showinfo(
+                self.root,
+                "Specimen mask → ROI",
+                f"Created {added} specimen ROI(s).\n\nWhen you're happy with the boundaries, click 'Tabulate' in Region statistics to compute the ROI measurements.",
+            )
+
+    def _mask_to_polygon_vertices(self, mask):
+        """Convert a boolean mask to an approximate outer boundary polygon in data coords.
+
+        Uses (in order) scikit-image find_contours when available, then Matplotlib contour
+        paths gathered in a way that works across Matplotlib 3.5–3.10+ (ContourSet no longer
+        always populates ``collections``). Last resort: axis-aligned bounding box.
+        """
+        H, W = mask.shape
+        m = np.asarray(mask, dtype=bool)
+
+        def poly_area(verts_xy):
+            if verts_xy.shape[0] < 3:
+                return 0.0
+            x = verts_xy[:, 0]
+            y = verts_xy[:, 1]
+            return 0.5 * float(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
+
+        def bbox_vertices():
+            ys, xs = np.where(m)
+            if ys.size == 0:
+                return []
+            min_x, max_x = int(xs.min()), int(xs.max())
+            min_y, max_y = int(ys.min()), int(ys.max())
+            return [
+                (float(min_x), float(min_y)),
+                (float(max_x), float(min_y)),
+                (float(max_x), float(max_y)),
+                (float(min_x), float(max_y)),
+            ]
+
+        # 1) Optional scikit-image: (row, col) with row 0 at top → Path (x,y) = (col, row)
+        try:
+            from skimage.measure import find_contours as _find_contours
+
+            contours = _find_contours(m.astype(float), 0.5)
+            best_v = None
+            best_a = 0.0
+            for contour in contours:
+                if contour.shape[0] < 3:
+                    continue
+                verts_xy = np.column_stack((contour[:, 1], contour[:, 0])).astype(float)
+                a = abs(poly_area(verts_xy))
+                if a > best_a:
+                    best_a = a
+                    best_v = verts_xy
+            if best_v is not None:
+                return [(float(x), float(y)) for x, y in best_v]
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # 2) Matplotlib contour without touching the interactive backend (Agg Figure).
+        try:
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
+            from matplotlib.path import Path as MPath
+
+            fig = Figure(figsize=(1.0, 1.0))
+            FigureCanvasAgg(fig)
+            ax = fig.add_subplot(111)
+            cs = ax.contour(m.astype(float), levels=[0.5])
+
+            paths = []
+            gp = getattr(cs, "get_paths", None)
+            if callable(gp):
+                try:
+                    paths = list(gp())
+                except Exception:
+                    paths = []
+
+            if not paths:
+                colls = getattr(cs, "collections", None)
+                if colls is not None:
+                    try:
+                        for coll in colls:
+                            paths.extend(coll.get_paths())
+                    except (TypeError, AttributeError, ValueError):
+                        pass
+
+            if not paths and hasattr(cs, "allsegs") and cs.allsegs:
+                try:
+                    for seg in cs.allsegs[0]:
+                        seg = np.asarray(seg, dtype=float)
+                        if seg.shape[0] >= 2:
+                            paths.append(MPath(seg))
+                except Exception:
+                    pass
+
+            if not paths:
+                return bbox_vertices()
+
+            best_verts = None
+            best_area = None
+            for p in paths:
+                verts = np.asarray(p.vertices, dtype=float)
+                if verts.shape[0] < 3:
+                    continue
+                area = poly_area(verts)
+                if best_area is None or abs(area) > abs(best_area):
+                    best_area = area
+                    best_verts = verts.copy()
+
+            if best_verts is None:
+                return bbox_vertices()
+
+            # Contour y-axis uses bottom-origin; convert to top-origin row indices (matches mgrid).
+            best_verts[:, 1] = (H - 1) - best_verts[:, 1]
+            return [(float(x), float(y)) for x, y in best_verts]
+        except Exception:
+            return bbox_vertices()
+
+    # --- Specimen mask persistence (hole-aware stats & drawing) ---
+    #
+    # Options for "holes" (voids inside one connected component):
+    #   A) inclusion_mask (stored bool H×W): stats = pixels where mask is True. Matches thresholded
+    #      specimen exactly; holes are excluded. Best default for Tabulate / export.
+    #   B) Polygon-only (no mask): outer contour filled in matplotlib.Path — holes incorrectly
+    #      included in stats. Kept only for legacy JSON / manual ROIs.
+    #   C) Future: user toggle "treat holes as specimen" could OR in hole pixels if needed.
+    #
+    def _encode_specimen_mask_json(self, mask):
+        """Compact encoding for _polygons.json (packbits + zlib + base64)."""
+        if mask is None:
+            return None
+        m = np.asarray(mask, dtype=bool)
+        h, w = m.shape
+        packed = np.packbits(m.ravel())
+        blob = zlib.compress(packed.tobytes(), level=6)
+        return {
+            "h": int(h),
+            "w": int(w),
+            "packbits_zlib_b64": base64.b64encode(blob).decode("ascii"),
+        }
+
+    def _decode_specimen_mask_json(self, enc, shape_expected):
+        """Restore bool mask; returns None if encoding missing or shape mismatch."""
+        if not enc or not isinstance(enc, dict) or shape_expected is None:
+            return None
+        h0, w0 = int(shape_expected[0]), int(shape_expected[1])
+        if int(enc.get("h", -1)) != h0 or int(enc.get("w", -1)) != w0:
+            return None
+        b64 = enc.get("packbits_zlib_b64")
+        if not b64:
+            return None
+        try:
+            raw = zlib.decompress(base64.b64decode(b64))
+            packed = np.frombuffer(raw, dtype=np.uint8)
+            nbits = h0 * w0
+            flat = np.unpackbits(packed)[:nbits]
+            if flat.size != nbits:
+                return None
+            return flat.reshape(h0, w0).astype(bool)
+        except Exception:
+            return None
+
+    def _specimen_hole_vertex_loops(self, comp_mask):
+        """Return vertex rings (each a list of (x,y)) tracing holes inside a single component."""
+        m = np.asarray(comp_mask, dtype=bool)
+        if not np.any(m):
+            return []
+        try:
+            from scipy import ndimage
+            filled = ndimage.binary_fill_holes(m)
+            holes = filled & ~m
+            if not np.any(holes):
+                return []
+            hlbl, hn = ndimage.label(holes, structure=np.ones((3, 3), dtype=bool))
+        except Exception:
+            return []
+        loops = []
+        for i in range(1, hn + 1):
+            hm = hlbl == i
+            verts = self._mask_to_polygon_vertices(hm)
+            if len(verts) >= 3:
+                loops.append(verts)
+        return loops
+
+    def _convex_hull(self, points):
+        """Compute convex hull of a set of 2D points using monotone chain algorithm."""
+        if points.shape[0] < 3:
+            return None
+        pts = sorted(set(map(tuple, points)))
+        if len(pts) <= 1:
+            return pts
+
+        def cross(o, a, b):
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+        lower = []
+        for p in pts:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+                lower.pop()
+            lower.append(p)
+
+        upper = []
+        for p in reversed(pts):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+                upper.pop()
+            upper.append(p)
+
+        hull = lower[:-1] + upper[:-1]
+        return hull
+
+    def _add_magic_wand_polygon(self, vertices, compute_stats=True, specimen_mask=None):
+        """Add a specimen-selector-generated polygon to the existing ROI system.
+
+        If ``specimen_mask`` is the bool H×W component mask, statistics exclude holes (voids)
+        and inner void outlines are drawn when possible.
+        """
+        if not vertices:
+            return
+        # Close polygon by repeating first vertex at end for storage
+        if vertices[0] != vertices[-1]:
+            stored_vertices = vertices + [vertices[0]]
+        else:
+            stored_vertices = vertices
+        color = self.polygon_colors[self.polygon_color_index % len(self.polygon_colors)]
+        name = f"Specimen ROI {len(self.polygon_data) + 1}"
+        smask = None
+        hole_loops = []
+        if specimen_mask is not None:
+            smask = np.asarray(specimen_mask, dtype=bool).copy()
+            hole_loops = self._specimen_hole_vertex_loops(smask)
+        if compute_stats:
+            stats_dict = self.calculate_polygon_statistics(
+                vertices,
+                inclusion_mask=smask,
+            )
+        else:
+            stats_dict = None
+        polygon_info = {
+            'name': name,
+            'vertices': stored_vertices,
+            'color': color,
+            'stats': stats_dict,
+            'source': 'specimen_selector',
+        }
+        if smask is not None:
+            polygon_info['specimen_mask'] = smask
+        if hole_loops:
+            polygon_info['specimen_hole_loops'] = hole_loops
+        self.polygon_data.append(polygon_info)
+        self.polygon_color_index = len(self.polygon_data) % len(self.polygon_colors)
+        # Note: caller is responsible for refreshing the UI.
 
     # --- Math Expression Functionality ---
     def open_map_math(self):
@@ -1589,17 +2262,31 @@ class MuadDataViewer:
         
         custom_dialogs.showinfo(self.root, "Polygon Complete", f"Region '{name}' added. Statistics calculated.")
     
-    def calculate_polygon_statistics(self, vertices):
-        """Calculate statistics for pixels inside the polygon."""
-        # Create a mask for pixels inside the polygon
+    def calculate_polygon_statistics(self, vertices, inclusion_mask=None):
+        """Calculate statistics for pixels inside the polygon or inside ``inclusion_mask``.
+
+        When ``inclusion_mask`` is a bool array matching the current map shape (e.g. specimen
+        component mask), statistics use exactly those pixels—voids / holes inside the outer
+        contour are excluded. Otherwise uses a simple closed ``Path`` from *vertices* (holes
+        are *not* excluded).
+        """
         h, w = self.single_matrix.shape
         y_coords, x_coords = np.mgrid[0:h, 0:w]
         points = np.column_stack([x_coords.ravel(), y_coords.ravel()])
-        
-        # Use matplotlib's Path to check if points are inside polygon
-        from matplotlib.path import Path
-        path = Path(vertices)
-        mask = path.contains_points(points).reshape(h, w)
+
+        use_mask = inclusion_mask is not None
+        if use_mask:
+            m = np.asarray(inclusion_mask, dtype=bool)
+            if m.shape != (h, w):
+                use_mask = False
+
+        if use_mask:
+            mask = m.ravel()
+        else:
+            from matplotlib.path import Path
+            path = Path(vertices)
+            mask = path.contains_points(points)
+        mask = np.asarray(mask, dtype=bool).reshape(h, w)
         
         # Get values inside polygon
         values = self.single_matrix[mask]
@@ -1662,8 +2349,11 @@ class MuadDataViewer:
                 vertices = stored_vertices[:-1]
             else:
                 vertices = stored_vertices
-            # Recalculate statistics
-            poly_data['stats'] = self.calculate_polygon_statistics(vertices)
+            # Recalculate statistics (specimen ROIs use stored mask so holes stay excluded)
+            poly_data['stats'] = self.calculate_polygon_statistics(
+                vertices,
+                inclusion_mask=poly_data.get('specimen_mask'),
+            )
         
         # Update the results table if it's open
         if self.polygon_results_table:
@@ -1747,9 +2437,21 @@ class MuadDataViewer:
         for item in self.polygon_results_table.get_children():
             self.polygon_results_table.delete(item)
         
-        # Add rows for each polygon
+        # Add rows for each polygon (compute stats lazily if missing)
         for poly_data in self.polygon_data:
-            stats = poly_data['stats']
+            stats = poly_data.get('stats')
+            if stats is None:
+                vertices = poly_data.get('vertices', [])
+                # Stored vertices already include the closing point.
+                if len(vertices) > 0 and vertices[0] == vertices[-1]:
+                    vertices_for_stats = vertices[:-1]
+                else:
+                    vertices_for_stats = vertices
+                stats = self.calculate_polygon_statistics(
+                    vertices_for_stats,
+                    inclusion_mask=poly_data.get('specimen_mask'),
+                )
+                poly_data['stats'] = stats
             values = (
                 poly_data['name'],
                 f"{stats['sum']:.2f}",
@@ -1910,12 +2612,17 @@ class MuadDataViewer:
                 elif isinstance(color, tuple):
                     color = list(color)
                 
-                json_data.append({
+                row = {
                     'name': poly_data['name'],
                     'vertices': vertices,
                     'color': color,
-                    # Note: stats are not saved, they'll be recalculated on load
-                })
+                    'source': poly_data.get('source', 'manual'),
+                    # Stats are not saved; recalculated on load / Tabulate.
+                }
+                enc = self._encode_specimen_mask_json(poly_data.get('specimen_mask'))
+                if enc is not None:
+                    row['specimen_mask'] = enc
+                json_data.append(row)
             
             # Save to JSON file
             with open(polygon_file, 'w') as f:
@@ -1971,15 +2678,31 @@ class MuadDataViewer:
                     elif len(color) == 3:  # RGB
                         color = tuple(color)
                 
+                if len(vertices) > 1 and vertices[0] == vertices[-1]:
+                    vertices_for_stats = vertices[:-1]
+                else:
+                    vertices_for_stats = vertices
+
+                s_mask = self._decode_specimen_mask_json(
+                    poly_json.get('specimen_mask'),
+                    (h, w),
+                )
                 # Recalculate statistics with current matrix data
-                stats_dict = self.calculate_polygon_statistics(vertices)
-                
+                stats_dict = self.calculate_polygon_statistics(
+                    vertices_for_stats,
+                    inclusion_mask=s_mask,
+                )
+
                 polygon_info = {
                     'name': poly_json['name'],
                     'vertices': vertices,
                     'color': color,
-                    'stats': stats_dict
+                    'stats': stats_dict,
+                    'source': poly_json.get('source', 'manual'),
                 }
+                if s_mask is not None:
+                    polygon_info['specimen_mask'] = s_mask
+                    polygon_info['specimen_hole_loops'] = self._specimen_hole_vertex_loops(s_mask)
                 self.polygon_data.append(polygon_info)
                 loaded_count += 1
             
@@ -2181,6 +2904,35 @@ class MuadDataViewer:
         else:
             clear_btn = ttk.Button(clear_cell, text="Clear", command=self.clear_rgb_data, style="Red.TButton", width=6)
             clear_btn.pack(anchor=tk.CENTER)
+
+        # RGB Zoom & crop (mirrors Element Viewer styling)
+        rgb_zoom_group = ttk.LabelFrame(control_frame, text="Zoom & crop", padding=10)
+        rgb_zoom_group.pack(fill=tk.X, pady=(0, 5))
+        self.rgb_zoom_button = ttk.Button(rgb_zoom_group, text="Select region (RGB)", command=self.toggle_rgb_zoom_mode, width=16)
+        self.rgb_zoom_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.rgb_use_single_roi_button = ttk.Button(
+            rgb_zoom_group,
+            text="Use Element Viewer ROI",
+            command=self.use_single_viewer_roi_in_rgb,
+            width=20,
+        )
+        self.rgb_use_single_roi_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.rgb_save_crop_button = ttk.Button(
+            rgb_zoom_group,
+            text="Save cropped matrices",
+            command=self.save_rgb_cropped_matrices,
+            state=tk.DISABLED,
+            width=20,
+        )
+        self.rgb_save_crop_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.rgb_reset_zoom_button = ttk.Button(
+            rgb_zoom_group,
+            text="Reset RGB view",
+            command=self.reset_rgb_zoom,
+            state=tk.DISABLED,
+            width=16,
+        )
+        self.rgb_reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
         ratio_group = ttk.LabelFrame(control_frame, text="Correlation & ratio", padding=10)
         ratio_group.pack(fill=tk.X, pady=(0, 5))
@@ -2511,26 +3263,79 @@ class MuadDataViewer:
         for poly_data in self.polygon_data:
             vertices = poly_data['vertices']
             vert_axes = [to_axes(v[0], v[1]) for v in vertices]
+            source = poly_data.get('source', 'manual')
             color = poly_data['color']
-            # Convert color to tuple if it's an array (for matplotlib)
+
+            # Determine line/fill color
             if isinstance(color, np.ndarray):
-                # Convert RGBA array to tuple
                 if len(color) >= 3:
-                    color_tuple = tuple(color[:3])  # RGB only, alpha handled separately
+                    color_tuple = tuple(color[:3])
                 else:
                     color_tuple = tuple(color)
-            elif isinstance(color, str):
-                # Already a hex string, convert to tuple for consistency
-                color_tuple = color
             else:
                 color_tuple = color
-            
-            # Create polygon patch with semi-transparent fill
-            polygon = Polygon(vert_axes, closed=True,
-                            facecolor=color_tuple, edgecolor=color_tuple,
-                            alpha=0.3, linewidth=2)
+
+            if source in ('magic_wand', 'specimen_selector'):
+                # High-contrast dashed outline: white on dark, black on light background
+                try:
+                    import matplotlib
+                    cmap = matplotlib.colormaps.get_cmap(self.single_colormap.get())
+                    bg = cmap(0.0)
+                    brightness = float(np.mean(bg[:3]))
+                except Exception:
+                    brightness = 0.0
+                line_color = 'white' if brightness < 0.5 else 'black'
+                polygon = Polygon(
+                    vert_axes,
+                    closed=True,
+                    fill=False,
+                    edgecolor=line_color,
+                    linewidth=1,
+                    linestyle='--',
+                )
+            else:
+                # Existing behavior: semi-transparent filled polygon
+                polygon = Polygon(
+                    vert_axes,
+                    closed=True,
+                    facecolor=color_tuple,
+                    edgecolor=color_tuple,
+                    alpha=0.3,
+                    linewidth=2,
+                )
+
             self.single_ax.add_patch(polygon)
             self.polygon_patches.append(polygon)
+
+            # Specimen voids: inner boundaries (stats already exclude these via specimen_mask)
+            if source in ('magic_wand', 'specimen_selector'):
+                hole_loops = poly_data.get('specimen_hole_loops')
+                if hole_loops is None and poly_data.get('specimen_mask') is not None:
+                    hole_loops = self._specimen_hole_vertex_loops(poly_data['specimen_mask'])
+                    poly_data['specimen_hole_loops'] = hole_loops
+                if hole_loops:
+                    try:
+                        import matplotlib
+                        cmap = matplotlib.colormaps.get_cmap(self.single_colormap.get())
+                        bg = cmap(0.0)
+                        brightness = float(np.mean(bg[:3]))
+                    except Exception:
+                        brightness = 0.0
+                    line_color = 'white' if brightness < 0.5 else 'black'
+                    for loop in hole_loops:
+                        h_axes = [to_axes(v[0], v[1]) for v in loop]
+                        if len(h_axes) < 3:
+                            continue
+                        hp = Polygon(
+                            h_axes,
+                            closed=True,
+                            fill=False,
+                            edgecolor=line_color,
+                            linewidth=0.9,
+                            linestyle='--',
+                        )
+                        self.single_ax.add_patch(hp)
+                        self.polygon_patches.append(hp)
         
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
@@ -2616,21 +3421,26 @@ class MuadDataViewer:
             scaled = rescale(mat, vmax)
             scaled[np.isnan(scaled)] = 0
             return scaled
-        shape = None
-        for ch in 'RGB':
-            if self.rgb_data[ch] is not None:
-                shape = self.rgb_data[ch].shape
-                break
-        if shape is None:
+        # Determine common shape across loaded channels (auto-align to overlapping region)
+        shapes = [self.rgb_data[ch].shape for ch in 'RGB' if self.rgb_data[ch] is not None]
+        if not shapes:
             custom_dialogs.showwarning(self.root, "No Data", "Please load at least one channel.")
             return
+        # Use minimum height/width so all channels can be overlaid without mismatch
+        min_H = min(s[0] for s in shapes)
+        min_W = min(s[1] for s in shapes)
+        shape = (min_H, min_W)
         composite = []
         for ch in 'RGB':
             mat = self.rgb_data[ch]
             if mat is None:
                 composite.append(np.zeros(shape))
             else:
-                composite.append(get_scaled_matrix(ch))
+                # Scale and then trim to common shape
+                scaled = get_scaled_matrix(ch)
+                if scaled.shape[0] != min_H or scaled.shape[1] != min_W:
+                    scaled = scaled[:min_H, :min_W]
+                composite.append(scaled)
         # Now, instead of stacking as RGB, use the selected color for each channel
         rgb = np.zeros((shape[0], shape[1], 3), dtype=float)
         for idx, ch in enumerate('RGB'):
@@ -2685,6 +3495,10 @@ class MuadDataViewer:
         # Draw responsive colorbar
         self.draw_rgb_colorbar()
 
+        # If we were zoomed, reapply zoom to the new RGB image so view is consistent with crop bounds
+        if self.rgb_is_zoomed and self.rgb_crop_bounds is not None:
+            self._apply_rgb_crop_to_axes()
+
     def draw_rgb_colorbar(self):
         # Determine which channels are loaded
         loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
@@ -2723,8 +3537,12 @@ class MuadDataViewer:
                     l2 = ((v2[1] - v0[1])*(p[0] - v2[0]) + (v0[0] - v2[0])*(p[1] - v2[1])) / denom
                     l3 = 1 - l1 - l2
                     if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
-                        color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
-                        triangle[y, x, :] = color
+                        # Additive mixing (matches overlay): scale so center = white when all three present
+                        l1_add = min(1.0, 3 * l1)
+                        l2_add = min(1.0, 3 * l2)
+                        l3_add = min(1.0, 3 * l3)
+                        color = l1_add * np.array(rgb_vals[0]) + l2_add * np.array(rgb_vals[1]) + l3_add * np.array(rgb_vals[2])
+                        triangle[y, x, :] = np.clip(color, 0, 1)
             self.rgb_colorbar_ax.imshow(triangle, origin='upper', extent=[0, 1, 0, 0.5], aspect='equal')
             self.rgb_colorbar_ax.plot([v0[0]/240, v1[0]/240], [0.5 - v0[1]/120*0.5, 0.5 - v1[1]/120*0.5], color='k', lw=1)
             self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [0.5 - v1[1]/120*0.5, 0.5 - v2[1]/120*0.5], color='k', lw=1)
@@ -2756,12 +3574,17 @@ class MuadDataViewer:
             width = 240
             height = 40
             grad = np.zeros((height, width, 3), dtype=float)
-            rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
-            rgb1 = [int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0]
+            rgb0 = np.array([int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0])
+            rgb1 = np.array([int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0])
             for x in range(width):
                 frac = x / (width-1)
-                color = (1-frac)*np.array(rgb0) + frac*np.array(rgb1)
-                grad[:, x, :] = color
+                # Additive mixing (matches overlay): center = both at full intensity
+                if frac <= 0.5:
+                    ch0, ch1 = 1.0, 2 * frac
+                else:
+                    ch0, ch1 = 2 * (1 - frac), 1.0
+                color = ch0 * rgb0 + ch1 * rgb1
+                grad[:, x, :] = np.clip(color, 0, 1)
             # Extent: 1 unit wide, 0.25 tall so bar is rectangle (4:1) when aspect is equal
             self.rgb_colorbar_ax.imshow(grad, origin='upper', extent=[0, 1, 0, 0.25], aspect='equal')
             # Draw bar outline
@@ -2799,6 +3622,209 @@ class MuadDataViewer:
         self.rgb_colorbar_figure.tight_layout()
         self.rgb_colorbar_canvas.draw()
 
+    # --- RGB Zoom/Crop Functionality ---
+    def toggle_rgb_zoom_mode(self):
+        """Toggle zoom selection mode on/off for the RGB overlay."""
+        if all(self.rgb_data[c] is None for c in 'RGB'):
+            custom_dialogs.showwarning(self.root, "No Data", "Please load at least one RGB channel first.")
+            return
+
+        if not self.rgb_zoom_active:
+            # Activate zoom mode
+            self.rgb_zoom_active = True
+            self.rgb_zoom_button.config(text="Cancel selection (RGB)", style="Red.TButton")
+
+            # Create rectangle selector on RGB axes
+            self.rgb_rectangle_selector = RectangleSelector(
+                self.rgb_ax,
+                self.on_rgb_select,
+                useblit=True,
+                button=[1],
+                minspanx=5,
+                minspany=5,
+                spancoords='pixels',
+                interactive=False,
+                props=dict(facecolor='none', edgecolor='white', linewidth=1, linestyle='--'),
+            )
+        else:
+            # Deactivate zoom mode
+            self.deactivate_rgb_zoom_mode()
+
+    def deactivate_rgb_zoom_mode(self):
+        """Deactivate RGB zoom selection mode."""
+        self.rgb_zoom_active = False
+        self.rgb_zoom_button.config(text="Select region (RGB)", style="TButton")
+
+        if self.rgb_rectangle_selector is not None:
+            self.rgb_rectangle_selector.set_active(False)
+            self.rgb_rectangle_selector = None
+
+        # Redraw overlay to remove selection rectangle (keep current zoom state)
+        self.view_rgb_overlay()
+
+    def on_rgb_select(self, eclick, erelease):
+        """Callback when a rectangle selection is made on the RGB overlay."""
+        if not self.rgb_zoom_active:
+            return
+        if (
+            eclick.xdata is None
+            or eclick.ydata is None
+            or erelease.xdata is None
+            or erelease.ydata is None
+        ):
+            custom_dialogs.showwarning(self.root, "Invalid Selection", "Please complete the selection inside the image.")
+            return
+
+        # Use default imshow coordinates: data coords are -0.5..cols-0.5 and -0.5..rows-0.5
+        # Convert to pixel indices and clamp to valid range based on any loaded channel
+        shape = None
+        for ch in 'RGB':
+            if self.rgb_data[ch] is not None:
+                shape = self.rgb_data[ch].shape
+                break
+        if shape is None:
+            return
+        H, W = shape[0], shape[1]
+
+        x1 = int(round(eclick.xdata + 0.5))
+        x2 = int(round(erelease.xdata + 0.5))
+        y1 = int(round(eclick.ydata + 0.5))
+        y2 = int(round(erelease.ydata + 0.5))
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        x1 = max(0, min(x1, W - 1))
+        x2 = max(0, min(x2, W))
+        if x1 >= x2:
+            x2 = min(x1 + 1, W)
+        y1 = max(0, min(y1, H - 1))
+        y2 = max(0, min(y2, H))
+        if y1 >= y2:
+            y2 = min(y1 + 1, H)
+
+        if x1 < 0 or y1 < 0 or x2 > W or y2 > H or x1 >= x2 or y1 >= y2:
+            custom_dialogs.showerror(self.root, "Invalid Selection", "Selection is out of bounds. Please try again.")
+            return
+
+        if x2 - x1 < 5 or y2 - y1 < 5:
+            custom_dialogs.showwarning(self.root, "Selection Too Small", "Please select a larger region.")
+            return
+
+        self.rgb_crop_bounds = (x1, x2, y1, y2)
+
+        # Deactivate zoom mode and apply crop to RGB view
+        self.deactivate_rgb_zoom_mode()
+        self.rgb_is_zoomed = True
+        self._apply_rgb_crop_to_axes()
+        self.rgb_save_crop_button.config(state=tk.NORMAL)
+        self.rgb_reset_zoom_button.config(state=tk.NORMAL)
+
+    def _apply_rgb_crop_to_axes(self):
+        """Apply current rgb_crop_bounds to the RGB axes display."""
+        if self.rgb_crop_bounds is None:
+            return
+
+        x1, x2, y1, y2 = self.rgb_crop_bounds
+        self.rgb_ax.set_xlim(x1 - 0.5, x2 - 0.5)
+        self.rgb_ax.set_ylim(y2 - 0.5, y1 - 0.5)
+        self.rgb_canvas.draw()
+
+    def use_single_viewer_roi_in_rgb(self):
+        """Apply the Element Viewer ROI (if any) to the RGB overlay."""
+        if self.crop_bounds is None:
+            custom_dialogs.showwarning(self.root, "No ROI", "No region has been selected in the Element Viewer.")
+            return
+        if all(self.rgb_data[c] is None for c in 'RGB'):
+            custom_dialogs.showwarning(self.root, "No Data", "Please load at least one RGB channel first.")
+            return
+
+        x1, x2, y1, y2 = self.crop_bounds
+        # Validate bounds against RGB data shape (in case shapes differ)
+        shape = None
+        for ch in 'RGB':
+            if self.rgb_data[ch] is not None:
+                shape = self.rgb_data[ch].shape
+                break
+        if shape is None:
+            return
+        H, W = shape[0], shape[1]
+        x1 = max(0, min(x1, W - 1))
+        x2 = max(0, min(x2, W))
+        if x1 >= x2:
+            x2 = min(x1 + 1, W)
+        y1 = max(0, min(y1, H - 1))
+        y2 = max(0, min(y2, H))
+        if y1 >= y2:
+            y2 = min(y1 + 1, H)
+
+        self.rgb_crop_bounds = (x1, x2, y1, y2)
+        self.rgb_is_zoomed = True
+        self._apply_rgb_crop_to_axes()
+        self.rgb_save_crop_button.config(state=tk.NORMAL)
+        self.rgb_reset_zoom_button.config(state=tk.NORMAL)
+
+    def save_rgb_cropped_matrices(self):
+        """Save cropped matrices for all loaded RGB channels based on current rgb_crop_bounds."""
+        if self.rgb_crop_bounds is None:
+            custom_dialogs.showwarning(self.root, "No Cropped Region", "Please select a region or use the Element Viewer ROI first.")
+            return
+        if all(self.rgb_data[c] is None for c in 'RGB'):
+            custom_dialogs.showwarning(self.root, "No Data", "Please load at least one RGB channel first.")
+            return
+
+        x1, x2, y1, y2 = self.rgb_crop_bounds
+
+        # Ask user for base filename
+        base_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")],
+            title="Save cropped RGB matrices",
+        )
+        if not base_path:
+            return
+
+        root, ext = os.path.splitext(base_path)
+        if ext.lower() not in (".xlsx", ".csv"):
+            ext = ".xlsx"
+            base_path = root + ext
+
+        # Generate and save one file per loaded channel
+        for ch in 'RGB':
+            mat = self.rgb_data[ch]
+            if mat is None:
+                continue
+
+            cropped = mat[y1:y2, x1:x2]
+            elem_label = (self.rgb_labels[ch]['elem'].cget("text") or ch).strip()
+            safe_elem = elem_label.replace(" ", "_") if elem_label else ch
+            out_path = f"{root}_{ch}_{safe_elem}{ext}"
+
+            try:
+                df = pd.DataFrame(cropped)
+                if ext.lower() == ".xlsx":
+                    df.to_excel(out_path, header=False, index=False)
+                else:
+                    df.to_csv(out_path, header=False, index=False)
+            except Exception as e:
+                custom_dialogs.showerror(self.root, "Save Error", f"Failed to save cropped matrix for {ch}:\n{str(e)}")
+                return
+
+        custom_dialogs.showinfo(self.root, "Saved", f"Cropped RGB matrices saved based on current region.\n\nBase name:\n{os.path.basename(base_path)}")
+
+    def reset_rgb_zoom(self):
+        """Reset RGB overlay to full view and clear crop state."""
+        if not self.rgb_is_zoomed and self.rgb_crop_bounds is None:
+            return
+
+        self.rgb_is_zoomed = False
+        self.rgb_crop_bounds = None
+
+        # Reset axes to full extent by redrawing overlay
+        self.view_rgb_overlay()
+
+        # Disable zoom-related buttons
+        self.rgb_save_crop_button.config(state=tk.DISABLED)
+        self.rgb_reset_zoom_button.config(state=tk.DISABLED)
+
     def save_rgb_image(self):
         if all(self.rgb_data[c] is None for c in 'RGB'):
             custom_dialogs.showwarning(self.root, "No Data", "Please load at least one RGB channel before saving.")
@@ -2823,6 +3849,7 @@ class MuadDataViewer:
         try:
             # Check if we should save with or without colorbar
             save_with_colorbar = custom_dialogs.askyesno(
+                self.root,
                 "Save Options",
                 "Would you like to save the image with the colorbar?\n\n"
                 "Yes: Save RGB image + colorbar combined\n"
