@@ -496,7 +496,6 @@ class MuadDataViewer:
             return
         try:
             candidates = [
-                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_grey_bg-3acbf7dd-cd8c-4957-8e7c-672da783132f.png",
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),

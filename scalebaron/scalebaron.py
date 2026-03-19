@@ -608,7 +608,6 @@ class CompositeApp:
         try:
             # Prefer package-relative icons folder; fall back to user-specific path if present
             candidates = [
-                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_grey_bg-3acbf7dd-cd8c-4957-8e7c-672da783132f.png",
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 # Fallback to user workspace asset path (development)
