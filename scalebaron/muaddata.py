@@ -345,8 +345,11 @@ class MuadDataViewer:
         self.magic_wand_seed_row = None
         self.magic_wand_seed_col = None
         # Phase 2 defaults for specimen masking
-        # Phase 2 defaults: keep holes (do not fill) and require reasonably large components
-        self.magic_wand_fill_holes = False
+        # Fill holes for smoother *outer contour geometry*. ROI stats still exclude void pixels
+        # because we store an unfilled specimen mask for inclusion_mask.
+        self.magic_wand_fill_holes = True
+        # Drawing internal hole outlines can be visually noisy and slower; default off.
+        self.magic_wand_draw_holes = tk.BooleanVar(value=False)
         self.magic_wand_min_area_px = 500
         # Limit how many separate components we turn into ROIs in one selection
         self.magic_wand_max_components = 4
@@ -1136,6 +1139,15 @@ class MuadDataViewer:
             variable=self.magic_wand_connectivity,
         ).pack(side=tk.LEFT)
 
+        # Visualize which internal voids are discounted from specimen stats
+        # (disabled by default for speed).
+        ttk.Checkbutton(
+            wand_group,
+            text="Show discounted holes",
+            variable=self.magic_wand_draw_holes,
+            command=self._on_magic_wand_draw_holes_toggle,
+        ).pack(anchor="w", pady=(2, 4))
+
         self.magic_wand_k.trace_add("write", lambda *args: self._update_magic_wand_k_label())
         self.magic_wand_k_scale = wand_scale
         wand_scale.bind("<ButtonRelease-1>", self._on_magic_wand_slider_release)
@@ -1242,6 +1254,16 @@ class MuadDataViewer:
                 self.magic_wand_seed_col,
                 show_feedback=False,
             )
+
+    def _on_magic_wand_draw_holes_toggle(self):
+        """Redraw only overlays (no stats recompute) when toggling hole outlines."""
+        try:
+            # draw_polygon_overlays clears/repacks polygon patches on top of the current image.
+            self.draw_polygon_overlays()
+            if getattr(self, "single_canvas", None) is not None:
+                self.single_canvas.draw()
+        except Exception:
+            pass
 
     def on_single_ax_click(self, event):
         """Handle mouse clicks on the single-element map for magic-wand selection."""
@@ -1401,16 +1423,24 @@ class MuadDataViewer:
                 )
             return
 
-        # Cleanup: close small gaps and (optionally) fill holes.
-        fg_clean = fg
+        # Cleanup:
+        #  - fg_clean_noholes: used for stats inclusion_mask (void pixels excluded)
+        #  - fg_clean_geom: used for connected components + outer contour geometry
+        #    (optionally fill holes to keep the outline less granular)
+        fg_clean_noholes = fg
+        fg_clean_geom = fg_clean_noholes
         try:
             from scipy import ndimage
-            fg_clean = ndimage.binary_closing(fg_clean, structure=np.ones((3, 3), dtype=bool))
+            fg_clean_noholes = ndimage.binary_closing(
+                fg_clean_noholes, structure=np.ones((3, 3), dtype=bool)
+            )
+            fg_clean_geom = fg_clean_noholes
             if getattr(self, "magic_wand_fill_holes", True):
-                fg_clean = ndimage.binary_fill_holes(fg_clean)
+                fg_clean_geom = ndimage.binary_fill_holes(fg_clean_noholes)
         except Exception:
             # Fallback: no morphological cleanup if scipy.ndimage isn't available.
-            fg_clean = fg
+            fg_clean_noholes = fg
+            fg_clean_geom = fg
 
         # Connected components labeling.
         conn = int(self.magic_wand_connectivity.get() or 4)
@@ -1422,7 +1452,7 @@ class MuadDataViewer:
         num = 0
         try:
             from scipy import ndimage
-            labels, num = ndimage.label(fg_clean, structure=structure)
+            labels, num = ndimage.label(fg_clean_geom, structure=structure)
         except Exception:
             # Pure-numpy BFS fallback labeling.
             labels = np.zeros((H, W), dtype=int)
@@ -1434,7 +1464,7 @@ class MuadDataViewer:
             current = 0
             for r in range(H):
                 for c in range(W):
-                    if not fg_clean[r, c] or labels[r, c] != 0:
+                    if not fg_clean_geom[r, c] or labels[r, c] != 0:
                         continue
                     current += 1
                     num = current
@@ -1444,7 +1474,12 @@ class MuadDataViewer:
                         rr, cc = queue.pop()
                         for dr, dc in neighbors:
                             r2, c2 = rr + dr, cc + dc
-                            if 0 <= r2 < H and 0 <= c2 < W and fg_clean[r2, c2] and labels[r2, c2] == 0:
+                            if (
+                                0 <= r2 < H
+                                and 0 <= c2 < W
+                                and fg_clean_geom[r2, c2]
+                                and labels[r2, c2] == 0
+                            ):
                                 labels[r2, c2] = current
                                 queue.append((r2, c2))
 
@@ -1490,15 +1525,17 @@ class MuadDataViewer:
 
         added = 0
         for lbl in selected_labels:
-            comp_mask = labels == lbl
-            vertices = self._mask_to_polygon_vertices(comp_mask)
+            comp_mask_geom = labels == lbl
+            vertices = self._mask_to_polygon_vertices(comp_mask_geom)
             if not vertices:
                 continue
+            # Stats should exclude void pixels (holes) even if we filled them for geometry extraction.
+            comp_mask_stats = comp_mask_geom & fg_clean_noholes
             # Phase 2: build specimen ROI geometry, but defer stats until "Tabulate" (user confirms).
             self._add_magic_wand_polygon(
                 vertices,
                 compute_stats=False,
-                specimen_mask=np.asarray(comp_mask, dtype=bool).copy(),
+                specimen_mask=np.asarray(comp_mask_stats, dtype=bool).copy(),
             )
             added += 1
 
@@ -1728,8 +1765,8 @@ class MuadDataViewer:
     def _add_magic_wand_polygon(self, vertices, compute_stats=True, specimen_mask=None):
         """Add a specimen-selector-generated polygon to the existing ROI system.
 
-        If ``specimen_mask`` is the bool H×W component mask, statistics exclude holes (voids)
-        and inner void outlines are drawn when possible.
+        If ``specimen_mask`` is the bool H×W component mask, statistics exclude holes (voids).
+        Optionally draws internal hole outlines when ``magic_wand_draw_holes`` is enabled.
         """
         if not vertices:
             return
@@ -1744,7 +1781,13 @@ class MuadDataViewer:
         hole_loops = []
         if specimen_mask is not None:
             smask = np.asarray(specimen_mask, dtype=bool).copy()
-            hole_loops = self._specimen_hole_vertex_loops(smask)
+            draw_holes = False
+            try:
+                draw_holes = bool(getattr(self, "magic_wand_draw_holes", None).get())
+            except Exception:
+                draw_holes = False
+            if draw_holes:
+                hole_loops = self._specimen_hole_vertex_loops(smask)
         if compute_stats:
             stats_dict = self.calculate_polygon_statistics(
                 vertices,
@@ -2702,7 +2745,9 @@ class MuadDataViewer:
                 }
                 if s_mask is not None:
                     polygon_info['specimen_mask'] = s_mask
-                    polygon_info['specimen_hole_loops'] = self._specimen_hole_vertex_loops(s_mask)
+                    # Avoid eager hole-outline computation on load (can be slow).
+                    # Recomputed lazily only if/when drawing holes is enabled.
+                    polygon_info['specimen_hole_loops'] = None
                 self.polygon_data.append(polygon_info)
                 loaded_count += 1
             
@@ -3308,7 +3353,12 @@ class MuadDataViewer:
             self.polygon_patches.append(polygon)
 
             # Specimen voids: inner boundaries (stats already exclude these via specimen_mask)
-            if source in ('magic_wand', 'specimen_selector'):
+            draw_holes = False
+            try:
+                draw_holes = bool(getattr(self, "magic_wand_draw_holes", None).get())
+            except Exception:
+                draw_holes = False
+            if source in ('magic_wand', 'specimen_selector') and draw_holes:
                 hole_loops = poly_data.get('specimen_hole_loops')
                 if hole_loops is None and poly_data.get('specimen_mask') is not None:
                     hole_loops = self._specimen_hole_vertex_loops(poly_data['specimen_mask'])
