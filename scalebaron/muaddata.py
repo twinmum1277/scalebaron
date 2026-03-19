@@ -350,6 +350,11 @@ class MuadDataViewer:
         self.magic_wand_fill_holes = True
         # Drawing internal hole outlines can be visually noisy and slower; default off.
         self.magic_wand_draw_holes = tk.BooleanVar(value=False)
+        # Discount only *large* enclosed voids so the ROI doesn't fragment.
+        # Holes with area (in pixels) smaller than this are treated as specimen for stats.
+        self.magic_wand_min_hole_area_px = tk.IntVar(value=2000)
+        # Hard cap on how many hole outlines to draw (visualization only).
+        self.magic_wand_max_holes_to_draw = tk.IntVar(value=25)
         self.magic_wand_min_area_px = 500
         # Limit how many separate components we turn into ROIs in one selection
         self.magic_wand_max_components = 4
@@ -398,6 +403,7 @@ class MuadDataViewer:
         _style.configure("Hint.TLabel", foreground="gray", font=("TkDefaultFont", 12, "italic"))
         _style.configure("Status.TLabel", foreground="#555555", font=("TkDefaultFont", 10, "italic"))
         # Remove the visible band behind group headings: match outer GUI (Color 1)
+        _style.configure("TFrame", background="#f0f0f0")
         _style.configure("TLabelframe", background="#f0f0f0")
         _style.configure("TLabelframe.Label", font=("TkDefaultFont", 12, "bold"),
                         background="#f0f0f0")
@@ -444,9 +450,18 @@ class MuadDataViewer:
     def _make_scrollable_control_panel(self, parent):
         """Returns (container, inner_frame). Pack container on the left; put all controls in inner_frame.
         On laptops/small windows the sidebar scrolls so no controls are hidden.
-        Inner frame is ttk.Frame (like Scalebaron) so ttk.LabelFrame heading strip matches the panel and no band shows."""
+        The BNEIR logo remains sticky at the top while only controls below scroll."""
         container = tk.Frame(parent)
-        canvas = tk.Canvas(container, highlightthickness=0)
+        # Sticky header (logo always visible while controls scroll)
+        header = tk.Frame(container, bg=getattr(self, "_gui_bg", "#f0f0f0"))
+        header.pack(side=tk.TOP, fill=tk.X)
+        self._add_bneir_logo(header)
+
+        canvas = tk.Canvas(
+            container,
+            highlightthickness=0,
+            bg=getattr(self, "_gui_bg", "#f0f0f0"),
+        )
         scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -472,7 +487,6 @@ class MuadDataViewer:
         canvas.bind("<MouseWheel>", on_mousewheel)
         canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
         canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-        self._add_bneir_logo(content)
         return container, content
 
     def _load_bneir_logo(self):
@@ -482,6 +496,7 @@ class MuadDataViewer:
             return
         try:
             candidates = [
+                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_grey_bg-3acbf7dd-cd8c-4957-8e7c-672da783132f.png",
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
@@ -501,6 +516,37 @@ class MuadDataViewer:
                 new_w = max_width
                 new_h = int(h * new_w / float(w))
                 img = img.resize((new_w, new_h), Image.LANCZOS)
+            # Blend the logo's baked background to the app panel gray so the header looks flat/minimal.
+            try:
+                bg_hex = getattr(self, "_gui_bg", "#f0f0f0").lstrip("#")
+                if len(bg_hex) == 6:
+                    bg_rgb = tuple(int(bg_hex[i : i + 2], 16) for i in (0, 2, 4))
+                else:
+                    bg_rgb = (240, 240, 240)
+                rgba = img.convert("RGBA")
+                arr = np.array(rgba, dtype=np.uint8)
+                # Robustly estimate background color from border pixels (not just top-left).
+                border = np.concatenate(
+                    [
+                        arr[0, :, :3],
+                        arr[-1, :, :3],
+                        arr[:, 0, :3],
+                        arr[:, -1, :3],
+                    ],
+                    axis=0,
+                ).astype(np.int16)
+                key = np.median(border, axis=0).astype(np.int16)
+                rgb = arr[:, :, :3].astype(np.int16)
+                diff = np.max(np.abs(rgb - key), axis=2)
+                alpha = arr[:, :, 3]
+                # Conservative replacement: only pixels close to edge-color and non-transparent.
+                bg_mask = (diff <= 28) & (alpha > 0)
+                arr[bg_mask, 0] = bg_rgb[0]
+                arr[bg_mask, 1] = bg_rgb[1]
+                arr[bg_mask, 2] = bg_rgb[2]
+                img = Image.fromarray(arr, mode="RGBA")
+            except Exception:
+                pass
             self.bneir_logo_image = ImageTk.PhotoImage(img)
         except Exception:
             self.bneir_logo_image = None
@@ -1148,20 +1194,62 @@ class MuadDataViewer:
             command=self._on_magic_wand_draw_holes_toggle,
         ).pack(anchor="w", pady=(2, 4))
 
+        # Discount sensitivity: only exclude holes above this size for stats/outline.
+        hole_sense_frame = ttk.Frame(wand_group)
+        hole_sense_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(hole_sense_frame, text="Min hole area (px):", style="Hint.TLabel").pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
+        hole_spin = tk.Spinbox(
+            hole_sense_frame,
+            from_=0,
+            to=200000,
+            increment=100,
+            textvariable=self.magic_wand_min_hole_area_px,
+            width=7,
+            command=self._on_magic_wand_min_hole_area_change,
+        )
+        hole_spin.pack(side=tk.LEFT)
+        hole_spin.bind("<Return>", self._on_magic_wand_min_hole_area_change)
+        hole_spin.bind("<FocusOut>", self._on_magic_wand_min_hole_area_change)
+        self.magic_wand_min_hole_area_spinbox = hole_spin
+        ttk.Label(
+            hole_sense_frame,
+            text="small holes kept",
+            style="Hint.TLabel",
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
         self.magic_wand_k.trace_add("write", lambda *args: self._update_magic_wand_k_label())
         self.magic_wand_k_scale = wand_scale
         wand_scale.bind("<ButtonRelease-1>", self._on_magic_wand_slider_release)
 
-        self.single_file_label = ttk.Label(control_frame, text="Loaded file: None", style="Status.TLabel", wraplength=200)
+        self.single_file_label = ttk.Label(
+            control_frame,
+            text="Loaded file: None",
+            foreground="#555555",
+            font=("TkDefaultFont", 12, "normal"),
+            wraplength=200,
+        )
         self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         self.single_figure, self.single_ax = plt.subplots()
         self.single_ax.axis('off')
+        self.single_cursor_readout_var = tk.StringVar(value="X: --   Y: --   Z: --")
+        self.single_cursor_readout_label = ttk.Label(
+            display_frame,
+            textvariable=self.single_cursor_readout_var,
+            foreground="#555555",
+            font=("TkDefaultFont", 13, "normal"),
+            anchor='w',
+        )
+        self.single_cursor_readout_label.pack(side=tk.BOTTOM, fill=tk.X, padx=(4, 2), pady=(2, 2))
         self.single_canvas = FigureCanvasTkAgg(self.single_figure, master=display_frame)
         self.single_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # Connect click handler for specimen selector (enabled only when magic_wand_active is True)
         self.single_canvas.mpl_connect("button_press_event", self.on_single_ax_click)
+        self.single_canvas.mpl_connect("motion_notify_event", self.on_single_ax_motion)
+        self.single_canvas.mpl_connect("figure_leave_event", self.on_single_ax_leave)
 
     def set_max_slider_limit(self):
         """Set the maximum value of the max slider from the entry box."""
@@ -1265,6 +1353,28 @@ class MuadDataViewer:
         except Exception:
             pass
 
+    def _on_magic_wand_min_hole_area_change(self, event=None):
+        """Re-run specimen selection after min-hole-area edits for fast iterative tuning."""
+        # Normalize invalid values from direct text entry.
+        try:
+            v = int(float(self.magic_wand_min_hole_area_px.get()))
+            if v < 0:
+                v = 0
+            self.magic_wand_min_hole_area_px.set(v)
+        except Exception:
+            self.magic_wand_min_hole_area_px.set(0)
+        if (
+            getattr(self, "magic_wand_active", False)
+            and self.magic_wand_bg_set
+            and self.magic_wand_seed_row is not None
+            and self.magic_wand_seed_col is not None
+        ):
+            self.run_magic_wand_selection(
+                self.magic_wand_seed_row,
+                self.magic_wand_seed_col,
+                show_feedback=False,
+            )
+
     def on_single_ax_click(self, event):
         """Handle mouse clicks on the single-element map for magic-wand selection."""
         if not self.magic_wand_active:
@@ -1286,6 +1396,33 @@ class MuadDataViewer:
         self.magic_wand_seed_row = row
         self.magic_wand_seed_col = col
         self.run_magic_wand_selection(row, col, show_feedback=True)
+
+    def on_single_ax_motion(self, event):
+        """Live Element Viewer readout: matrix X/Y index and pixel value (Z)."""
+        if getattr(self, "single_cursor_readout_var", None) is None:
+            return
+        if self.single_matrix is None or event.inaxes is not self.single_ax:
+            self.single_cursor_readout_var.set("X: --   Y: --   Z: --")
+            return
+        if event.xdata is None or event.ydata is None:
+            self.single_cursor_readout_var.set("X: --   Y: --   Z: --")
+            return
+        row, col = self._single_coords_to_indices(event.xdata, event.ydata)
+        if row is None or col is None:
+            self.single_cursor_readout_var.set("X: --   Y: --   Z: --")
+            return
+        try:
+            z = float(self.single_matrix[row, col])
+        except Exception:
+            self.single_cursor_readout_var.set("X: --   Y: --   Z: --")
+            return
+        z_str = "NaN" if np.isnan(z) else f"{z:.4g}"
+        self.single_cursor_readout_var.set(f"X: {col}   Y: {row}   Z: {z_str}")
+
+    def on_single_ax_leave(self, event=None):
+        """Clear live Element Viewer readout when mouse exits the figure."""
+        if getattr(self, "single_cursor_readout_var", None) is not None:
+            self.single_cursor_readout_var.set("X: --   Y: --   Z: --")
 
     def _single_coords_to_indices(self, xdata, ydata):
         """Convert Element Viewer data coords to (row, col) indices on self.single_matrix."""
@@ -1529,8 +1666,36 @@ class MuadDataViewer:
             vertices = self._mask_to_polygon_vertices(comp_mask_geom)
             if not vertices:
                 continue
-            # Stats should exclude void pixels (holes) even if we filled them for geometry extraction.
-            comp_mask_stats = comp_mask_geom & fg_clean_noholes
+            # Stats discount only *large* enclosed holes so the ROI doesn't fragment.
+            # comp_mask_geom is "geometry mask" where holes may have been filled for smoother outer contours.
+            holes_mask = comp_mask_geom & (~fg_clean_noholes)
+            try:
+                min_hole_area_px = int(self.magic_wand_min_hole_area_px.get() or 0)
+            except Exception:
+                min_hole_area_px = 0
+
+            if not np.any(holes_mask):
+                # No holes (or effectively no discounting): include whole geometry mask.
+                comp_mask_stats = comp_mask_geom
+            elif min_hole_area_px <= 0:
+                # Discount all holes.
+                comp_mask_stats = comp_mask_geom & fg_clean_noholes
+            else:
+                # Discount only holes with area >= threshold.
+                holes_large = np.zeros_like(holes_mask, dtype=bool)
+                try:
+                    from scipy import ndimage
+                    holes_labels, holes_num = ndimage.label(holes_mask, structure=structure)
+                    if holes_num > 0:
+                        areas = np.bincount(holes_labels.ravel(), minlength=holes_num + 1)
+                        large_labels = [i for i in range(1, holes_num + 1) if areas[i] >= min_hole_area_px]
+                        for i in large_labels:
+                            holes_large |= (holes_labels == i)
+                except Exception:
+                    # If labeling fails, fall back to discounting all holes.
+                    holes_large = holes_mask
+
+                comp_mask_stats = comp_mask_geom & (~holes_large)
             # Phase 2: build specimen ROI geometry, but defer stats until "Tabulate" (user confirms).
             self._add_magic_wand_polygon(
                 vertices,
@@ -1720,6 +1885,14 @@ class MuadDataViewer:
         if not np.any(m):
             return []
         try:
+            min_hole_area_px = int(self.magic_wand_min_hole_area_px.get() or 0)
+        except Exception:
+            min_hole_area_px = 0
+        try:
+            max_holes_to_draw = int(self.magic_wand_max_holes_to_draw.get() or 0)
+        except Exception:
+            max_holes_to_draw = 0
+        try:
             from scipy import ndimage
             filled = ndimage.binary_fill_holes(m)
             holes = filled & ~m
@@ -1728,8 +1901,19 @@ class MuadDataViewer:
             hlbl, hn = ndimage.label(holes, structure=np.ones((3, 3), dtype=bool))
         except Exception:
             return []
+        if hn <= 0:
+            return []
+        # Filter by hole size so we don't over-fragment outlines.
+        areas = np.bincount(hlbl.ravel(), minlength=hn + 1)
+        hole_labels = [i for i in range(1, hn + 1) if areas[i] >= min_hole_area_px]
+        if not hole_labels:
+            return []
+        # Sort by area descending and cap.
+        hole_labels = sorted(hole_labels, key=lambda i: areas[i], reverse=True)
+        if max_holes_to_draw and len(hole_labels) > max_holes_to_draw:
+            hole_labels = hole_labels[:max_holes_to_draw]
         loops = []
-        for i in range(1, hn + 1):
+        for i in hole_labels:
             hm = hlbl == i
             verts = self._mask_to_polygon_vertices(hm)
             if len(verts) >= 3:

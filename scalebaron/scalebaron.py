@@ -191,6 +191,8 @@ class CompositeApp:
         # Single GUI background grey so control panels and logo area match (no light grey box around logo)
         self._gui_bg = "#f0f0f0"
         style.configure("TFrame", background=self._gui_bg)
+        style.configure("TLabelframe", background=self._gui_bg)
+        style.configure("TLabelframe.Label", background=self._gui_bg)
         # Load icons BEFORE creating buttons so they're available when buttons are created
         self.load_button_icons()
         # Load BNEIR logo if available
@@ -240,8 +242,10 @@ class CompositeApp:
         left_frame = ttk.Frame(self.setup_tab, width=280)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         left_frame.pack_propagate(False)  # Maintain fixed width
-        # BNEIR logo at top of control panel (outside shaded groups)
-        self._add_bneir_logo(left_frame)
+        # Sticky logo header at top of control panel.
+        left_header = tk.Frame(left_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
+        left_header.pack(side=tk.TOP, fill=tk.X)
+        self._add_bneir_logo(left_header)
         
         # Right side: Two-panel layout (Statistics Table, Progress Table)
         right_frame = ttk.Frame(self.setup_tab)
@@ -385,11 +389,15 @@ class CompositeApp:
         progress_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
 
         # Progress table: scrollable grid of Labels so each cell can have its own colour (complete/partial/not started/no file)
-        self.progress_table_canvas = tk.Canvas(progress_frame, highlightthickness=0)
+        self.progress_table_canvas = tk.Canvas(
+            progress_frame,
+            highlightthickness=0,
+            bg=self._gui_bg,
+        )
         progress_yscroll = ttk.Scrollbar(progress_frame, orient=tk.VERTICAL, command=self.progress_table_canvas.yview)
         progress_xscroll = ttk.Scrollbar(progress_frame, orient=tk.HORIZONTAL, command=self.progress_table_canvas.xview)
         self.progress_table_canvas.configure(yscrollcommand=progress_yscroll.set, xscrollcommand=progress_xscroll.set)
-        self.progress_table_inner = tk.Frame(self.progress_table_canvas, bg="#f0f0f0")
+        self.progress_table_inner = tk.Frame(self.progress_table_canvas, bg=self._gui_bg)
         self.progress_table_inner_window = self.progress_table_canvas.create_window((0, 0), window=self.progress_table_inner, anchor="nw")
         self.progress_table_canvas.grid(row=0, column=0, sticky="nsew")
         progress_yscroll.grid(row=0, column=1, sticky="ns")
@@ -435,8 +443,10 @@ class CompositeApp:
         control_frame = ttk.Frame(self.preview_tab, width=280)
         control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         control_frame.pack_propagate(False)  # Maintain fixed width
-        # BNEIR logo at top of control panel (outside shaded groups)
-        self._add_bneir_logo(control_frame)
+        # Sticky logo header at top of control panel.
+        control_header = tk.Frame(control_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
+        control_header.pack(side=tk.TOP, fill=tk.X)
+        self._add_bneir_logo(control_header)
         
         # Right side: Preview pane
         preview_frame = ttk.Frame(self.preview_tab)
@@ -598,6 +608,7 @@ class CompositeApp:
         try:
             # Prefer package-relative icons folder; fall back to user-specific path if present
             candidates = [
+                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_grey_bg-3acbf7dd-cd8c-4957-8e7c-672da783132f.png",
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 # Fallback to user workspace asset path (development)
@@ -617,6 +628,26 @@ class CompositeApp:
                 new_w = max_width
                 new_h = int(h * new_w / float(w))
                 img = img.resize((new_w, new_h), Image.LANCZOS)
+            # Normalize logo background to the app's canonical panel grey.
+            try:
+                bg_hex = getattr(self, "_gui_bg", "#f0f0f0").lstrip("#")
+                if len(bg_hex) == 6:
+                    bg_rgb = tuple(int(bg_hex[i : i + 2], 16) for i in (0, 2, 4))
+                else:
+                    bg_rgb = (240, 240, 240)
+                rgba = img.convert("RGBA")
+                arr = np.array(rgba, dtype=np.uint8)
+                key = arr[0, 0, :3].astype(np.int16)
+                rgb = arr[:, :, :3].astype(np.int16)
+                diff = np.max(np.abs(rgb - key), axis=2)
+                alpha = arr[:, :, 3]
+                bg_mask = (diff <= 18) & (alpha > 0)
+                arr[bg_mask, 0] = bg_rgb[0]
+                arr[bg_mask, 1] = bg_rgb[1]
+                arr[bg_mask, 2] = bg_rgb[2]
+                img = Image.fromarray(arr, mode="RGBA")
+            except Exception:
+                pass
             self.bneir_logo_image = ImageTk.PhotoImage(img)
         except Exception:
             self.bneir_logo_image = None
