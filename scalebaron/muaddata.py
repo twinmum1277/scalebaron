@@ -24,6 +24,7 @@ import re
 import json
 import base64
 import zlib
+import webbrowser
 try:
     from PIL import Image, ImageTk
     PIL_AVAILABLE = True
@@ -32,6 +33,8 @@ except ImportError:
 
 # Phase 1: Specimen selector UI only; set True when foreground-mask implementation is ready
 SPECIMEN_SELECTOR_ENABLED = True
+BNEIR_URL = "https://sites.dartmouth.edu/bneir/"
+SCALEBARON_ISSUES_URL = "https://github.com/twinmum1277/scalebaron/issues"
 
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
@@ -557,8 +560,10 @@ class MuadDataViewer:
         bg = getattr(self, "_gui_bg", "#f0f0f0")
         container = tk.Frame(parent, bg=bg)
         container.pack(pady=(0, 5))
-        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
+        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg, cursor="hand2")
         lbl.pack(anchor=tk.CENTER)
+        lbl.bind("<Button-1>", lambda _e: webbrowser.open(BNEIR_URL))
+        self._create_tooltip(lbl, "Open BNEIR website")
 
     def _set_app_icon(self):
         """Set the Muad'Data gas-mask icon for the main window and dialogs (replaces default Python logo)."""
@@ -609,8 +614,18 @@ class MuadDataViewer:
         if not PIL_AVAILABLE:
             return
         icons_dir = os.path.join(os.path.dirname(__file__), 'icons')
-        for key, filename in [('viewmap', 'viewmap.png'), ('save', 'save.png'), ('map_math', 'map_math.png'), ('clear', 'clear.png'), ('load', 'load.png'), ('color_picker', 'color_picker.png')]:
+        for key, filename in [
+            ('viewmap', 'viewmap.png'),
+            ('save', 'save.png'),
+            ('map_math', 'map_math.png'),
+            ('clear', 'clear.png'),
+            ('load', 'load.png'),
+            ('color_picker', 'color_picker.png'),
+            ('report_issue', 'report_issue_button.png'),
+        ]:
             path = os.path.join(icons_dir, filename)
+            if key == 'report_issue' and not os.path.exists(path):
+                path = "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/report_issue_button-283d0213-146c-44aa-b729-15ec7da9854c.png"
             if not os.path.exists(path):
                 continue
             try:
@@ -651,6 +666,34 @@ class MuadDataViewer:
                 tip[0] = None
         widget.bind("<Enter>", show)
         widget.bind("<Leave>", hide)
+
+    def _add_report_issue_button(self, parent):
+        """Add a utility button that opens the GitHub issue page."""
+        row = ttk.Frame(parent)
+        row.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 2))
+        icon = self.button_icons.get('report_issue')
+        if icon:
+            btn = tk.Button(
+                row,
+                image=icon,
+                command=lambda: webbrowser.open(SCALEBARON_ISSUES_URL),
+                padx=2,
+                pady=2,
+                bg=getattr(self, "_gui_bg", "#f0f0f0"),
+                relief='raised',
+                activebackground='#f5c6c6',
+            )
+            btn.image = icon
+            btn.pack(anchor=tk.CENTER)
+        else:
+            btn = ttk.Button(
+                row,
+                text="Report Issue",
+                command=lambda: webbrowser.open(SCALEBARON_ISSUES_URL),
+                width=14,
+            )
+            btn.pack(anchor=tk.CENTER)
+        self._create_tooltip(btn, "Report an Issue")
 
     def pad_slices_to_same_size(self, slices):
         """Pad smaller matrices with zeros so all have the same shape as the largest (rows, cols)."""
@@ -698,6 +741,7 @@ class MuadDataViewer:
     def build_zstack_tab(self):
         control_container, control_frame = self._make_scrollable_control_panel(self.zstack_tab)
         control_container.pack(side=tk.LEFT, fill=tk.Y)
+        self._add_report_issue_button(control_frame)
 
         display_frame = tk.Frame(self.zstack_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -1015,6 +1059,7 @@ class MuadDataViewer:
     def build_single_tab(self):
         control_container, control_frame = self._make_scrollable_control_panel(self.single_tab)
         control_container.pack(side=tk.LEFT, fill=tk.Y)
+        self._add_report_issue_button(control_frame)
 
         display_frame = tk.Frame(self.single_tab)
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -2956,6 +3001,7 @@ class MuadDataViewer:
     def build_rgb_tab(self):
         control_container, control_frame = self._make_scrollable_control_panel(self.rgb_tab)
         control_container.pack(side=tk.LEFT, fill=tk.Y)
+        self._add_report_issue_button(control_frame)
 
         display_frame = tk.Frame(self.rgb_tab, bg="black")
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)

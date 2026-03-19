@@ -20,11 +20,15 @@ import glob
 import re
 import tempfile
 import time
+import webbrowser
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import shutil
 import pandas as pd
 import base64
 import io
+
+BNEIR_URL = "https://sites.dartmouth.edu/bneir/"
+SCALEBARON_ISSUES_URL = "https://github.com/twinmum1277/scalebaron/issues"
 
 class CompositeApp:
     
@@ -246,6 +250,7 @@ class CompositeApp:
         left_header = tk.Frame(left_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
         left_header.pack(side=tk.TOP, fill=tk.X)
         self._add_bneir_logo(left_header)
+        self._add_report_issue_button(left_frame)
         
         # Right side: Two-panel layout (Statistics Table, Progress Table)
         right_frame = ttk.Frame(self.setup_tab)
@@ -447,6 +452,7 @@ class CompositeApp:
         control_header = tk.Frame(control_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
         control_header.pack(side=tk.TOP, fill=tk.X)
         self._add_bneir_logo(control_header)
+        self._add_report_issue_button(control_frame)
         
         # Right side: Preview pane
         preview_frame = ttk.Frame(self.preview_tab)
@@ -658,8 +664,39 @@ class CompositeApp:
         bg = getattr(self, "_gui_bg", "#f0f0f0")
         container = tk.Frame(parent, bg=bg)
         container.pack(pady=(0, 5))
-        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg)
+        lbl = tk.Label(container, image=self.bneir_logo_image, bg=bg, cursor="hand2")
         lbl.pack(anchor=tk.CENTER)
+        lbl.bind("<Button-1>", lambda _e: webbrowser.open(BNEIR_URL))
+        try:
+            self._create_tooltip(lbl, "Open BNEIR website")
+        except Exception:
+            pass
+
+    def _add_report_issue_button(self, parent):
+        """Add a bottom utility button to open the GitHub issue page."""
+        row = ttk.Frame(parent)
+        row.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 2))
+        issue_icon = self.button_icons.get('report_issue')
+        if issue_icon:
+            btn = tk.Button(
+                row,
+                image=issue_icon,
+                command=lambda: webbrowser.open(SCALEBARON_ISSUES_URL),
+                padx=2,
+                pady=2,
+                bg=getattr(self, "_gui_bg", "#f0f0f0"),
+                relief='raised',
+                activebackground='#f5c6c6',
+            )
+            btn.image = issue_icon
+            btn.pack(anchor=tk.CENTER)
+        else:
+            btn = ttk.Button(row, text="Report Issue", command=lambda: webbrowser.open(SCALEBARON_ISSUES_URL))
+            btn.pack(anchor=tk.CENTER)
+        try:
+            self._create_tooltip(btn, "Report an Issue")
+        except Exception:
+            pass
 
     def _set_app_icon(self):
         """Set the ScaleBarOn logo for the main window and dialogs (replaces default Python logo)."""
@@ -707,7 +744,8 @@ class CompositeApp:
             'save': 'save.png',
             'save_matrix': 'save_matrix.png',
             'batch': 'batch.png',
-            'progress': 'progress.png'
+            'progress': 'progress.png',
+            'report_issue': 'report_issue_button.png',
         }
         
         # Try to load embedded icons as fallback
@@ -758,6 +796,8 @@ class CompositeApp:
                 alt_path = os.path.join(icons_dir, 'label.png')
                 if os.path.exists(alt_path):
                     icon_path = alt_path
+            if key == 'report_issue' and not os.path.exists(icon_path):
+                icon_path = "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/report_issue_button-283d0213-146c-44aa-b729-15ec7da9854c.png"
             
             if os.path.exists(icon_path):
                 photo_image = load_icon_from_data(icon_path, filename)
@@ -773,6 +813,39 @@ class CompositeApp:
                     icon_loaded = True
             
             # If icon not loaded, will silently use Unicode/text fallback
+
+    def _create_tooltip(self, widget, text):
+        """Show a compact hover hint tooltip for controls."""
+        tip = [None]
+
+        def show(event):
+            if tip[0] is not None:
+                return
+            x = widget.winfo_rootx() + 18
+            y = widget.winfo_rooty() + widget.winfo_height() + 6
+            tip[0] = tw = tk.Toplevel(widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tk.Label(
+                tw,
+                text=text,
+                justify=tk.LEFT,
+                background="#fff7d6",
+                foreground="#222222",
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=("TkDefaultFont", 10, "normal"),
+                padx=6,
+                pady=3,
+            ).pack()
+
+        def hide(event):
+            if tip[0]:
+                tip[0].destroy()
+                tip[0] = None
+
+        widget.bind("<Enter>", show)
+        widget.bind("<Leave>", hide)
 
     def select_input_folder(self):
         folder_selected = filedialog.askdirectory(initialdir=self.input_dir or ".", title="Select Input Directory")
