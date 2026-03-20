@@ -502,53 +502,37 @@ class MuadDataViewer:
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
                 "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_small-8a92b83b-b9a5-4c31-acf1-933cfc9214e0.png",
             ]
-            logo_path = None
-            for path in candidates:
-                if os.path.exists(path):
-                    logo_path = path
+            img = None
+            for logo_path in candidates:
+                if not os.path.exists(logo_path):
+                    continue
+                try:
+                    if logo_path.lower().endswith(".svg"):
+                        import io
+                        import cairosvg
+
+                        png_data = cairosvg.svg2png(url=logo_path)
+                        img = Image.open(io.BytesIO(png_data)).convert("RGBA")
+                    else:
+                        img = Image.open(logo_path)
+                    # Successfully loaded one candidate; stop searching.
                     break
-            if not logo_path:
+                except Exception as e:
+                    img = None
+                    continue
+            if img is None:
                 return
-            img = Image.open(logo_path)
             max_width = 220
             w, h = img.size
             if w > max_width:
                 new_w = max_width
                 new_h = int(h * new_w / float(w))
                 img = img.resize((new_w, new_h), Image.LANCZOS)
-            # Blend the logo's baked background to the app panel gray so the header looks flat/minimal.
-            try:
-                bg_hex = getattr(self, "_gui_bg", "#f0f0f0").lstrip("#")
-                if len(bg_hex) == 6:
-                    bg_rgb = tuple(int(bg_hex[i : i + 2], 16) for i in (0, 2, 4))
-                else:
-                    bg_rgb = (240, 240, 240)
-                rgba = img.convert("RGBA")
-                arr = np.array(rgba, dtype=np.uint8)
-                # Robustly estimate background color from border pixels (not just top-left).
-                border = np.concatenate(
-                    [
-                        arr[0, :, :3],
-                        arr[-1, :, :3],
-                        arr[:, 0, :3],
-                        arr[:, -1, :3],
-                    ],
-                    axis=0,
-                ).astype(np.int16)
-                key = np.median(border, axis=0).astype(np.int16)
-                rgb = arr[:, :, :3].astype(np.int16)
-                diff = np.max(np.abs(rgb - key), axis=2)
-                alpha = arr[:, :, 3]
-                # Conservative replacement: only pixels close to edge-color and non-transparent.
-                bg_mask = (diff <= 28) & (alpha > 0)
-                arr[bg_mask, 0] = bg_rgb[0]
-                arr[bg_mask, 1] = bg_rgb[1]
-                arr[bg_mask, 2] = bg_rgb[2]
-                img = Image.fromarray(arr, mode="RGBA")
-            except Exception:
-                pass
             self.bneir_logo_image = ImageTk.PhotoImage(img)
         except Exception:
             self.bneir_logo_image = None
