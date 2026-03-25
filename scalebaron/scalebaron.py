@@ -1305,14 +1305,33 @@ class CompositeApp:
                 status = self.progress_data.get((sample, element, unit_type))
                 if status == 'complete':
                     bg, text = _bg_complete, "✓"
+                    status_text = "Complete"
                 elif status == 'partial':
                     bg, text = _bg_partial, ""  # Partial: colour only, no symbol
+                    status_text = "Partial"
                 elif status == 'missing_file':
                     bg, text = _bg_missing_file, "!"  # No input file
+                    status_text = "No input file"
                 else:
                     bg, text = _bg_missing, ""  # Not started
-                tk.Label(inner, text=text, bg=bg, font=("TkDefaultFont", 11),
-                         width=col_widths[3 + c], anchor="center").grid(row=r, column=3 + c, sticky="nsew", padx=1, pady=1)
+                    status_text = "Not started"
+                cell_lbl = tk.Label(
+                    inner,
+                    text=text,
+                    bg=bg,
+                    font=("TkDefaultFont", 11),
+                    width=col_widths[3 + c],
+                    anchor="center",
+                )
+                cell_lbl.grid(row=r, column=3 + c, sticky="nsew", padx=1, pady=1)
+                try:
+                    unit_text = unit_type if unit_type else "(none)"
+                    self._create_tooltip(
+                        cell_lbl,
+                        f"Sample: {sample}\nElement: {element}\nUnit: {unit_text}\nStatus: {status_text}",
+                    )
+                except Exception:
+                    pass
 
         inner.update_idletasks()
         if hasattr(self, 'progress_table_canvas'):
