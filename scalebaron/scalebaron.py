@@ -31,6 +31,23 @@ BNEIR_URL = "https://sites.dartmouth.edu/bneir/"
 SCALEBARON_ISSUES_URL = "https://github.com/twinmum1277/scalebaron/issues"
 
 class CompositeApp:
+
+    def _natural_sort_key(self, s):
+        """Natural sort key: splits strings into digit/non-digit runs.
+
+        Example: 'sample2' < 'sample10' instead of lexicographic ordering.
+        """
+        try:
+            parts = re.split(r"(\d+)", str(s))
+        except Exception:
+            return (str(s),)
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append(int(p))
+            else:
+                key.append(p.lower())
+        return tuple(key)
     
     def _pt_from_font(self, var, default=16):
         """Return point size from a font StringVar: (None) -> default, else int in 6–72."""
@@ -413,7 +430,17 @@ class CompositeApp:
         def _on_progress_frame_configure(event):
             self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
         def _on_canvas_configure(event):
-            self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=event.width)
+            # For vertical scrolling it's common to force the inner window width to match the canvas.
+            # That breaks horizontal scrolling because the canvas never "sees" content overflow.
+            # Instead, expand the inner window to at least its requested width.
+            try:
+                self.progress_table_inner.update_idletasks()
+                req_w = self.progress_table_inner.winfo_reqwidth()
+                new_w = max(event.width, req_w)
+                self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=new_w)
+            except Exception:
+                # Fallback to previous behavior if measurement fails.
+                self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=event.width)
         self.progress_table_inner.bind("<Configure>", _on_progress_frame_configure)
         self.progress_table_canvas.bind("<Configure>", _on_canvas_configure)
         self.progress_table = self.progress_table_inner  # so "if progress_table" checks still work
@@ -1024,7 +1051,7 @@ class CompositeApp:
                 for elem in sorted(elems, key=elem_sort_key):
                     self.progress_columns.append((elem, ut))
 
-        self.progress_samples = sorted(samples)
+        self.progress_samples = sorted(samples, key=self._natural_sort_key)
         self.progress_elements = sorted(set(e for e, _ in self.progress_columns), key=elem_sort_key)
         for sample in self.progress_samples:
             if sample not in self.sample_include:
@@ -1079,7 +1106,7 @@ class CompositeApp:
                     return (m.group(1), int(m.group(2)))
                 return (elem, 0)
 
-            self.progress_samples = sorted(samples)
+            self.progress_samples = sorted(samples, key=self._natural_sort_key)
             self.progress_columns = sorted(set(progress_cols), key=lambda x: (('ppm', 'CPS', 'raw').index(x[1]) if x[1] in ('ppm', 'CPS', 'raw') else 99, sort_key(x[0])))
             self.progress_elements = sorted(set(e for e, _ in self.progress_columns), key=sort_key)
             for sample in self.progress_samples:
