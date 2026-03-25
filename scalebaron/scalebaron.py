@@ -91,6 +91,48 @@ class CompositeApp:
         # Regenerate preview with current font settings (sample names, scale bar, color bar, element label)
         self.generate_composite(preview=True)
 
+    def _font_candidates(self, family, bold=False):
+        """Return ordered PIL font candidates for selected family/style."""
+        fam = str(family or "Arial").strip().lower()
+        if fam == "times":
+            if bold:
+                return [
+                    "/System/Library/Fonts/Times.ttc",
+                    "/Library/Fonts/Times New Roman Bold.ttf",
+                    "timesbd.ttf",
+                    "Times New Roman Bold.ttf",
+                    "Times New Roman.ttf",
+                    "times.ttf",
+                ]
+            return [
+                "/System/Library/Fonts/Times.ttc",
+                "/Library/Fonts/Times New Roman.ttf",
+                "times.ttf",
+                "Times New Roman.ttf",
+            ]
+        # Default sans-serif: Arial
+        if bold:
+            return [
+                "/System/Library/Fonts/Arial Bold.ttf",
+                "arialbd.ttf",
+                "Arial Bold.ttf",
+                "arial.ttf",
+            ]
+        return [
+            "/System/Library/Fonts/Arial.ttf",
+            "arial.ttf",
+            "Arial.ttf",
+        ]
+
+    def _load_overlay_font(self, family, size_px, bold=False):
+        """Load selected overlay font with robust cross-platform fallbacks."""
+        for candidate in self._font_candidates(family, bold=bold):
+            try:
+                return ImageFont.truetype(candidate, size_px)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
     def get_contrasting_text_color(self, cmap_name):
         rgba = plt.get_cmap(cmap_name)(0.0)  # Color for 0 value
         r, g, b = rgba[:3]
@@ -161,6 +203,7 @@ class CompositeApp:
         self.element = tk.StringVar()
         self.unit = tk.StringVar()  # ppm, CPS, or raw; filters files when element has multiple units
         # Fonts: same style for each — (None) = off/default, then point sizes
+        self.overlay_font_family = tk.StringVar(value="Arial")  # Arial (sans) or Times (serif)
         self.sample_name_font = tk.StringVar(value="12")   # (None) = off, else pt
         self.element_label_font = tk.StringVar(value="16")  # (None) = default 16 when adding, else pt
         self.scale_bar_font = tk.StringVar(value="10")     # (None) = off, else pt
@@ -547,17 +590,26 @@ class CompositeApp:
         font_frame.pack(fill=tk.X, pady=5)
         font_frame.columnconfigure(0, weight=1)
         font_frame.columnconfigure(1, weight=0, minsize=80)
+        ttk.Label(font_frame, text="Font family:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        self.overlay_font_family_dropdown = ttk.Combobox(
+            font_frame,
+            textvariable=self.overlay_font_family,
+            values=["Arial", "Times"],
+            width=8,
+            state="readonly",
+        )
+        self.overlay_font_family_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         font_dropdown_values = ["(None)", "8", "9", "10", "12", "14", "16", "18", "20", "24"]
         def _make_font_row(row, label, var, width=8):
             ttk.Label(font_frame, text=label).grid(row=row, column=0, sticky="e", padx=5, pady=2)
             c = ttk.Combobox(font_frame, textvariable=var, values=font_dropdown_values, width=width, state="readonly")
             c.grid(row=row, column=1, padx=5, pady=2, sticky="w")
             return c
-        _make_font_row(0, "Sample names:", self.sample_name_font)
-        self.element_label_font_combobox = _make_font_row(1, "Element label:", self.element_label_font)
-        _make_font_row(2, "Scale bar:", self.scale_bar_font)
-        _make_font_row(3, "Color bar:", self.color_bar_font)
-        ttk.Checkbutton(font_frame, text="Add BNEIR credit", variable=self.add_credit_to_exports).grid(row=4, column=0, columnspan=2, sticky="", padx=5, pady=(4, 0))
+        _make_font_row(1, "Sample names:", self.sample_name_font)
+        self.element_label_font_combobox = _make_font_row(2, "Element label:", self.element_label_font)
+        _make_font_row(3, "Scale bar:", self.scale_bar_font)
+        _make_font_row(4, "Color bar:", self.color_bar_font)
+        ttk.Checkbutton(font_frame, text="Add BNEIR credit", variable=self.add_credit_to_exports).grid(row=5, column=0, columnspan=2, sticky="", padx=5, pady=(4, 0))
         # When any font dropdown or credit checkbox changes, refresh preview if one exists
         def _refresh_preview_on_font_change(*args):
             self._on_font_change_refresh_preview()
@@ -566,6 +618,7 @@ class CompositeApp:
         self.scale_bar_font.trace_add("write", _refresh_preview_on_font_change)
         self.color_bar_font.trace_add("write", _refresh_preview_on_font_change)
         self.add_credit_to_exports.trace_add("write", _refresh_preview_on_font_change)
+        self.overlay_font_family.trace_add("write", _refresh_preview_on_font_change)
 
         # Action buttons
         action_frame = ttk.Frame(control_frame)
@@ -2416,6 +2469,7 @@ class CompositeApp:
         draw_credit=False,
         credit_text="",
         credit_font_pt=8,
+        overlay_font_family="Arial",
         dpi=300,
     ):
         """
@@ -2439,16 +2493,7 @@ class CompositeApp:
         fill = (255, 255, 255) if text_color == "white" else (0, 0, 0)
         font_size_px = max(10, int(font_size_pt * dpi / 72))
 
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size_px)
-        except Exception:
-            try:
-                font = ImageFont.truetype("arialbd.ttf", font_size_px)
-            except Exception:
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size_px)
-                except Exception:
-                    font = ImageFont.load_default()
+        font = self._load_overlay_font(overlay_font_family, font_size_px, bold=True)
 
         if show_labels and labels and len(image_positions) == len(labels):
             for (x0, y0, w, h), label in zip(image_positions, labels):
@@ -2472,23 +2517,14 @@ class CompositeApp:
             if scale_bar_caption:
                 label_lines.append(scale_bar_caption)
             scale_bar_font_px = max(8, int(scale_bar_font_pt * dpi / 72))
-            try:
-                small_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", scale_bar_font_px)
-            except Exception:
-                small_font = font
+            small_font = self._load_overlay_font(overlay_font_family, scale_bar_font_px, bold=False)
             draw.text((cx_px, cy_px + 12), "\n".join(label_lines), fill=fill, font=small_font, anchor="mt")
 
         # Element label: same layer, same pt→pixel scaling (so size matches other annotations)
         if draw_element_label and element_label_text:
             el_font_pt = max(6, min(72, element_label_font_pt))
             el_font_px = max(8, int(el_font_pt * dpi / 72))
-            try:
-                el_font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", el_font_px)
-            except Exception:
-                try:
-                    el_font = ImageFont.truetype("arialbd.ttf", el_font_px)
-                except Exception:
-                    el_font = font
+            el_font = self._load_overlay_font(overlay_font_family, el_font_px, bold=True)
             x_el, y_el = 50, H - 50
             draw.text((x_el, y_el), element_label_text, fill=fill, font=el_font, anchor="lb")
 
@@ -2496,13 +2532,7 @@ class CompositeApp:
         if draw_credit and credit_text:
             cr_font_pt = max(6, min(48, credit_font_pt))
             cr_font_px = max(6, int(cr_font_pt * dpi / 72))
-            try:
-                cr_font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", cr_font_px)
-            except Exception:
-                try:
-                    cr_font = ImageFont.truetype("arial.ttf", cr_font_px)
-                except Exception:
-                    cr_font = font
+            cr_font = self._load_overlay_font(overlay_font_family, cr_font_px, bold=False)
             margin = max(10, int(12 * dpi / 150))
             x_cr = W - margin
             y_cr = H - margin
@@ -2795,6 +2825,7 @@ class CompositeApp:
             draw_credit=draw_credit,
             credit_text=credit_text,
             credit_font_pt=8,
+            overlay_font_family=self.overlay_font_family.get(),
             dpi=dpi,
         )
         composited = Image.alpha_composite(base_image.convert("RGBA"), overlay).convert("RGB")
@@ -2941,16 +2972,7 @@ class CompositeApp:
             img_width, img_height = labeled_image.size
             font_size = self._pt_from_font_str(el_val, 16)
             font_size = max(6, font_size)  # only enforce a small minimum for readability
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
-            except Exception:
-                try:
-                    font = ImageFont.truetype("arialbd.ttf", font_size)
-                except Exception:
-                    try:
-                        font = ImageFont.truetype("arial.ttf", font_size)
-                    except Exception:
-                        font = ImageFont.load_default()
+            font = self._load_overlay_font(self.overlay_font_family.get(), font_size, bold=True)
             element_text = f"{element_name} ({units})"
             x, y = 50, img_height - 50
             draw.text((x, y), element_text, fill=(255, 255, 255), font=font, anchor="lb")
