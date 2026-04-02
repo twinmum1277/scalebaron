@@ -453,40 +453,128 @@ class CompositeApp:
         progress_frame = ttk.Frame(progress_section)
         progress_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
 
-        # Progress table: scrollable grid of Labels so each cell can have its own colour (complete/partial/not started/no file)
-        self.progress_table_canvas = tk.Canvas(
-            progress_frame,
+        # Progress table: frozen top two rows (units + elements) and frozen left columns
+        # (Include, Sample, Alias); main area scrolls both ways. Mirrors Excel freeze panes.
+        self._progress_frozen_cols = 3  # Include, Sample ID, Alias
+        self._progress_header_rows = 2
+
+        self._progress_scroll_grid = tk.Frame(progress_frame, bg=self._gui_bg)
+        self._progress_scroll_grid.pack(fill=tk.BOTH, expand=True)
+        self._progress_scroll_grid.grid_rowconfigure(1, weight=1)
+        self._progress_scroll_grid.grid_columnconfigure(1, weight=1)
+
+        self.progress_corner = tk.Frame(self._progress_scroll_grid, bg=self._gui_bg)
+        self.progress_corner.grid(row=0, column=0, sticky="nw")
+
+        top_wrap = tk.Frame(self._progress_scroll_grid, bg=self._gui_bg)
+        top_wrap.grid(row=0, column=1, sticky="ew")
+        self.progress_top_canvas = tk.Canvas(
+            top_wrap,
+            height=52,
             highlightthickness=0,
             bg=self._gui_bg,
         )
-        progress_yscroll = ttk.Scrollbar(progress_frame, orient=tk.VERTICAL, command=self.progress_table_canvas.yview)
-        progress_xscroll = ttk.Scrollbar(progress_frame, orient=tk.HORIZONTAL, command=self.progress_table_canvas.xview)
-        self.progress_table_canvas.configure(yscrollcommand=progress_yscroll.set, xscrollcommand=progress_xscroll.set)
-        self.progress_table_inner = tk.Frame(self.progress_table_canvas, bg=self._gui_bg)
-        self.progress_table_inner_window = self.progress_table_canvas.create_window((0, 0), window=self.progress_table_inner, anchor="nw")
-        self.progress_table_canvas.grid(row=0, column=0, sticky="nsew")
-        progress_yscroll.grid(row=0, column=1, sticky="ns")
-        progress_xscroll.grid(row=1, column=0, sticky="ew")
-        progress_frame.grid_rowconfigure(0, weight=1)
-        progress_frame.grid_columnconfigure(0, weight=1)
+        self.progress_top_inner = tk.Frame(self.progress_top_canvas, bg=self._gui_bg)
+        self.progress_top_window = self.progress_top_canvas.create_window((0, 0), window=self.progress_top_inner, anchor="nw")
+        self.progress_top_canvas.pack(fill=tk.BOTH, expand=True)
 
-        def _on_progress_frame_configure(event):
-            self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
-        def _on_canvas_configure(event):
-            # For vertical scrolling it's common to force the inner window width to match the canvas.
-            # That breaks horizontal scrolling because the canvas never "sees" content overflow.
-            # Instead, expand the inner window to at least its requested width.
+        left_wrap = tk.Frame(self._progress_scroll_grid, bg=self._gui_bg)
+        left_wrap.grid(row=1, column=0, sticky="ns")
+        self.progress_left_canvas = tk.Canvas(
+            left_wrap,
+            highlightthickness=0,
+            bg=self._gui_bg,
+        )
+        self.progress_left_inner = tk.Frame(self.progress_left_canvas, bg=self._gui_bg)
+        self.progress_left_window = self.progress_left_canvas.create_window((0, 0), window=self.progress_left_inner, anchor="nw")
+        self.progress_left_canvas.pack(fill=tk.BOTH, expand=True)
+
+        main_cell = tk.Frame(self._progress_scroll_grid, bg=self._gui_bg)
+        main_cell.grid(row=1, column=1, sticky="nsew")
+        self.progress_main_canvas = tk.Canvas(
+            main_cell,
+            highlightthickness=0,
+            bg=self._gui_bg,
+        )
+        self.progress_main_inner = tk.Frame(self.progress_main_canvas, bg=self._gui_bg)
+        self.progress_main_window = self.progress_main_canvas.create_window((0, 0), window=self.progress_main_inner, anchor="nw")
+        self.progress_main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.progress_yscroll = ttk.Scrollbar(main_cell, orient=tk.VERTICAL, command=self._progress_yview_command)
+        self.progress_yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.progress_xscroll = ttk.Scrollbar(
+            self._progress_scroll_grid,
+            orient=tk.HORIZONTAL,
+            command=self._progress_xview_command,
+        )
+        self.progress_xscroll.grid(row=2, column=1, sticky="ew")
+
+        def _progress_main_yscroll(first, last):
             try:
-                self.progress_table_inner.update_idletasks()
-                req_w = self.progress_table_inner.winfo_reqwidth()
+                self.progress_yscroll.set(first, last)
+                self.progress_left_canvas.yview_moveto(float(first))
+            except (ValueError, tk.TclError):
+                pass
+
+        def _progress_main_xscroll(first, last):
+            try:
+                self.progress_xscroll.set(first, last)
+                self.progress_top_canvas.xview_moveto(float(first))
+            except (ValueError, tk.TclError):
+                pass
+
+        def _progress_top_xscroll(first, last):
+            """Keep main body in sync when the header row is scrolled horizontally."""
+            try:
+                self.progress_xscroll.set(first, last)
+                self.progress_main_canvas.xview_moveto(float(first))
+            except (ValueError, tk.TclError):
+                pass
+
+        self.progress_main_canvas.configure(yscrollcommand=_progress_main_yscroll, xscrollcommand=_progress_main_xscroll)
+        self.progress_top_canvas.configure(xscrollcommand=_progress_top_xscroll)
+
+        def _on_progress_top_inner_configure(event):
+            self.progress_top_canvas.configure(scrollregion=self.progress_top_canvas.bbox("all"))
+
+        def _on_progress_top_canvas_configure(event):
+            try:
+                self.progress_top_inner.update_idletasks()
+                req_w = self.progress_top_inner.winfo_reqwidth()
                 new_w = max(event.width, req_w)
-                self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=new_w)
+                self.progress_top_canvas.itemconfig(self.progress_top_window, width=new_w)
             except Exception:
-                # Fallback to previous behavior if measurement fails.
-                self.progress_table_canvas.itemconfig(self.progress_table_inner_window, width=event.width)
-        self.progress_table_inner.bind("<Configure>", _on_progress_frame_configure)
-        self.progress_table_canvas.bind("<Configure>", _on_canvas_configure)
-        self.progress_table = self.progress_table_inner  # so "if progress_table" checks still work
+                self.progress_top_canvas.itemconfig(self.progress_top_window, width=event.width)
+
+        def _on_progress_left_inner_configure(event):
+            self.progress_left_canvas.configure(scrollregion=self.progress_left_canvas.bbox("all"))
+
+        def _on_progress_main_inner_configure(event):
+            self.progress_main_canvas.configure(scrollregion=self.progress_main_canvas.bbox("all"))
+
+        def _on_progress_main_canvas_configure(event):
+            try:
+                self.progress_main_inner.update_idletasks()
+                req_w = self.progress_main_inner.winfo_reqwidth()
+                new_w = max(event.width, req_w)
+                self.progress_main_canvas.itemconfig(self.progress_main_window, width=new_w)
+            except Exception:
+                self.progress_main_canvas.itemconfig(self.progress_main_window, width=event.width)
+
+        self.progress_top_inner.bind("<Configure>", _on_progress_top_inner_configure)
+        self.progress_top_canvas.bind("<Configure>", _on_progress_top_canvas_configure)
+        self.progress_left_inner.bind("<Configure>", _on_progress_left_inner_configure)
+        self.progress_main_inner.bind("<Configure>", _on_progress_main_inner_configure)
+        self.progress_main_canvas.bind("<Configure>", _on_progress_main_canvas_configure)
+
+        self._progress_bind_progress_table_mousewheel()
+
+        # Back-compat: code checks hasattr(progress_table) and progress_table is not None
+        self.progress_table = self.progress_main_inner
+        # Legacy names (some code may reference canvas for scrollregion)
+        self.progress_table_canvas = self.progress_main_canvas
+        self.progress_table_inner = self.progress_main_inner
 
         # Legend for progress table colours
         legend_frame = ttk.Frame(progress_section)
@@ -1261,13 +1349,82 @@ class CompositeApp:
         self.sample_include[sample] = not self.sample_include.get(sample, True)
         self.update_progress_table()
 
+    def _progress_yview_command(self, *args):
+        """Scroll both left stub and main body vertically (frozen panes)."""
+        if hasattr(self, "progress_left_canvas"):
+            self.progress_left_canvas.yview(*args)
+        if hasattr(self, "progress_main_canvas"):
+            self.progress_main_canvas.yview(*args)
+
+    def _progress_xview_command(self, *args):
+        """Scroll both top header and main body horizontally."""
+        if hasattr(self, "progress_top_canvas"):
+            self.progress_top_canvas.xview(*args)
+        if hasattr(self, "progress_main_canvas"):
+            self.progress_main_canvas.xview(*args)
+
+    def _progress_bind_progress_table_mousewheel(self):
+        """Wheel scrolls the progress table vertically on all panes."""
+        def _wheel(event):
+            try:
+                self._progress_yview_command("scroll", -1 if event.delta > 0 else 1, "units")
+            except Exception:
+                pass
+
+        def _wheel_linux(event):
+            try:
+                if event.num == 4:
+                    self._progress_yview_command("scroll", -1, "units")
+                elif event.num == 5:
+                    self._progress_yview_command("scroll", 1, "units")
+            except Exception:
+                pass
+
+        for w in (
+            getattr(self, "progress_corner", None),
+            getattr(self, "progress_top_canvas", None),
+            getattr(self, "progress_left_canvas", None),
+            getattr(self, "progress_main_canvas", None),
+        ):
+            if w is None:
+                continue
+            w.bind("<MouseWheel>", _wheel)
+            w.bind("<Button-4>", _wheel_linux)
+            w.bind("<Button-5>", _wheel_linux)
+
+    def _progress_refresh_all_scrollregions(self):
+        """Update scroll regions after table rebuild."""
+        for cv in (
+            getattr(self, "progress_top_canvas", None),
+            getattr(self, "progress_left_canvas", None),
+            getattr(self, "progress_main_canvas", None),
+        ):
+            if cv is None:
+                continue
+            try:
+                bbox = cv.bbox("all")
+                if bbox:
+                    cv.configure(scrollregion=bbox)
+            except Exception:
+                pass
+
     def update_progress_table(self):
         """Update the progress table display. Uses a grid of Labels so each cell has its own colour."""
-        if not hasattr(self, 'progress_table_inner') or self.progress_table_inner is None:
+        if not hasattr(self, "progress_main_inner") or self.progress_main_inner is None:
             return
 
-        inner = self.progress_table_inner
-        for w in inner.winfo_children():
+        corner = self.progress_corner
+        top = self.progress_top_inner
+        left = self.progress_left_inner
+        main = self.progress_main_inner
+
+        for w in corner.winfo_children():
+            w.destroy()
+        for w in top.winfo_children():
+            w.destroy()
+        for w in left.winfo_children():
+            w.destroy()
+        for w in main.winfo_children():
             w.destroy()
 
         # Status colours (per-cell)
@@ -1280,17 +1437,21 @@ class CompositeApp:
 
         progress_cols = getattr(self, 'progress_columns', None) or [(e, '') for e in self.progress_elements]
         if not progress_cols:
-            tk.Label(inner, text="No elements found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-            inner.update_idletasks()
-            if hasattr(self, 'progress_table_canvas'):
-                self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
+            tk.Label(main, text="No elements found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+            corner.update_idletasks()
+            top.update_idletasks()
+            left.update_idletasks()
+            main.update_idletasks()
+            self._progress_refresh_all_scrollregions()
             return
 
         if not self.progress_samples:
-            tk.Label(inner, text="No samples found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-            inner.update_idletasks()
-            if hasattr(self, 'progress_table_canvas'):
-                self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
+            tk.Label(main, text="No samples found. Please calculate statistics first.", bg=_bg_header, font=("TkDefaultFont", 11)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+            corner.update_idletasks()
+            top.update_idletasks()
+            left.update_idletasks()
+            main.update_idletasks()
+            self._progress_refresh_all_scrollregions()
             return
         max_sample_len = max([len(s) for s in self.progress_samples] + [6])
         max_alias_len = max([len(self.sample_aliases.get(s, "")) for s in self.progress_samples] + [5])
@@ -1300,11 +1461,41 @@ class CompositeApp:
             max(8, min(max_alias_len + 1, 24)),    # Alias
         ] + [5] * len(progress_cols)
 
-        # Header row 0: unit labels grouped over element columns (PPM | CPS | RAW)
-        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=0, column=1, sticky="nsew", padx=1, pady=1)
-        tk.Label(inner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2], anchor="w").grid(row=0, column=2, sticky="nsew", padx=1, pady=1)
-        col_start = 3
+        # Use pixel minsize across frozen/header/main panes so all rows align exactly.
+        # Character-based `width=` can diverge due to font weight differences.
+        font_body = font.Font(family="TkDefaultFont", size=11)
+        font_header = font.Font(family="TkDefaultFont", size=11, weight="bold")
+
+        frozen_col_px = [
+            max(28, font_body.measure("☑") + 12),
+            max(90, font_header.measure("Sample"), font_body.measure("0" * col_widths[1]) + 12),
+            max(80, font_header.measure("Alias"), font_body.measure("0" * col_widths[2]) + 12),
+        ]
+        elem_col_px = []
+        for c, (element, unit_type) in enumerate(progress_cols):
+            w_px = max(
+                50,
+                font_header.measure(str(element)) + 14,
+                font_body.measure("0" * col_widths[3 + c]) + 10,
+            )
+            elem_col_px.append(w_px)
+
+        for i, w_px in enumerate(frozen_col_px):
+            corner.grid_columnconfigure(i, minsize=w_px)
+            left.grid_columnconfigure(i, minsize=w_px)
+        for i, w_px in enumerate(elem_col_px):
+            top.grid_columnconfigure(i, minsize=w_px)
+            main.grid_columnconfigure(i, minsize=w_px)
+
+        # --- Frozen corner: header rows 0–1 for Include, Sample, Alias ---
+        tk.Label(corner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="center").grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        tk.Label(corner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="w").grid(row=0, column=1, sticky="nsew", padx=1, pady=1)
+        tk.Label(corner, text="", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="w").grid(row=0, column=2, sticky="nsew", padx=1, pady=1)
+        tk.Label(corner, text="✓", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="center").grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+        tk.Label(corner, text="Sample", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="w").grid(row=1, column=1, sticky="nsew", padx=1, pady=1)
+        tk.Label(corner, text="Alias", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), anchor="w").grid(row=1, column=2, sticky="nsew", padx=1, pady=1)
+
+        # --- Frozen top strip: units (row 0) + element names (row 1), scrolls horizontally only ---
         idx = 0
         while idx < len(progress_cols):
             element, unit_type = progress_cols[idx]
@@ -1315,39 +1506,28 @@ class CompositeApp:
             span = idx - run_start
             label_text = group_ut.upper() if group_ut else ""
             if label_text:
-                # Compute approximate total width of this unit group for nicer centering
-                group_width = sum(col_widths[2 + c] for c in range(col_start - 2, col_start - 2 + span))
-                tk.Label(inner, text=label_text, bg=_bg_header, font=("TkDefaultFont", 9, "bold"),
-                         width=group_width, anchor="center").grid(row=0, column=col_start,
-                                                                 columnspan=span, sticky="nsew", padx=1, pady=1)
-            col_start += span
-
-        # Header row 1: Include, Sample, Alias, element names
-        tk.Label(inner, text="✓", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[0], anchor="center").grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
-        tk.Label(inner, text="Sample", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[1], anchor="w").grid(row=1, column=1, sticky="nsew", padx=1, pady=1)
-        tk.Label(inner, text="Alias", bg=_bg_header, font=("TkDefaultFont", 11, "bold"), width=col_widths[2], anchor="w").grid(row=1, column=2, sticky="nsew", padx=1, pady=1)
+                tk.Label(top, text=label_text, bg=_bg_header, font=("TkDefaultFont", 9, "bold"),
+                         anchor="center").grid(row=0, column=run_start, columnspan=span, sticky="nsew", padx=1, pady=1)
         for c, (element, unit_type) in enumerate(progress_cols):
-            tk.Label(inner, text=element, bg=_bg_header, font=("TkDefaultFont", 11, "bold"),
-                     width=col_widths[3 + c], anchor="center").grid(row=1, column=3 + c, sticky="nsew", padx=1, pady=1)
+            tk.Label(top, text=element, bg=_bg_header, font=("TkDefaultFont", 11, "bold"),
+                     anchor="center").grid(row=1, column=c, sticky="nsew", padx=1, pady=1)
 
-        # Data rows: each cell is a Label with its own background
-        for r, sample in enumerate(self.progress_samples, start=2):
+        # --- Frozen left strip: per-sample Include, Sample ID, Alias (scrolls vertically with main) ---
+        # --- Main body: status cells only ---
+        for r, sample in enumerate(self.progress_samples):
             incl = self.sample_include.get(sample, True)
             incl_text = "☑" if incl else "☐"
-            incl_lbl = tk.Label(inner, text=incl_text, bg=_bg_include_sample, font=("TkDefaultFont", 11), width=col_widths[0], anchor="center", cursor="hand2")
+            incl_lbl = tk.Label(left, text=incl_text, bg=_bg_include_sample, font=("TkDefaultFont", 11), anchor="center", cursor="hand2")
             incl_lbl.grid(row=r, column=0, sticky="nsew", padx=1, pady=1)
             incl_lbl.bind("<ButtonRelease-1>", lambda e, s=sample: self._toggle_sample_include(s))
-            # Sample ID (read-only)
-            tk.Label(inner, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11),
-                     width=col_widths[1], anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
-            # Alias (clickable to edit)
+            tk.Label(left, text=sample, bg=_bg_include_sample, font=("TkDefaultFont", 11),
+                     anchor="w").grid(row=r, column=1, sticky="nsew", padx=1, pady=1)
             alias_text = self.sample_aliases.get(sample, "")
             alias_lbl = tk.Label(
-                inner,
+                left,
                 text=alias_text,
                 bg=_bg_include_sample,
                 font=("TkDefaultFont", 11, "italic"),
-                width=col_widths[2],
                 anchor="w",
                 cursor="xterm",
             )
@@ -1360,23 +1540,22 @@ class CompositeApp:
                     bg, text = _bg_complete, "✓"
                     status_text = "Complete"
                 elif status == 'partial':
-                    bg, text = _bg_partial, ""  # Partial: colour only, no symbol
+                    bg, text = _bg_partial, ""
                     status_text = "Partial"
                 elif status == 'missing_file':
-                    bg, text = _bg_missing_file, "!"  # No input file
+                    bg, text = _bg_missing_file, "!"
                     status_text = "No input file"
                 else:
-                    bg, text = _bg_missing, ""  # Not started
+                    bg, text = _bg_missing, ""
                     status_text = "Not started"
                 cell_lbl = tk.Label(
-                    inner,
+                    main,
                     text=text,
                     bg=bg,
                     font=("TkDefaultFont", 11),
-                    width=col_widths[3 + c],
                     anchor="center",
                 )
-                cell_lbl.grid(row=r, column=3 + c, sticky="nsew", padx=1, pady=1)
+                cell_lbl.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
                 try:
                     unit_text = unit_type if unit_type else "(none)"
                     self._create_tooltip(
@@ -1386,9 +1565,26 @@ class CompositeApp:
                 except Exception:
                     pass
 
-        inner.update_idletasks()
-        if hasattr(self, 'progress_table_canvas'):
-            self.progress_table_canvas.configure(scrollregion=self.progress_table_canvas.bbox("all"))
+        corner.update_idletasks()
+        top.update_idletasks()
+        left.update_idletasks()
+        main.update_idletasks()
+        # Match top header canvas height to content; align left strip width with corner.
+        try:
+            th = self.progress_top_inner.winfo_reqheight()
+            if th > 1:
+                self.progress_top_canvas.config(height=th)
+        except Exception:
+            pass
+        try:
+            lw = self.progress_left_inner.winfo_reqwidth()
+            cw = self.progress_corner.winfo_reqwidth()
+            w = max(lw, cw)
+            if w > 1:
+                self.progress_left_canvas.config(width=w)
+        except Exception:
+            pass
+        self._progress_refresh_all_scrollregions()
 
     def update_sample_element_progress(self, sample, element, status='complete'):
         """Update progress for a specific sample-element pair. Updates all (sample, element, unit_type) entries."""

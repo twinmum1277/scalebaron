@@ -25,6 +25,7 @@ import json
 import base64
 import zlib
 import webbrowser
+from datetime import datetime
 try:
     from PIL import Image, ImageTk
     PIL_AVAILABLE = True
@@ -333,6 +334,22 @@ class MuadDataViewer:
         self.polygon_results_window = None  # Results table window
         self.polygon_results_table = None  # Treeview widget for results
 
+        # LOD (limit of detection) state for Element Viewer
+        self.lod_bg_active = False
+        self.lod_bg_vertices = []
+        self.lod_bg_mask = None
+        self.lod_bg_pixel_count = 0
+        self.lod_bg_mean = None
+        self.lod_bg_std = None
+        self.lod_threshold = None  # mean_bg + 3 * std_bg
+        self.lod_filtered_matrix = None
+        self.lod_apply_preview = tk.BooleanVar(value=False)
+        # After LOD instruction dialog: show scan-boundary outline until ROI done or cancelled
+        self.lod_show_scan_boundary = False
+        # Loaded from file; Apply uses these when shape matches current matrix
+        self.lod_stored_roi_vertices = None
+        self.lod_stored_roi_shape = None  # (H, W)
+
         # Magic wand (beta) state for Element Viewer
         self.magic_wand_active = False
         # Foreground = values >= bg + k*noise (MAD-based). Lower k → larger mask (whole specimen);
@@ -410,6 +427,9 @@ class MuadDataViewer:
         _style.configure("TLabelframe", background="#f0f0f0")
         _style.configure("TLabelframe.Label", font=("TkDefaultFont", 12, "bold"),
                         background="#f0f0f0")
+        # Collapsible-card body style (ScaleBarOn-like soft panel)
+        _style.configure("Card.TFrame", background="#dcdcdc", borderwidth=0, relief="flat")
+        _style.configure("CardInner.TFrame", background="#dcdcdc")
         _style.configure("Green.TButton", background="#4CAF50", foreground="black")
         _style.map("Green.TButton", background=[("active", "#45a049")])
         _style.configure("Red.TButton", background="#f44336", foreground="black")
@@ -499,9 +519,6 @@ class MuadDataViewer:
             return
         try:
             candidates = [
-                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
-                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
-                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
@@ -601,6 +618,7 @@ class MuadDataViewer:
         for key, filename in [
             ('viewmap', 'viewmap.png'),
             ('save', 'save.png'),
+            ('save_flag', 'save_flag.png'),
             ('map_math', 'map_math.png'),
             ('clear', 'clear.png'),
             ('load', 'load.png'),
@@ -650,6 +668,68 @@ class MuadDataViewer:
                 tip[0] = None
         widget.bind("<Enter>", show)
         widget.bind("<Leave>", hide)
+
+    def _create_collapsible_group(self, parent, title, expanded=True, body_padx=8, body_pady=6):
+        """Create a collapsible command group with a triangle-like indicator."""
+        base_bg = getattr(self, "_gui_bg", "#f0f0f0")
+        panel_bg = "#dcdcdc"  # slightly darker panel for revealed controls, soft card look
+
+        container = tk.Frame(parent, bg=base_bg)
+        container.pack(fill=tk.X, pady=(0, 5))
+
+        header = tk.Frame(container, bg=base_bg)
+        header.pack(fill=tk.X)
+
+        marker = tk.StringVar(value=("▾" if expanded else "▸"))
+        title_lbl = tk.Label(
+            header,
+            text=title,
+            bg=base_bg,
+            fg="#202020",
+            font=("TkDefaultFont", 13, "bold"),
+            anchor="w",
+        )
+        title_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        marker_lbl = tk.Label(
+            header,
+            text=marker.get(),
+            bg=base_bg,
+            fg="#202020",
+            font=("TkDefaultFont", 18, "bold"),
+            width=2,
+            anchor="e",
+        )
+        marker_lbl.pack(side=tk.RIGHT)
+
+        body_shell = ttk.Frame(container, style="Card.TFrame")
+        body = ttk.Frame(body_shell, style="CardInner.TFrame")
+
+        def _set_header_text():
+            marker_lbl.config(text=marker.get())
+
+        def _toggle():
+            if marker.get() == "▾":
+                marker.set("▸")
+                try:
+                    body_shell.pack_forget()
+                except Exception:
+                    pass
+            else:
+                marker.set("▾")
+                body_shell.pack(fill=tk.X, padx=body_padx, pady=(body_pady, 0))
+                body.pack(fill=tk.X, padx=8, pady=8)
+            _set_header_text()
+
+        for w in (header, title_lbl, marker_lbl):
+            w.bind("<Button-1>", lambda e: _toggle())
+            w.config(cursor="hand2")
+
+        if expanded:
+            body_shell.pack(fill=tk.X, padx=body_padx, pady=(body_pady, 0))
+            body.pack(fill=tk.X, padx=8, pady=8)
+        _set_header_text()
+        return body
 
     def _add_report_issue_button(self, parent):
         """Add a utility button that opens the GitHub issue page."""
@@ -1049,8 +1129,7 @@ class MuadDataViewer:
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         # --- Load & display ---
-        load_group = ttk.LabelFrame(control_frame, text="Load & display", padding=10)
-        load_group.pack(fill=tk.X, pady=(0, 5))
+        load_group = self._create_collapsible_group(control_frame, "Load and Display", expanded=True)
         ttk.Button(load_group, text="Load Matrix", command=self.load_single_file, width=12).pack(pady=(0, 4))
         ttk.Label(load_group, text="Colormap").pack(anchor='w')
         cmap_menu = ttk.Combobox(load_group, textvariable=self.single_colormap, values=plt.colormaps(), font=("TkDefaultFont", 12), width=12)
@@ -1092,6 +1171,7 @@ class MuadDataViewer:
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
         ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar).pack(anchor='w')
         ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar).pack(anchor='w')
+
         # View Map / Save PNG as icon buttons (ScaleBarOn style)
         elem_action_frame = ttk.Frame(load_group)
         elem_action_frame.pack(fill=tk.X, pady=(4, 2))
@@ -1126,9 +1206,104 @@ class MuadDataViewer:
         else:
             ttk.Button(map_math_cell, text="Map Math", command=self.open_map_math, style="Green.TButton", width=8).pack(anchor=tk.CENTER)
 
+        # --- Detection limit (LOD): background 3σ filtering ---
+        lod_group = self._create_collapsible_group(control_frame, "Detection Limit Filter", expanded=True)
+        lod_btn_row = ttk.Frame(lod_group)
+        lod_btn_row.pack(fill=tk.X, pady=(0, 4))
+        self.lod_select_bg_button = ttk.Button(
+            lod_btn_row,
+            text="Start",
+            command=self.toggle_lod_background_mode,
+            width=7,
+        )
+        self.lod_select_bg_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.lod_compute_button = ttk.Button(
+            lod_btn_row,
+            text="Compute",
+            command=self.compute_lod_from_background_roi,
+            width=8,
+        )
+        self.lod_compute_button.pack(side=tk.LEFT)
+
+        lod_roi_row = ttk.Frame(lod_group)
+        lod_roi_row.pack(fill=tk.X, pady=(2, 4))
+        self.lod_save_region_button = ttk.Button(
+            lod_roi_row,
+            text="Save ROI",
+            command=self.save_lod_background_roi_file,
+            width=9,
+        )
+        self.lod_save_region_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.lod_load_region_button = ttk.Button(
+            lod_roi_row,
+            text="Load ROI",
+            command=self.load_lod_background_roi_file,
+            width=9,
+        )
+        self.lod_load_region_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.lod_apply_region_button = ttk.Button(
+            lod_roi_row,
+            text="Apply region",
+            command=self.apply_stored_lod_background_roi,
+            width=9,
+        )
+        self.lod_apply_region_button.pack(side=tk.LEFT)
+        try:
+            self._create_tooltip(self.lod_save_region_button, "Save the current background polygon for LOD (JSON, reuse on other elements).")
+            self._create_tooltip(self.lod_load_region_button, "Load a saved background region from a JSON file.")
+            self._create_tooltip(self.lod_apply_region_button, "Apply the loaded region to this map (same image size as when saved).")
+        except Exception:
+            pass
+
+        # LOD results box
+        lod_results = ttk.LabelFrame(lod_group, text="LOD Results", padding=4)
+        lod_results.pack(fill=tk.X, pady=(4, 4))
+        self.lod_n_label = ttk.Label(lod_results, text="Background pixels: --", font=("TkDefaultFont", 12))
+        self.lod_n_label.pack(anchor='center', pady=(2, 0))
+        self.lod_mean_label = ttk.Label(lod_results, text="Mean background: --", font=("TkDefaultFont", 12))
+        self.lod_mean_label.pack(anchor='center', pady=(1, 0))
+        self.lod_sigma_label = ttk.Label(lod_results, text="SD Background: --", font=("TkDefaultFont", 12))
+        self.lod_sigma_label.pack(anchor='center', pady=(1, 0))
+        self.lod_value_label = ttk.Label(lod_results, text="LOD: --", font=("TkDefaultFont", 12, "bold"))
+        self.lod_value_label.pack(anchor='center', pady=(1, 2))
+
+        ttk.Checkbutton(
+            lod_group,
+            text="Apply LOD to preview",
+            variable=self.lod_apply_preview,
+            command=self._on_lod_apply_preview_toggle,
+        ).pack(anchor='center')
+        save_flag_cell = ttk.Frame(lod_group)
+        save_flag_cell.pack(anchor='center', pady=(3, 0))
+        ttk.Label(save_flag_cell, text="Save flag matrix", style="Hint.TLabel").pack(pady=(0, 2))
+
+        save_flag_icon = self.button_icons.get('save_flag')
+        if save_flag_icon:
+            btn = tk.Button(
+                save_flag_cell,
+                image=save_flag_icon,
+                command=self.save_lod_filtered_matrix,
+                padx=2,
+                pady=2,
+                bg=getattr(self, "_gui_bg", "#f0f0f0"),
+                relief='raised',
+                activebackground='#4CAF50',
+            )
+            btn.image = save_flag_icon
+            btn.pack(anchor=tk.CENTER)
+            self._create_tooltip(btn, "Save filtered (_flag)")
+        else:
+            # Fallback if the icon file isn't available for some reason.
+            self.lod_save_button = ttk.Button(
+                save_flag_cell,
+                text="Save filtered (_flag)",
+                command=self.save_lod_filtered_matrix,
+                width=17,
+            )
+            self.lod_save_button.pack(anchor=tk.CENTER)
+
         # --- Scale bar ---
-        scale_group = ttk.LabelFrame(control_frame, text="Scale bar", padding=10)
-        scale_group.pack(fill=tk.X, pady=(0, 5))
+        scale_group = self._create_collapsible_group(control_frame, "Scale Bar", expanded=False)
         row1 = ttk.Frame(scale_group)
         row1.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(row1, text="Pixel size (µm):").pack(side=tk.LEFT)
@@ -1145,8 +1320,7 @@ class MuadDataViewer:
         self.scale_length_entry.bind("<FocusOut>", lambda e: self.view_single_map())
 
         # --- Zoom & crop ---
-        zoom_group = ttk.LabelFrame(control_frame, text="Zoom & crop", padding=10)
-        zoom_group.pack(fill=tk.X, pady=(0, 5))
+        zoom_group = self._create_collapsible_group(control_frame, "Zoom and Crop", expanded=False)
         self.zoom_button = ttk.Button(zoom_group, text="Select region", command=self.toggle_zoom_mode, width=10)
         self.zoom_button.pack(anchor=tk.CENTER, pady=(0, 2))
         self.save_crop_button = ttk.Button(zoom_group, text="Save cropped", command=self.save_cropped_matrix, state=tk.DISABLED, width=10)
@@ -1155,8 +1329,7 @@ class MuadDataViewer:
         self.reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
         # --- Region statistics ---
-        region_group = ttk.LabelFrame(control_frame, text="Region statistics", padding=10)
-        region_group.pack(fill=tk.X, pady=(0, 5))
+        region_group = self._create_collapsible_group(control_frame, "Region Statistics", expanded=False)
         self.polygon_button = ttk.Button(region_group, text="Select ROI", command=self.toggle_polygon_mode, width=10)
         self.polygon_button.pack(anchor=tk.CENTER, pady=(0, 2))
         self.view_stats_button = ttk.Button(region_group, text="Tabulate", command=self.show_polygon_results_window, width=10)
@@ -1165,8 +1338,7 @@ class MuadDataViewer:
         self.clear_polygons_button.pack(anchor=tk.CENTER, pady=(0, 0))
 
         # --- Specimen mask → ROI (beta) ---
-        wand_group = ttk.LabelFrame(control_frame, text="Specimen mask → ROI (beta)", padding=10)
-        wand_group.pack(fill=tk.X, pady=(0, 5))
+        wand_group = self._create_collapsible_group(control_frame, "Specimen Mask -> ROI (beta)", expanded=False)
         self.magic_wand_button = ttk.Button(
             wand_group,
             text="Select",
@@ -1473,6 +1645,340 @@ class MuadDataViewer:
         col = max(0, min(col, W - 1))
         row = max(0, min(row, H - 1))
         return row, col
+
+    # --- LOD (limit of detection) workflow ---
+    def toggle_lod_background_mode(self):
+        """Toggle interactive polygon selection for LOD background ROI."""
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        if not self.lod_bg_active:
+            self.lod_bg_active = True
+            self.lod_bg_vertices = []
+            self.lod_select_bg_button.config(text="Cancel", style="Red.TButton")
+            # Avoid interaction conflicts with other drawing modes.
+            if self.polygon_active:
+                self.deactivate_polygon_mode()
+            if self.zoom_active:
+                self.deactivate_zoom_mode()
+            if self.magic_wand_active:
+                self.magic_wand_active = False
+                if hasattr(self, "magic_wand_button") and self.magic_wand_button is not None:
+                    self.magic_wand_button.config(text="Select", style="TButton")
+            self.lod_bg_cid = self.single_canvas.mpl_connect('button_press_event', self.on_lod_background_click)
+            custom_dialogs.showinfo(
+                self.root,
+                "Background region for LOD",
+                "Click to place vertices for a specimen-free background region.\nDouble-click (or click the first vertex) to complete.",
+            )
+            self.lod_show_scan_boundary = True
+            self.view_single_map()
+        else:
+            self.deactivate_lod_background_mode()
+
+    def deactivate_lod_background_mode(self, clear_vertices=True):
+        """Exit LOD background ROI selection mode."""
+        self.lod_bg_active = False
+        self.lod_show_scan_boundary = False
+        if clear_vertices:
+            self.lod_bg_vertices = []
+        if hasattr(self, "lod_select_bg_button") and self.lod_select_bg_button is not None:
+            self.lod_select_bg_button.config(text="Start", style="TButton")
+        if hasattr(self, 'lod_bg_cid'):
+            self.single_canvas.mpl_disconnect(self.lod_bg_cid)
+        self.view_single_map()
+
+    def on_lod_background_click(self, event):
+        """Handle interactive clicks for LOD background polygon."""
+        if not self.lod_bg_active or event.inaxes != self.single_ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        row, col = self._single_coords_to_indices(event.xdata, event.ydata)
+        if row is None or col is None:
+            return
+        x, y = int(col), int(row)
+        if event.dblclick:
+            if len(self.lod_bg_vertices) == 0 or self.lod_bg_vertices[-1] != (x, y):
+                self.lod_bg_vertices.append((x, y))
+            if len(self.lod_bg_vertices) >= 3:
+                self.complete_lod_background_polygon()
+            return
+        if len(self.lod_bg_vertices) >= 3:
+            x0, y0 = self.lod_bg_vertices[0]
+            if abs(x - x0) < 5 and abs(y - y0) < 5:
+                self.complete_lod_background_polygon()
+                return
+        self.lod_bg_vertices.append((x, y))
+        self.view_single_map()
+
+    def complete_lod_background_polygon(self):
+        """Finalize LOD background ROI and build background mask."""
+        if len(self.lod_bg_vertices) < 3:
+            custom_dialogs.showwarning(self.root, "Invalid region", "The background region needs at least 3 vertices.")
+            self.lod_bg_vertices = []
+            self.view_single_map()
+            return
+        self.lod_bg_mask = self._polygon_vertices_to_mask(self.lod_bg_vertices)
+        self.deactivate_lod_background_mode(clear_vertices=False)
+        self.view_single_map()
+
+    def _polygon_vertices_to_mask(self, vertices):
+        """Create boolean mask from polygon vertices in matrix index coords."""
+        if self.single_matrix is None or vertices is None or len(vertices) < 3:
+            return None
+        h, w = self.single_matrix.shape
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        points = np.column_stack([x_coords.ravel(), y_coords.ravel()])
+        from matplotlib.path import Path
+        mask = Path(vertices).contains_points(points).reshape(h, w)
+        return np.asarray(mask, dtype=bool)
+
+    def _lod_finite_data_bbox(self):
+        """Inclusive (c0, c1, r0, r1) for finite pixels; full frame if all finite; None if no finite data."""
+        if self.single_matrix is None:
+            return None
+        m = self.single_matrix
+        H, W = m.shape
+        valid = np.isfinite(m)
+        if not np.any(valid):
+            return None
+        if np.all(valid):
+            return (0, W - 1, 0, H - 1)
+        rows = np.any(valid, axis=1)
+        cols = np.any(valid, axis=0)
+        ridx = np.where(rows)[0]
+        cidx = np.where(cols)[0]
+        return (int(cidx[0]), int(cidx[-1]), int(ridx[0]), int(ridx[-1]))
+
+    def save_lod_background_roi_file(self):
+        """Save background polygon vertices to JSON for reuse on other element maps (same dimensions)."""
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        verts = self.lod_bg_vertices
+        if not verts or len(verts) < 3:
+            custom_dialogs.showwarning(
+                self.root,
+                "No region",
+                "Complete a background region first (Start, then finish the polygon).",
+            )
+            return
+        H, W = self.single_matrix.shape
+        base = os.path.splitext(os.path.basename(self.single_file_path or "matrix"))[0]
+        default_name = base + "_lod_background_region.json"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile=default_name,
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        data = {
+            "version": 1,
+            "shape": [int(H), int(W)],
+            "vertices": [[float(x), float(y)] for x, y in verts],
+            "description": "Muad'Data LOD background region (column, row) indices",
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            self.lod_stored_roi_vertices = data["vertices"]
+            self.lod_stored_roi_shape = (H, W)
+            custom_dialogs.showinfo(self.root, "Saved", f"Saved background region:\n{path}")
+        except Exception as e:
+            custom_dialogs.showerror(self.root, "Error", f"Failed to save region file:\n{e}")
+
+    def load_lod_background_roi_file(self):
+        """Load background region vertices from JSON into memory for Apply region."""
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            sh = data.get("shape")
+            verts = data.get("vertices")
+            if not sh or len(sh) != 2 or not verts or len(verts) < 3:
+                custom_dialogs.showerror(self.root, "Invalid file", "Expected shape and vertices (at least 3 points).")
+                return
+            self.lod_stored_roi_vertices = verts
+            self.lod_stored_roi_shape = (int(sh[0]), int(sh[1]))
+            custom_dialogs.showinfo(
+                self.root,
+                "Loaded",
+                "Background region loaded. Use Apply region on each element map with the same dimensions.",
+            )
+        except Exception as e:
+            custom_dialogs.showerror(self.root, "Error", f"Failed to load region file:\n{e}")
+
+    def apply_stored_lod_background_roi(self):
+        """Apply loaded (or last saved) vertices to the current matrix and rebuild the mask."""
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        verts = self.lod_stored_roi_vertices
+        if not verts or len(verts) < 3:
+            custom_dialogs.showwarning(
+                self.root,
+                "No stored region",
+                "Load a region file first, or save the current polygon after drawing it.",
+            )
+            return
+        H, W = self.single_matrix.shape
+        exp = self.lod_stored_roi_shape
+        if exp is None or exp != (H, W):
+            msg = (
+                "Saved region has no shape metadata."
+                if exp is None
+                else f"This map is {H}×{W} but the saved region is for {exp[0]}×{exp[1]}."
+            )
+            custom_dialogs.showwarning(self.root, "Shape mismatch", msg)
+            return
+        self.lod_bg_vertices = [(int(round(v[0])), int(round(v[1]))) for v in verts]
+        self.lod_bg_mask = self._polygon_vertices_to_mask(self.lod_bg_vertices)
+        self.view_single_map()
+
+    def compute_lod_from_background_roi(self):
+        """Compute LOD as mean(background) + 3 * std(background) from selected ROI."""
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        if self.lod_bg_mask is None:
+            custom_dialogs.showwarning(
+                self.root,
+                "No background region",
+                "Draw a region with Start, or use Apply region after loading a saved file.",
+            )
+            return
+        vals = self.single_matrix[self.lod_bg_mask]
+        vals = vals[np.isfinite(vals)]
+        n = int(vals.size)
+        self.lod_bg_pixel_count = n
+        if n < 30:
+            custom_dialogs.showwarning(
+                self.root,
+                "Background region too small",
+                f"Need at least 30 valid background pixels. Found {n}.",
+            )
+            return
+        mean_bg = float(np.mean(vals))
+        std_bg = float(np.std(vals))
+        self.lod_bg_mean = mean_bg
+        self.lod_bg_std = std_bg
+        self.lod_threshold = mean_bg + (3.0 * std_bg)
+        self.lod_filtered_matrix = self._build_lod_filtered_matrix()
+        if hasattr(self, "lod_n_label") and self.lod_n_label is not None:
+            self.lod_n_label.config(text=f"Background pixels: {n}")
+        if hasattr(self, "lod_mean_label") and self.lod_mean_label is not None:
+            self.lod_mean_label.config(text=f"Mean background: {mean_bg:.4g}")
+        if hasattr(self, "lod_sigma_label") and self.lod_sigma_label is not None:
+            self.lod_sigma_label.config(text=f"SD Background: {std_bg:.4g}")
+        if hasattr(self, "lod_value_label") and self.lod_value_label is not None:
+            self.lod_value_label.config(text=f"LOD: {self.lod_threshold:.4g}")
+        if self.lod_apply_preview.get():
+            self.view_single_map()
+
+    def _build_lod_filtered_matrix(self):
+        """Return a filtered copy where values below LOD are set to NaN."""
+        if self.single_matrix is None or self.lod_threshold is None:
+            return None
+        out = np.array(self.single_matrix, copy=True, dtype=float)
+        finite = np.isfinite(out)
+        out[finite & (out < float(self.lod_threshold))] = np.nan
+        return out
+
+    def _on_lod_apply_preview_toggle(self):
+        """Refresh map after toggling LOD preview mode."""
+        if self.lod_apply_preview.get() and self.lod_filtered_matrix is None and self.lod_threshold is not None:
+            self.lod_filtered_matrix = self._build_lod_filtered_matrix()
+        self.view_single_map()
+
+    def _reset_lod_state(self):
+        """Clear LOD ROI/results for a newly loaded dataset."""
+        self.lod_bg_active = False
+        self.lod_show_scan_boundary = False
+        self.lod_bg_vertices = []
+        self.lod_bg_mask = None
+        self.lod_bg_pixel_count = 0
+        self.lod_bg_mean = None
+        self.lod_bg_std = None
+        self.lod_threshold = None
+        self.lod_filtered_matrix = None
+        self.lod_apply_preview.set(False)
+        if hasattr(self, "lod_n_label") and self.lod_n_label is not None:
+            self.lod_n_label.config(text="Background pixels: --")
+        if hasattr(self, "lod_mean_label") and self.lod_mean_label is not None:
+            self.lod_mean_label.config(text="Mean background: --")
+        if hasattr(self, "lod_sigma_label") and self.lod_sigma_label is not None:
+            self.lod_sigma_label.config(text="SD Background: --")
+        if hasattr(self, "lod_value_label") and self.lod_value_label is not None:
+            self.lod_value_label.config(text="LOD: --")
+        # Keep lod_stored_roi_* so user can Apply the same JSON across elements with matching shape
+        if hasattr(self, "lod_select_bg_button") and self.lod_select_bg_button is not None:
+            self.lod_select_bg_button.config(text="Start", style="TButton")
+
+    def save_lod_filtered_matrix(self):
+        """Save _flag matrix and sidecar metadata text file."""
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+        if self.lod_threshold is None:
+            custom_dialogs.showwarning(self.root, "No LOD", "Compute LOD first.")
+            return
+        if self.lod_filtered_matrix is None:
+            self.lod_filtered_matrix = self._build_lod_filtered_matrix()
+        src = self.single_file_path or ""
+        base_src, ext_src = os.path.splitext(src) if src else ("", ".xlsx")
+        ext = ext_src.lower() if ext_src.lower() in (".xlsx", ".csv") else ".xlsx"
+        default_name = (os.path.basename(base_src) + "_flag" + ext) if base_src else ("filtered_flag" + ext)
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=ext,
+            initialfile=default_name,
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")],
+        )
+        if not save_path:
+            return
+        try:
+            df = pd.DataFrame(self.lod_filtered_matrix)
+            if save_path.lower().endswith(".csv"):
+                df.to_csv(save_path, header=False, index=False)
+            else:
+                df.to_excel(save_path, header=False, index=False)
+            self._write_lod_metadata_file(save_path)
+            custom_dialogs.showinfo(self.root, "Saved", f"Saved LOD-filtered matrix:\n{save_path}")
+        except Exception as e:
+            custom_dialogs.showerror(self.root, "Error", f"Failed to save LOD-filtered matrix:\n{e}")
+
+    def _write_lod_metadata_file(self, filtered_path):
+        """Write sidecar metadata text file describing LOD calculation."""
+        try:
+            out = np.asarray(self.lod_filtered_matrix, dtype=float)
+            finite_before = np.isfinite(self.single_matrix)
+            finite_after = np.isfinite(out)
+            flagged = int(np.sum(finite_before & ~finite_after))
+            total = int(np.sum(finite_before))
+            pct = (100.0 * flagged / total) if total > 0 else 0.0
+            meta_path = os.path.splitext(filtered_path)[0] + "_lod.txt"
+            lines = [
+                "Muad'Data LOD filter metadata",
+                f"Timestamp: {datetime.now().isoformat(timespec='seconds')}",
+                f"Source file: {self.single_file_path or '(unspecified)'}",
+                f"Filtered file: {filtered_path}",
+                f"Background region pixels (valid): {self.lod_bg_pixel_count}",
+                f"Background mean (mu_bg): {self.lod_bg_mean}",
+                f"Background std (sigma_bg): {self.lod_bg_std}",
+                f"LOD threshold (mu_bg + 3*sigma_bg): {self.lod_threshold}",
+                f"Rule: values < LOD replaced with NaN",
+                f"Flagged finite pixels: {flagged}/{total} ({pct:.2f}%)",
+                "",
+            ]
+            with open(meta_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        except Exception:
+            pass
 
     def _compute_magic_wand_background_and_noise(self, mat):
         """Estimate background and noise scale from matrix values."""
@@ -3401,6 +3907,7 @@ class MuadDataViewer:
             self.single_file_name = os.path.basename(path)
             self.single_file_path = path  # Store full path for polygon persistence
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
+            self._reset_lod_state()
             
             # Load polygons associated with this file
             self.load_polygons_for_file()
@@ -3411,11 +3918,15 @@ class MuadDataViewer:
             self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
             self.single_file_path = None
+            self._reset_lod_state()
 
     def view_single_map(self, update_layout=True):
         if self.single_matrix is None:
             return
-        mat = np.array(self.single_matrix, dtype=float)
+        source_mat = self.single_matrix
+        if self.lod_apply_preview.get() and self.lod_filtered_matrix is not None:
+            source_mat = self.lod_filtered_matrix
+        mat = np.array(source_mat, dtype=float)
         mat[np.isnan(mat)] = 0
         H, W = mat.shape[0], mat.shape[1]
         # Update min/max values from sliders in case they changed
@@ -3518,6 +4029,25 @@ class MuadDataViewer:
                 return (vx * dx, (H - vy) * dx)
             return (vx, vy)
 
+        # White dotted outline of finite-data / scan extent (only while LOD region selection is active)
+        if getattr(self, "lod_show_scan_boundary", False) and getattr(self, "lod_bg_active", False):
+            bbox = self._lod_finite_data_bbox()
+            if bbox is not None:
+                c0, c1, r0, r1 = bbox
+                corners = [(c0, r0), (c1, r0), (c1, r1), (c0, r1), (c0, r0)]
+                pts = [to_axes(v[0], v[1]) for v in corners]
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                self.single_ax.plot(
+                    xs,
+                    ys,
+                    color="white",
+                    linestyle=":",
+                    linewidth=1.4,
+                    dash_capstyle="round",
+                    zorder=5,
+                )
+
         for poly_data in self.polygon_data:
             vertices = poly_data['vertices']
             vert_axes = [to_axes(v[0], v[1]) for v in vertices]
@@ -3599,6 +4129,28 @@ class MuadDataViewer:
                         )
                         self.single_ax.add_patch(hp)
                         self.polygon_patches.append(hp)
+
+        # Draw LOD background ROI overlay — hide when LOD preview is active
+        # so the user sees the filtered result cleanly.
+        lod_preview_on = self.lod_apply_preview.get()
+        if not lod_preview_on and self.lod_bg_vertices and len(self.lod_bg_vertices) >= 2:
+            pts = [to_axes(v[0], v[1]) for v in self.lod_bg_vertices]
+            x_coords = [p[0] for p in pts]
+            y_coords = [p[1] for p in pts]
+            self.single_ax.plot(x_coords, y_coords, color="#ffd54f", linewidth=1.5, linestyle="--")
+            if len(self.lod_bg_vertices) >= 3:
+                self.single_ax.plot(
+                    [pts[-1][0], pts[0][0]],
+                    [pts[-1][1], pts[0][1]],
+                    color="#ffd54f",
+                    linewidth=1.5,
+                    linestyle=":",
+                )
+        elif not lod_preview_on and self.lod_bg_mask is not None and self.lod_bg_vertices and len(self.lod_bg_vertices) >= 3:
+            pts = [to_axes(v[0], v[1]) for v in self.lod_bg_vertices] + [to_axes(self.lod_bg_vertices[0][0], self.lod_bg_vertices[0][1])]
+            x_coords = [p[0] for p in pts]
+            y_coords = [p[1] for p in pts]
+            self.single_ax.plot(x_coords, y_coords, color="#ffd54f", linewidth=1.5, linestyle="--")
         
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
