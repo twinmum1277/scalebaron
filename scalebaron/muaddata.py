@@ -3,6 +3,7 @@
 import tkinter as tk
 from tkinter import filedialog, ttk, colorchooser, simpledialog
 from . import custom_dialogs
+from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -137,35 +138,10 @@ class MathExpressionDialog:
     def cancel(self):
         self.dialog.destroy()
 
-class MuadDataViewer:  
+class MuadDataViewer:
     def parse_matrix_filename(self, filename):
-        """
-        Parse matrix filename to extract sample name, element, and unit type.
-        Supports:
-        1. Old format: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-           Element: 1-2 letters + 1-3 digits (e.g. Mo98, Ca44) OR summed channel TotalXxx (e.g. TotalMo).
-        2. New format (Iolite raw counts): {sample} {element} matrix.xlsx
-        
-        Returns: (sample, element, unit_type) or None if no match
-        unit_type will be 'ppm', 'CPS', or 'raw' (for new format)
-        """
-        basename = os.path.basename(filename)
-        # Element: standard [A-Za-z]{1,2}\d{1,3} or summed Total[A-Za-z]+ (e.g. TotalMo_ppm)
-        elem_pattern = r"[A-Za-z]{1,2}\d{1,3}|Total[A-Za-z]+"
-        
-        # Try old format first: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-        match = re.match(rf"(.+?)[ _]({elem_pattern})_(ppm|CPS) matrix\.xlsx", basename)
-        if match:
-            sample, element, unit_type = match.groups()
-            return (sample, element, unit_type)
-        
-        # Try new format: {sample} {element} matrix.xlsx
-        match = re.match(rf"(.+?) ({elem_pattern}) matrix\.xlsx", basename)
-        if match:
-            sample, element = match.groups()
-            return (sample, element, 'raw')
-        
-        return None
+        """Parse matrix filename → (sample, analyte, unit_type). See matrix_filename.py."""
+        return _parse_matrix_filename(filename)
     
     def parse_geopixe_csv(self, filepath):
         """
@@ -185,6 +161,46 @@ class MuadDataViewer:
         
         Returns: numpy array of the numeric matrix, or None if parsing fails
         """
+        # Strategy 0: Robust stdlib CSV parser for very wide/sparse files.
+        # Some environments struggle with pandas.read_csv on these files.
+        try:
+            import csv
+            rows = []
+            with open(filepath, "r", encoding="utf-8", errors="ignore", newline="") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    rows.append(row)
+            if rows:
+                max_cols = max(len(r) for r in rows)
+                if max_cols > 0:
+                    # Build a dense float matrix with NaN for empty/non-numeric cells.
+                    out = np.full((len(rows), max_cols), np.nan, dtype=float)
+                    for i, row in enumerate(rows):
+                        for j, cell in enumerate(row):
+                            s = str(cell).strip()
+                            if s == "" or s == ".":
+                                continue
+                            try:
+                                out[i, j] = float(s)
+                            except Exception:
+                                pass
+
+                    # If first column is mostly empty/non-numeric, treat as row labels.
+                    first_col_finite = int(np.isfinite(out[:, 0]).sum()) if out.shape[1] > 0 else 0
+                    if out.shape[1] > 1 and first_col_finite < out.shape[0] * 0.3:
+                        out = out[:, 1:]
+
+                    # Trim all-NaN borders.
+                    if out.size > 0:
+                        keep_rows = ~np.all(np.isnan(out), axis=1)
+                        keep_cols = ~np.all(np.isnan(out), axis=0)
+                        out = out[keep_rows][:, keep_cols]
+
+                    if out.size > 0 and out.shape[0] >= 2 and out.shape[1] >= 2:
+                        return out
+        except Exception:
+            pass
+
         # Strategy 1: Read without headers (most common for GEOPIXE matrix format)
         # GEOPIXE often uses '.' as empty cell marker in first column
         try:

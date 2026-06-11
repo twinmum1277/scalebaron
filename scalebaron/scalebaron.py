@@ -16,6 +16,7 @@ from matplotlib import cm
 from openpyxl import load_workbook
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import math
+import csv
 import glob
 import re
 import tempfile
@@ -24,6 +25,7 @@ import webbrowser
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import shutil
 import pandas as pd
+from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
 import base64
 import io
 
@@ -161,33 +163,17 @@ class CompositeApp:
         return PseudoLogNorm(vmin=vmin, vmax=vmax)
     
     def parse_matrix_filename(self, filename):
-        """
-        Parse matrix filename to extract sample name, element, and unit type.
-        Supports:
-        1. Old format: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-           Element: 1-2 letters + 1-3 digits (e.g. Mo98, Ca44) OR summed channel TotalXxx (e.g. TotalMo).
-        2. New format (Iolite raw CPS): {sample} {element} matrix.xlsx
-        
-        Returns: (sample, element, unit_type) or None if no match
-        unit_type will be 'ppm', 'CPS', or 'raw' (for new format)
-        """
-        basename = os.path.basename(filename)
-        # Element: standard [A-Za-z]{1,2}\d{1,3} or summed Total[A-Za-z]+ (e.g. TotalMo_ppm)
-        elem_pattern = r"[A-Za-z]{1,2}\d{1,3}|Total[A-Za-z]+"
-        
-        # Try old format first: {sample}[ _]{element}_{ppm|CPS} matrix.xlsx
-        match = re.match(rf"(.+?)[ _]({elem_pattern})_(ppm|CPS) matrix\.xlsx", basename)
-        if match:
-            sample, element, unit_type = match.groups()
-            return (sample, element, unit_type)
-        
-        # Try new format: {sample} {element} matrix.xlsx
-        match = re.match(rf"(.+?) ({elem_pattern}) matrix\.xlsx", basename)
-        if match:
-            sample, element = match.groups()
-            return (sample, element, 'raw')
-        
-        return None
+        """Parse matrix filename → (sample, analyte, unit_type). See matrix_filename.py."""
+        return _parse_matrix_filename(filename)
+
+    def _iter_matrix_files(self, input_dir, pattern_base="* matrix"):
+        """Yield matrix files from input directory for both XLSX and CSV."""
+        if not input_dir or not os.path.isdir(input_dir):
+            return []
+        files = []
+        for ext in ("xlsx", "csv"):
+            files.extend(glob.glob(os.path.join(input_dir, f"{pattern_base}.{ext}")))
+        return sorted(files)
 
     def __init__(self, master):
         self.master = master
@@ -214,6 +200,7 @@ class CompositeApp:
         self.use_button_icons = tk.BooleanVar(value=False)  # Toggle for icon buttons
         # Optional credit text overlay on exported images (opt-in)
         self.add_credit_to_exports = tk.BooleanVar(value=False)
+        self.export_image_format = tk.StringVar(value="PNG")
         self.credit_text = tk.StringVar(
             value=(
                 "Collected at the Biomedical National Elemental Imaging Resource (BNEIR): "
@@ -672,6 +659,17 @@ class CompositeApp:
         
         # Log Scale
         ttk.Checkbutton(display_frame, text="Log Scale", variable=self.use_log).grid(row=2, column=0, columnspan=2, pady=2)
+
+        # Export image format (composite output)
+        ttk.Label(display_frame, text="Export format:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        self.export_format_dropdown = ttk.Combobox(
+            display_frame,
+            textvariable=self.export_image_format,
+            values=["PNG", "TIFF"],
+            width=8,
+            state="readonly",
+        )
+        self.export_format_dropdown.grid(row=3, column=1, padx=5, pady=2, sticky="w")
         
         # Label font size: same style for each — (None) = off/default, then point sizes
         font_frame = ttk.LabelFrame(control_frame, text="Label font size", padding=10)
@@ -1162,7 +1160,7 @@ class CompositeApp:
         files_found = set()   # (sample, element, unit_type)
 
         # Scan for all matrix files (old format ppm/CPS, new format raw)
-        for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
+        for file in self._iter_matrix_files(self.input_dir):
             parsed = self.parse_matrix_filename(file)
             if parsed:
                 sample, element, unit_type = parsed
@@ -1224,10 +1222,10 @@ class CompositeApp:
         for item in os.listdir(self.output_dir):
             element_dir = os.path.join(self.output_dir, item)
             if os.path.isdir(element_dir):
-                composite_path = os.path.join(element_dir, f"{item}_composite.png")
+                composite_path = self._find_existing_composite(element_dir, item)
                 hist_dir = os.path.join(element_dir, 'Histograms')
                 
-                if os.path.exists(composite_path) or (os.path.isdir(hist_dir) and os.listdir(hist_dir)):
+                if composite_path or (os.path.isdir(hist_dir) and os.listdir(hist_dir)):
                     # Parse element_unit: "Fe_ppm" -> (Fe, ppm)
                     if "_" in item and item.rsplit("_", 1)[1] in ('ppm', 'CPS', 'raw'):
                         elem, ut = item.rsplit("_", 1)
@@ -1273,12 +1271,11 @@ class CompositeApp:
             # New format: output_dir/Fe_ppm/Fe_ppm_composite.png
             elem_out = f"{element}_{unit_type}"
             new_dir = os.path.join(self.output_dir, elem_out)
-            new_composite = os.path.join(new_dir, f"{elem_out}_composite.png")
+            new_composite = self._find_existing_composite(new_dir, elem_out)
             # Legacy format: output_dir/Fe/Fe_composite.png
             legacy_dir = os.path.join(self.output_dir, element)
-            legacy_composite = os.path.join(legacy_dir, f"{element}_composite.png")
-            if (os.path.exists(new_composite) and os.path.getsize(new_composite) > 0) or \
-               (os.path.exists(legacy_composite) and os.path.getsize(legacy_composite) > 0):
+            legacy_composite = self._find_existing_composite(legacy_dir, element)
+            if new_composite or legacy_composite:
                 elem_units_with_composite.add((element, unit_type))
 
         for (sample, element, unit_type), current_status in list(self.progress_data.items()):
@@ -1623,8 +1620,7 @@ class CompositeApp:
         elem_out = f"{element}_{unit_type}"
         element_dir = os.path.join(self.output_dir, elem_out)
         # Check if composite exists (complete)
-        composite_path = os.path.join(element_dir, f"{elem_out}_composite.png")
-        if os.path.exists(composite_path):
+        if self._find_existing_composite(element_dir, elem_out):
             return 'complete'
         
         # Check if histogram exists (partial)
@@ -1771,7 +1767,7 @@ class CompositeApp:
 
     def update_element_dropdown(self):
         elements = set()
-        for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
+        for file in self._iter_matrix_files(self.input_dir):
             parsed = self.parse_matrix_filename(file)
             if parsed:
                 _, element, _ = parsed
@@ -1813,12 +1809,12 @@ class CompositeApp:
         # Fallback: scan files if progress_columns not populated
         if not units and self.input_dir and os.path.isdir(self.input_dir):
             seen = set()
-            for file in glob.glob(os.path.join(self.input_dir, f"* {element}_* matrix.xlsx")):
+            for file in self._iter_matrix_files(self.input_dir, f"* {element}_* matrix"):
                 parsed = self.parse_matrix_filename(file)
                 if parsed:
                     _, _, ut = parsed
                     seen.add(ut)
-            for file in glob.glob(os.path.join(self.input_dir, f"* {element} matrix.xlsx")):
+            for file in self._iter_matrix_files(self.input_dir, f"* {element} matrix"):
                 parsed = self.parse_matrix_filename(file)
                 if parsed:
                     _, _, ut = parsed
@@ -1886,9 +1882,93 @@ class CompositeApp:
         self.status = status
         self.log_print(f"Status: {status}", status_only=True)
 
-    def load_matrix_2d(self, path):
-        """Load a 2D matrix from an Excel file, with error handling for Dropbox sync issues."""
+    def _export_image_extension(self):
+        fmt = self.export_image_format.get().strip().lower()
+        return ".tiff" if fmt in ("tiff", "tif") else ".png"
+
+    def _composite_filename(self, elem_out):
+        return f"{elem_out}_composite{self._export_image_extension()}"
+
+    def _find_existing_composite(self, element_dir, elem_out):
+        """Return path to an existing composite image (PNG or TIFF), or None."""
+        for ext in (".png", ".tiff", ".tif"):
+            path = os.path.join(element_dir, f"{elem_out}_composite{ext}")
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return path
+        return None
+
+    def _save_export_image(self, pil_image, path, dpi=300):
+        """Save a PIL image using the selected export format."""
+        fmt = self.export_image_format.get().strip().lower()
+        if fmt in ("tiff", "tif"):
+            pil_image.save(path, format="TIFF", compression="tiff_lzw", dpi=(dpi, dpi))
+        else:
+            pil_image.save(path, format="PNG", dpi=(dpi, dpi))
+
+    def _load_csv_matrix(self, path):
+        """
+        Load a 2D matrix from CSV. Uses stdlib csv first for wide/sparse GEOPIXE exports
+        where pandas.read_csv can be very slow or fail.
+        """
+        # Strategy 0: stdlib csv reader for wide/sparse files
         try:
+            rows = []
+            with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
+                for row in csv.reader(f):
+                    rows.append(row)
+            if rows:
+                max_cols = max(len(r) for r in rows)
+                if max_cols > 0:
+                    out = np.full((len(rows), max_cols), np.nan, dtype=float)
+                    for i, row in enumerate(rows):
+                        for j, cell in enumerate(row):
+                            s = str(cell).strip()
+                            if s in ("", "."):
+                                continue
+                            try:
+                                v = float(s)
+                                if v >= 0:
+                                    out[i, j] = v
+                            except Exception:
+                                pass
+
+                    first_col_finite = int(np.isfinite(out[:, 0]).sum()) if out.shape[1] > 0 else 0
+                    if out.shape[1] > 1 and first_col_finite < out.shape[0] * 0.3:
+                        out = out[:, 1:]
+
+                    if out.size > 0:
+                        keep_rows = ~np.all(np.isnan(out), axis=1)
+                        keep_cols = ~np.all(np.isnan(out), axis=0)
+                        out = out[keep_rows][:, keep_cols]
+
+                    if out.size > 0 and out.shape[0] >= 2 and out.shape[1] >= 2:
+                        return out
+        except Exception:
+            pass
+
+        # Strategy 1: pandas fallback
+        df = pd.read_csv(path, header=None, encoding="utf-8", errors="ignore")
+        df = df.replace(".", np.nan).replace("", np.nan)
+        if len(df) > 0 and len(df.columns) > 0:
+            first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors="coerce").notna().sum()
+            if first_col_numeric < len(df) * 0.3:
+                data_df = df.iloc[:, 1:]
+            else:
+                data_df = df
+            data_df = data_df.apply(pd.to_numeric, errors="coerce")
+            data_df = data_df.dropna(how="all").dropna(axis=1, how="all")
+            arr = data_df.to_numpy(dtype=float)
+            arr[arr < 0] = np.nan
+            if arr.size > 0 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
+                return arr
+
+        raise ValueError(f"Could not parse numeric matrix from {os.path.basename(path)}")
+
+    def load_matrix_2d(self, path):
+        """Load a 2D matrix from XLSX or CSV, with robust error handling."""
+        try:
+            if str(path).lower().endswith(".csv"):
+                return self._load_csv_matrix(path)
             wb = load_workbook(filename=path, read_only=True, data_only=True)
             ws = wb.active
             return np.array([[cell if isinstance(cell, (int, float)) and cell >= 0 else np.nan for cell in row] for row in ws.iter_rows(values_only=True)])
@@ -1951,7 +2031,7 @@ class CompositeApp:
             return
 
         samples = set()
-        for file in glob.glob(os.path.join(self.input_dir, "* matrix.xlsx")):
+        for file in self._iter_matrix_files(self.input_dir):
             parsed = self.parse_matrix_filename(file)
             if parsed:
                 sample, _, _ = parsed
@@ -1993,32 +2073,28 @@ class CompositeApp:
         # Search for files with old format (ppm/CPS) and new format (raw, no unit)
         # Filter by selected unit so ppm and CPS are never mixed
         if unit == 'ppm':
-            pattern = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
-            files = sorted(glob.glob(pattern))
+            files = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
         elif unit == 'CPS':
-            pattern = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
-            files = sorted(glob.glob(pattern))
+            files = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
         elif unit == 'raw':
-            pattern = os.path.join(self.input_dir, f"* {element} matrix.xlsx")
-            files = [f for f in glob.glob(pattern) if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
+            files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
         else:
             # No unit selected - check if both ppm and CPS exist (would mix units)
-            pattern_ppm = os.path.join(self.input_dir, f"* {element}_ppm matrix.xlsx")
-            pattern_CPS = os.path.join(self.input_dir, f"* {element}_CPS matrix.xlsx")
-            has_ppm = bool(glob.glob(pattern_ppm))
-            has_CPS = bool(glob.glob(pattern_CPS))
+            files_ppm = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
+            files_CPS = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
+            has_ppm = bool(files_ppm)
+            has_CPS = bool(files_CPS)
             if has_ppm and has_CPS:
                 custom_dialogs.showerror(self.master, "Unit Required",
                     f"Element {element} has both ppm and CPS files. Please select a unit from the Unit dropdown.")
                 return
             # Single unit or raw only - use appropriate pattern
             if has_ppm:
-                files = sorted(glob.glob(pattern_ppm))
+                files = files_ppm
             elif has_CPS:
-                files = sorted(glob.glob(pattern_CPS))
+                files = files_CPS
             else:
-                pattern_raw = os.path.join(self.input_dir, f"* {element} matrix.xlsx")
-                files = [f for f in glob.glob(pattern_raw) if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
+                files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
         # Restrict to selected samples (Progress table Include column)
         selected = set(self.get_selected_samples())
         files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected and (not unit or parsed[2] == unit)]
@@ -2593,12 +2669,12 @@ class CompositeApp:
                     self.log_print("Save cancelled by user due to potential misidentification.")
                     return
             
-            out_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_composite.png")
+            out_path = os.path.join(self.output_dir, elem_out, self._composite_filename(elem_out))
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             
             # Save the modified preview image (which includes element labels if added)
             if hasattr(self, 'preview_image'):
-                self.preview_image.save(out_path, dpi=(300, 300))
+                self._save_export_image(self.preview_image, out_path)
             else:
                 # Fallback to moving the original file if preview_image is not available
                 shutil.move(self.preview_file, out_path)
@@ -2983,7 +3059,7 @@ class CompositeApp:
         if draw_element_label:
             element_name = self.element.get()
             units = "ppm"
-            for file in glob.glob(os.path.join(self.input_dir or "", "* matrix.xlsx")):
+            for file in self._iter_matrix_files(self.input_dir or ""):
                 parsed = self.parse_matrix_filename(file)
                 if parsed:
                     _, el, unit_type = parsed
@@ -3044,9 +3120,9 @@ class CompositeApp:
             self.set_status("Idle")
         else:
             elem_out = self.get_element_output_subdir()
-            out_path = os.path.join(self.output_dir, elem_out, f"{elem_out}_composite.png")
+            out_path = os.path.join(self.output_dir, elem_out, self._composite_filename(elem_out))
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            composited.save(out_path)
+            self._save_export_image(composited, out_path)
             
             # Update progress table - mark as complete
             unit_type = self.unit.get() or 'ppm'
@@ -3158,7 +3234,7 @@ class CompositeApp:
             draw = ImageDraw.Draw(labeled_image)
             element_name = self.element.get()
             units = "ppm"
-            for file in glob.glob(os.path.join(self.input_dir or "", "* matrix.xlsx")):
+            for file in self._iter_matrix_files(self.input_dir or ""):
                 parsed = self.parse_matrix_filename(file)
                 if parsed:
                     _, element, unit_type = parsed
