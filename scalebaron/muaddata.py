@@ -21,8 +21,10 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
     # Fallback mode calculation without scipy
+import io
 import os
 import re
+import sys
 import json
 import base64
 import zlib
@@ -493,6 +495,22 @@ class MuadDataViewer:
             self.root.iconphoto(True, self._app_icon)
             self.root._dialog_icon = self._app_icon
             self.root._app_icon_ref = self._app_icon  # Keep ref on root so icon persists (macOS dock)
+            if sys.platform == "darwin":
+                try:
+                    from AppKit import NSApplication, NSImage
+                    nsimg = None
+                    if icon_path and os.path.exists(icon_path):
+                        nsimg = NSImage.alloc().initWithContentsOfFile_(icon_path)
+                    if nsimg is None:
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        from Foundation import NSData
+                        data = NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
+                        nsimg = NSImage.alloc().initWithData_(data)
+                    if nsimg is not None:
+                        NSApplication.sharedApplication().setApplicationIconImage_(nsimg)
+                except Exception:
+                    pass
         except Exception:
             pass
 

@@ -19,6 +19,7 @@ Name your icons with these exact filenames:
 - `save.png` - For "Save Composite" button
 - `batch.png` - For "Process All Elements" button
 - `progress.png` - For "View Progress Table" button
+- `report_issue_button.png` - For "Report Issue" button (bottom of each control panel)
 
 ## Design Tips
 

@@ -178,7 +178,8 @@ class CompositeApp:
     def __init__(self, master):
         self.master = master
         master.title("ScaleBarOn Multi Map Scaler: v0.8.8")
-        self._set_app_icon()
+        # Defer icon setup so it runs after the window is realized (fixes macOS dock icon).
+        self.master.after(100, self._set_app_icon)
 
         self.pixel_size = tk.DoubleVar(value=6)
         self.scale_bar_length_um = tk.DoubleVar(value=500)
@@ -866,18 +867,32 @@ class CompositeApp:
     def _set_app_icon(self):
         """Set the ScaleBarOn logo for the main window and dialogs (replaces default Python logo)."""
         try:
-            candidates = [
-                os.path.join(os.path.dirname(__file__), "icons", "scalebaron_icon.png"),
-                os.path.join(os.path.dirname(__file__), "icons", "ScaleBarOn LOGO.png"),
-            ]
+            icon_names = ("scalebaron_icon.png", "ScaleBarOn LOGO.png")
             icon_path = None
-            for path in candidates:
+            img = None
+            for name in icon_names:
+                path = os.path.join(os.path.dirname(__file__), "icons", name)
                 if os.path.exists(path):
                     icon_path = path
+                    img = Image.open(path)
                     break
-            if not icon_path:
+            if img is None:
+                try:
+                    from importlib.resources import as_file, files
+                    pkg = files("scalebaron")
+                    for name in icon_names:
+                        try:
+                            with as_file(pkg / "icons" / name) as path:
+                                icon_path = str(path)
+                                with open(path, "rb") as f:
+                                    img = Image.open(f).copy()
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            if img is None:
                 return
-            img = Image.open(icon_path)
             if img.size[0] > 64 or img.size[1] > 64:
                 img = img.resize((64, 64), Image.LANCZOS)
             self._app_icon = ImageTk.PhotoImage(img)
@@ -888,7 +903,15 @@ class CompositeApp:
             if sys.platform == "darwin":
                 try:
                     from AppKit import NSApplication, NSImage
-                    nsimg = NSImage.alloc().initWithContentsOfFile_(icon_path)
+                    nsimg = None
+                    if icon_path and os.path.exists(icon_path):
+                        nsimg = NSImage.alloc().initWithContentsOfFile_(icon_path)
+                    if nsimg is None:
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        from Foundation import NSData
+                        data = NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
+                        nsimg = NSImage.alloc().initWithData_(data)
                     if nsimg is not None:
                         NSApplication.sharedApplication().setApplicationIconImage_(nsimg)
                 except Exception:
