@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk, colorchooser, simpledialog
 from . import custom_dialogs
 from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
+from .csv_matrix import is_csv_path, load_csv_matrix
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -146,161 +147,32 @@ class MuadDataViewer:
     def parse_geopixe_csv(self, filepath):
         """
         Parse GEOPIXE CSV file format to extract numeric matrix data.
-        GEOPIXE CSV files may contain:
-        - Header rows with metadata
-        - Column headers
-        - Row labels (first column may start with '.' or contain non-numeric data)
-        - Numeric matrix data
-        
-        This function attempts to automatically detect and extract the numeric matrix.
-        It tries multiple parsing strategies:
-        1. Reads without headers and handles '.' as empty/NaN
-        2. Detects and removes row labels in first column
-        3. Tries reading with headers
-        4. Tries reading with skiprows to handle metadata at the top
-        
-        Returns: numpy array of the numeric matrix, or None if parsing fails
+        Delegates to the shared csv_matrix loader (stdlib csv for sparse/wide files,
+        then pandas fallbacks). Returns None if parsing fails.
         """
-        # Strategy 0: Robust stdlib CSV parser for very wide/sparse files.
-        # Some environments struggle with pandas.read_csv on these files.
-        try:
-            import csv
-            rows = []
-            with open(filepath, "r", encoding="utf-8", errors="ignore", newline="") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    rows.append(row)
-            if rows:
-                max_cols = max(len(r) for r in rows)
-                if max_cols > 0:
-                    # Build a dense float matrix with NaN for empty/non-numeric cells.
-                    out = np.full((len(rows), max_cols), np.nan, dtype=float)
-                    for i, row in enumerate(rows):
-                        for j, cell in enumerate(row):
-                            s = str(cell).strip()
-                            if s == "" or s == ".":
-                                continue
-                            try:
-                                out[i, j] = float(s)
-                            except Exception:
-                                pass
+        return load_csv_matrix(filepath)
 
-                    # If first column is mostly empty/non-numeric, treat as row labels.
-                    first_col_finite = int(np.isfinite(out[:, 0]).sum()) if out.shape[1] > 0 else 0
-                    if out.shape[1] > 1 and first_col_finite < out.shape[0] * 0.3:
-                        out = out[:, 1:]
-
-                    # Trim all-NaN borders.
-                    if out.size > 0:
-                        keep_rows = ~np.all(np.isnan(out), axis=1)
-                        keep_cols = ~np.all(np.isnan(out), axis=0)
-                        out = out[keep_rows][:, keep_cols]
-
-                    if out.size > 0 and out.shape[0] >= 2 and out.shape[1] >= 2:
-                        return out
-        except Exception:
-            pass
-
-        # Strategy 1: Read without headers (most common for GEOPIXE matrix format)
-        # GEOPIXE often uses '.' as empty cell marker in first column
-        try:
-            df = pd.read_csv(filepath, header=None, encoding='utf-8', errors='ignore')
-            
-            # Replace '.' with NaN (GEOPIXE uses '.' as empty cell marker)
-            df = df.replace('.', np.nan)
-            df = df.replace('', np.nan)
-            
-            # Check if first column is mostly non-numeric (likely row labels)
-            if len(df) > 0 and len(df.columns) > 0:
-                first_col_values = df.iloc[:, 0].astype(str)
-                # Count how many values in first column are numeric (after converting '.' to NaN)
-                first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors='coerce').notna().sum()
-                total_rows = len(df)
-                
-                # If first column is mostly non-numeric or all NaN, it's likely row labels
-                if total_rows > 0 and (first_col_numeric < total_rows * 0.3 or df.iloc[:, 0].isna().sum() > total_rows * 0.5):
-                    # First column is labels, extract data starting from column 1
-                    data_df = df.iloc[:, 1:]
-                else:
-                    # Check if first column starts with '.' (GEOPIXE empty marker)
-                    # If so, treat it as row labels
-                    first_val = str(df.iloc[0, 0]) if len(df) > 0 else ''
-                    if first_val == '.' or first_val == 'nan':
-                        data_df = df.iloc[:, 1:]
-                    else:
-                        data_df = df
-                
-                # Convert to numeric, coercing errors to NaN
-                data_df = data_df.apply(pd.to_numeric, errors='coerce')
-                
-                # Drop rows and columns that are all NaN
-                data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
-                
-                # Convert to numpy array
-                matrix = data_df.to_numpy()
-                
-                # Validate that we have a reasonable matrix
-                if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
-                    return matrix
-        except Exception:
-            pass
-        
-        # Strategy 2: Try reading with header detection
-        try:
-            df_with_header = pd.read_csv(filepath, header=0, encoding='utf-8', errors='ignore')
-            df_with_header = df_with_header.replace('.', np.nan)
-            df_with_header = df_with_header.replace('', np.nan)
-            
-            if len(df_with_header) > 0 and len(df_with_header.columns) > 0:
-                first_col_numeric = pd.to_numeric(df_with_header.iloc[:, 0], errors='coerce').notna().sum()
-                total_rows = len(df_with_header)
-                
-                if total_rows > 0 and first_col_numeric < total_rows * 0.5:
-                    data_df = df_with_header.iloc[:, 1:]
-                else:
-                    data_df = df_with_header
-                
-                data_df = data_df.apply(pd.to_numeric, errors='coerce')
-                data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
-                matrix = data_df.to_numpy()
-                
-                if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
-                    return matrix
-        except Exception:
-            pass
-        
-        # Strategy 3: Try reading with skiprows to handle metadata rows at the top
-        for skip_rows in range(1, 6):
-            try:
-                df = pd.read_csv(filepath, header=None, skiprows=skip_rows, encoding='utf-8', errors='ignore')
-                df = df.replace('.', np.nan)
-                df = df.replace('', np.nan)
-                
-                # Check first column
-                if len(df) > 0 and len(df.columns) > 0:
-                    first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors='coerce').notna().sum()
-                    total_rows = len(df)
-                    
-                    if total_rows > 0 and first_col_numeric < total_rows * 0.3:
-                        data_df = df.iloc[:, 1:]
-                    else:
-                        first_val = str(df.iloc[0, 0]) if len(df) > 0 else ''
-                        if first_val == '.' or first_val == 'nan':
-                            data_df = df.iloc[:, 1:]
-                        else:
-                            data_df = df
-                    
-                    data_df = data_df.apply(pd.to_numeric, errors='coerce')
-                    data_df = data_df.dropna(how='all').dropna(axis=1, how='all')
-                    matrix = data_df.to_numpy()
-                    
-                    if matrix.size > 0 and matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
-                        return matrix
-            except Exception:
-                continue
-        
-        # If all strategies fail, return None
-        return None
+    def _load_matrix_file(self, path):
+        """Load a 2D matrix from XLSX or CSV (shared CSV parser for GEOPIXE exports)."""
+        if is_csv_path(path):
+            mat = load_csv_matrix(path)
+            if mat is None:
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        first_lines = [f.readline().strip() for _ in range(5)]
+                    preview = "\n".join(line[:100] for line in first_lines if line)
+                    raise ValueError(
+                        f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\n"
+                        "Please check the file format or share the file structure for assistance."
+                    )
+                except ValueError:
+                    raise
+                except Exception:
+                    raise ValueError("Failed to parse CSV file. Please check the file format.")
+            return mat
+        df = pd.read_excel(path, header=None)
+        df = df.apply(pd.to_numeric, errors="coerce").dropna(how="all").dropna(axis=1, how="all")
+        return df.to_numpy()
     
     def __init__(self, root):
         self.root = root
@@ -315,6 +187,7 @@ class MuadDataViewer:
         self.single_max = tk.DoubleVar()
         self.show_colorbar = tk.IntVar()
         self.show_scalebar = tk.IntVar()
+        self.export_image_format = tk.StringVar(value="PNG")
         self.pixel_size = tk.DoubleVar(value=1.0)
         self.scale_length = tk.DoubleVar(value=50)
         self.single_file_label = None  # For displaying loaded file info
@@ -538,7 +411,6 @@ class MuadDataViewer:
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
-                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_small-8a92b83b-b9a5-4c31-acf1-933cfc9214e0.png",
             ]
             img = None
             for logo_path in candidates:
@@ -642,8 +514,6 @@ class MuadDataViewer:
             ('report_issue', 'report_issue_button.png'),
         ]:
             path = os.path.join(icons_dir, filename)
-            if key == 'report_issue' and not os.path.exists(path):
-                path = "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/report_issue_button-283d0213-146c-44aa-b729-15ec7da9854c.png"
             if not os.path.exists(path):
                 continue
             try:
@@ -918,23 +788,7 @@ class MuadDataViewer:
         if not path:
             return
         try:
-            if path.endswith('.csv'):
-                # Use GEOPIXE parser for CSV files
-                mat = self.parse_geopixe_csv(path)
-                if mat is None:
-                    # Try to get more info about the file for better error message
-                    try:
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                            first_lines = [f.readline().strip() for _ in range(5)]
-                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
-                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
-                    except:
-                        raise ValueError("Failed to parse CSV file. Please check the file format.")
-            else:
-                # Excel files use the original method
-                df = pd.read_excel(path, header=None)
-                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-                mat = df.to_numpy()
+            mat = self._load_matrix_file(path)
             self.zstack_slices.append(mat)
             self.zstack_offsets.append((0, 0))
             self.zstack_file_labels.append(os.path.basename(path))
@@ -1187,6 +1041,16 @@ class MuadDataViewer:
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
         ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar).pack(anchor='w')
         ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar).pack(anchor='w')
+        export_fmt_row = ttk.Frame(load_group)
+        export_fmt_row.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(export_fmt_row, text="Export format:").pack(side=tk.LEFT)
+        ttk.Combobox(
+            export_fmt_row,
+            textvariable=self.export_image_format,
+            values=["PNG", "TIFF"],
+            width=8,
+            state="readonly",
+        ).pack(side=tk.LEFT, padx=(5, 0))
 
         # View Map / Save PNG as icon buttons (ScaleBarOn style)
         elem_action_frame = ttk.Frame(load_group)
@@ -3646,6 +3510,16 @@ class MuadDataViewer:
 
         overlay_group = ttk.LabelFrame(control_frame, text="Overlay", padding=10)
         overlay_group.pack(fill=tk.X, pady=(0, 5))
+        rgb_export_fmt_row = ttk.Frame(overlay_group)
+        rgb_export_fmt_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(rgb_export_fmt_row, text="Export format:").pack(side=tk.LEFT)
+        ttk.Combobox(
+            rgb_export_fmt_row,
+            textvariable=self.export_image_format,
+            values=["PNG", "TIFF"],
+            width=8,
+            state="readonly",
+        ).pack(side=tk.LEFT, padx=(5, 0))
         rgb_action_frame = ttk.Frame(overlay_group)
         rgb_action_frame.pack(fill=tk.X)
         viewmap_icon = getattr(self, 'rgb_button_icons', {}).get('viewmap')
@@ -3888,23 +3762,7 @@ class MuadDataViewer:
         if not path:
             return
         try:
-            if path.endswith('.csv'):
-                # Use GEOPIXE parser for CSV files
-                mat = self.parse_geopixe_csv(path)
-                if mat is None:
-                    # Try to get more info about the file for better error message
-                    try:
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                            first_lines = [f.readline().strip() for _ in range(5)]
-                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
-                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
-                    except:
-                        raise ValueError("Failed to parse CSV file. Please check the file format.")
-            else:
-                # Excel files use the original method
-                df = pd.read_excel(path, header=None)
-                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-                mat = df.to_numpy()
+            mat = self._load_matrix_file(path)
             self.single_matrix = mat
             # Update min/max values and sliders
             min_val = np.nanmin(mat)
@@ -4179,35 +4037,46 @@ class MuadDataViewer:
             if len(self.polygon_vertices) >= 3:
                 self.single_ax.plot([pts[-1][0], pts[0][0]], [pts[-1][1], pts[0][1]], 'w--', linewidth=2, alpha=0.5, linestyle='dashed')
 
+    def _image_export_extension(self):
+        fmt = self.export_image_format.get().strip().lower()
+        return ".tiff" if fmt in ("tiff", "tif") else ".png"
+
+    def _image_save_filetypes(self):
+        return [("PNG", "*.png"), ("TIFF", "*.tiff"), ("TIFF", "*.tif")]
+
+    def _save_figure_export(self, fig, path, **kwargs):
+        """Save a matplotlib figure as PNG or TIFF (LZW), honoring path extension or export format."""
+        dpi = kwargs.pop("dpi", 300)
+        ext = os.path.splitext(path)[1].lower()
+        use_tiff = ext in (".tiff", ".tif")
+        if not ext:
+            path = path + self._image_export_extension()
+            use_tiff = path.lower().endswith((".tiff", ".tif"))
+        if use_tiff:
+            try:
+                fig.savefig(path, format="tiff", dpi=dpi, pil_kwargs={"compression": "tiff_lzw"}, **kwargs)
+            except TypeError:
+                fig.savefig(path, format="tiff", dpi=dpi, **kwargs)
+        else:
+            fig.savefig(path, format="png", dpi=dpi, **kwargs)
+        return path
+
     def save_single_image(self):
         if self.single_matrix is None:
             return
-        out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=self._image_export_extension(),
+            filetypes=self._image_save_filetypes(),
+        )
         if out_path:
-            self.single_figure.savefig(out_path, dpi=300, bbox_inches='tight')
+            self._save_figure_export(self.single_figure, out_path, bbox_inches="tight")
 
     def load_rgb_file(self, channel):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
         if not path:
             return
         try:
-            if path.endswith('.csv'):
-                # Use GEOPIXE parser for CSV files
-                mat = self.parse_geopixe_csv(path)
-                if mat is None:
-                    # Try to get more info about the file for better error message
-                    try:
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                            first_lines = [f.readline().strip() for _ in range(5)]
-                        preview = '\n'.join([line[:100] for line in first_lines if line])  # Limit line length
-                        raise ValueError(f"Failed to parse CSV file.\n\nFirst few lines:\n{preview}\n\nPlease check the file format or share the file structure for assistance.")
-                    except:
-                        raise ValueError("Failed to parse CSV file. Please check the file format.")
-            else:
-                # Excel files use the original method
-                df = pd.read_excel(path, header=None)
-                df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
-                mat = df.to_numpy()
+            mat = self._load_matrix_file(path)
             self.rgb_data[channel] = mat
             file_name = os.path.basename(path)
             
@@ -4673,7 +4542,10 @@ class MuadDataViewer:
             custom_dialogs.showerror(self.root, "Error", f"Error accessing RGB image: {str(e)}")
             return
         
-        out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=self._image_export_extension(),
+            filetypes=self._image_save_filetypes(),
+        )
         if not out_path:
             return
         
@@ -4840,7 +4712,7 @@ class MuadDataViewer:
                     ax_cbar.set_ylim(0, 1.2)
                 
                 fig.tight_layout()
-                fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black')
+                out_path = self._save_figure_export(fig, out_path, bbox_inches="tight", facecolor="black")
                 plt.close(fig)
             else:
                 # Save without colorbar - image then scale bar underneath
@@ -4878,7 +4750,9 @@ class MuadDataViewer:
                     scale_bar_ax.text(0.5, y_label_axes, f"{scale_bar_um} µm", transform=scale_bar_ax.transAxes,
                                      color='white', fontsize=9, ha='center', va='top', fontfamily='Arial')
                 fig.patch.set_facecolor('black')
-                fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black', pad_inches=0)
+                out_path = self._save_figure_export(
+                    fig, out_path, bbox_inches="tight", facecolor="black", pad_inches=0
+                )
                 plt.close(fig)
             
             custom_dialogs.showinfo(self.root, "Success", f"RGB image saved successfully to:\n{out_path}")
@@ -4937,10 +4811,19 @@ class MuadDataViewer:
         valid_mask = ~(np.isnan(flat1) | np.isnan(flat2) | (flat1 == 0) | (flat2 == 0))
         
         if np.sum(valid_mask) > 2:  # Need at least 2 points for correlation
-            from scipy.stats import pearsonr
-            r_value, p_value = pearsonr(flat1[valid_mask], flat2[valid_mask])
+            x = flat1[valid_mask]
+            y = flat2[valid_mask]
+            p_value = None
+            try:
+                from scipy.stats import pearsonr
+                r_value, p_value = pearsonr(x, y)
+            except ImportError:
+                r_value = float(np.corrcoef(x, y)[0, 1])
             self.correlation_coefficient = r_value
-            self.correlation_label.config(text=f"Pearson r: {r_value:.4f} (p={p_value:.2e})")
+            if p_value is not None:
+                self.correlation_label.config(text=f"Pearson r: {r_value:.4f} (p={p_value:.2e})")
+            else:
+                self.correlation_label.config(text=f"Pearson r: {r_value:.4f}")
         else:
             self.correlation_coefficient = None
             self.correlation_label.config(text="Pearson r: insufficient data")
@@ -5002,7 +4885,7 @@ class MuadDataViewer:
         button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
         
         ttk.Button(button_frame, text="Save Ratio Matrix", command=self.save_ratio_matrix).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save as PNG", command=lambda: self.save_ratio_image(fig)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save image", command=lambda: self.save_ratio_image(fig)).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Close", command=ratio_window.destroy).pack(side=tk.RIGHT, padx=5)
         
         # Store references
@@ -5057,10 +4940,13 @@ class MuadDataViewer:
                 custom_dialogs.showerror(self.root, "Save Error", f"Failed to save ratio matrix:\n{str(e)}")
     
     def save_ratio_image(self, figure):
-        """Save the ratio map figure as a PNG."""
-        out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
+        """Save the ratio map figure using the selected export format (PNG or TIFF)."""
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=self._image_export_extension(),
+            filetypes=self._image_save_filetypes(),
+        )
         if out_path:
-            figure.savefig(out_path, dpi=300, bbox_inches='tight')
+            out_path = self._save_figure_export(figure, out_path, bbox_inches="tight")
             custom_dialogs.showinfo(self.root, "Saved", f"Ratio map image saved to:\n{os.path.basename(out_path)}")
     
     # --- End Correlation & Ratio Analysis Functions ---

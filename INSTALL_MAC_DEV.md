@@ -50,13 +50,16 @@ From the project root (the `scalebaron` folder that contains `requirements.txt` 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements-optional.txt
 ```
 
-This installs:
+**Core** (`requirements.txt`): numpy, pandas, matplotlib, openpyxl, Pillow, requests
 
-- numpy, pandas, matplotlib, openpyxl, Pillow (PIL), cairosvg, scipy, requests  
+**Optional** (`requirements-optional.txt`): scipy, scikit-image, cairosvg — not required for main workflows; see README.
 
-If any package fails (e.g. `cairosvg` on some setups), see [Troubleshooting](#troubleshooting) below.
+If optional packages fail (e.g. `cairosvg` on some setups), you can skip them and use the apps without SVG icons / beta specimen-mask extras. See [Troubleshooting](#troubleshooting) below.
+
+Alternatively: `pip install -e ".[optional]"` after editable install installs optional deps in one step.
 
 ---
 
@@ -112,6 +115,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements-optional.txt
 pip install -e .
 scalebaron
 ```
@@ -131,7 +135,7 @@ scalebaron
   - Don’t use `sudo` for pip installs into a virtual environment; run `pip install` with the venv activated. If you get permission errors outside the venv, use a venv (steps above) or install Python via Homebrew under your user.
 
 - **`cairosvg` fails to install or import**  
-  - You may need `cairo` and `pkg-config` first: `brew install cairo pkg-config`, then `pip install -r requirements.txt` again.  
+  - You may need `cairo` and `pkg-config` first: `brew install cairo pkg-config`, then `pip install -r requirements-optional.txt` again.  
   - ScaleBarOn may still run if it doesn’t use SVG in your workflow; if a specific feature fails, we can document a minimal install without `cairosvg`.
 
 - **Changes to the code don’t appear**  
@@ -152,7 +156,7 @@ scalebaron
 | Clone repo        | `git clone <repo-url>` then `cd scalebaron` |
 | Create venv       | `python3 -m venv venv`                      |
 | Activate venv     | `source venv/bin/activate`                  |
-| Install deps      | `pip install -r requirements.txt`           |
+| Install deps      | `pip install -r requirements.txt` then optional: `-r requirements-optional.txt` |
 | Install dev pkg   | `pip install -e .`                          |
 | Run ScaleBarOn    | `scalebaron`                                |
 | Run Muad'Data     | `muaddata`                                  |

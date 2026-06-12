@@ -16,7 +16,6 @@ from matplotlib import cm
 from openpyxl import load_workbook
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import math
-import csv
 import glob
 import re
 import tempfile
@@ -26,6 +25,7 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import shutil
 import pandas as pd
 from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
+from .csv_matrix import load_csv_matrix_or_raise
 import base64
 import io
 
@@ -782,8 +782,7 @@ class CompositeApp:
             candidates = [
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo.png"),
                 os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_1.png"),
-                # Fallback to user workspace asset path (development)
-                "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/BNEIR_logo_1-ab04aad1-b6cf-48ac-a035-2a5fcce0d8c8.png",
+                os.path.join(os.path.dirname(__file__), "icons", "BNEIR_logo_small.png"),
             ]
             logo_path = None
             for path in candidates:
@@ -962,9 +961,6 @@ class CompositeApp:
                 alt_path = os.path.join(icons_dir, 'label.png')
                 if os.path.exists(alt_path):
                     icon_path = alt_path
-            if key == 'report_issue' and not os.path.exists(icon_path):
-                icon_path = "/Users/d19766d/.cursor/projects/Users-d19766d-Documents-GitHub-scalebaron/assets/report_issue_button-283d0213-146c-44aa-b729-15ec7da9854c.png"
-            
             if os.path.exists(icon_path):
                 photo_image = load_icon_from_data(icon_path, filename)
                 if photo_image:
@@ -1906,63 +1902,8 @@ class CompositeApp:
             pil_image.save(path, format="PNG", dpi=(dpi, dpi))
 
     def _load_csv_matrix(self, path):
-        """
-        Load a 2D matrix from CSV. Uses stdlib csv first for wide/sparse GEOPIXE exports
-        where pandas.read_csv can be very slow or fail.
-        """
-        # Strategy 0: stdlib csv reader for wide/sparse files
-        try:
-            rows = []
-            with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
-                for row in csv.reader(f):
-                    rows.append(row)
-            if rows:
-                max_cols = max(len(r) for r in rows)
-                if max_cols > 0:
-                    out = np.full((len(rows), max_cols), np.nan, dtype=float)
-                    for i, row in enumerate(rows):
-                        for j, cell in enumerate(row):
-                            s = str(cell).strip()
-                            if s in ("", "."):
-                                continue
-                            try:
-                                v = float(s)
-                                if v >= 0:
-                                    out[i, j] = v
-                            except Exception:
-                                pass
-
-                    first_col_finite = int(np.isfinite(out[:, 0]).sum()) if out.shape[1] > 0 else 0
-                    if out.shape[1] > 1 and first_col_finite < out.shape[0] * 0.3:
-                        out = out[:, 1:]
-
-                    if out.size > 0:
-                        keep_rows = ~np.all(np.isnan(out), axis=1)
-                        keep_cols = ~np.all(np.isnan(out), axis=0)
-                        out = out[keep_rows][:, keep_cols]
-
-                    if out.size > 0 and out.shape[0] >= 2 and out.shape[1] >= 2:
-                        return out
-        except Exception:
-            pass
-
-        # Strategy 1: pandas fallback
-        df = pd.read_csv(path, header=None, encoding="utf-8", errors="ignore")
-        df = df.replace(".", np.nan).replace("", np.nan)
-        if len(df) > 0 and len(df.columns) > 0:
-            first_col_numeric = pd.to_numeric(df.iloc[:, 0], errors="coerce").notna().sum()
-            if first_col_numeric < len(df) * 0.3:
-                data_df = df.iloc[:, 1:]
-            else:
-                data_df = df
-            data_df = data_df.apply(pd.to_numeric, errors="coerce")
-            data_df = data_df.dropna(how="all").dropna(axis=1, how="all")
-            arr = data_df.to_numpy(dtype=float)
-            arr[arr < 0] = np.nan
-            if arr.size > 0 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
-                return arr
-
-        raise ValueError(f"Could not parse numeric matrix from {os.path.basename(path)}")
+        """Load a 2D matrix from CSV (shared loader; see csv_matrix.py)."""
+        return load_csv_matrix_or_raise(path)
 
     def load_matrix_2d(self, path):
         """Load a 2D matrix from XLSX or CSV, with robust error handling."""

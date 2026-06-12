@@ -50,11 +50,14 @@ From the project root (the `scalebaron` folder that contains `requirements.txt` 
 ```cmd
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements-optional.txt
 ```
 
-This installs:
+**Core** (`requirements.txt`): numpy, pandas, matplotlib, openpyxl, Pillow, requests
 
-- numpy, pandas, matplotlib, openpyxl, Pillow (PIL), cairosvg, scipy, requests  
+**Optional** (`requirements-optional.txt`): scipy, scikit-image, cairosvg — not required for main workflows; see README.
+
+Alternatively: `pip install -e ".[optional]"` after editable install.
 
 If any package fails (e.g. `cairosvg` on some Windows setups), see [Troubleshooting](#troubleshooting) below.
 
@@ -112,6 +115,7 @@ python -m venv venv
 venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements-optional.txt
 pip install -e .
 scalebaron
 ```
@@ -145,7 +149,7 @@ scalebaron
 | Clone repo        | `git clone <repo-url>` then `cd scalebaron` |
 | Create venv       | `python -m venv venv`                     |
 | Activate venv     | `venv\Scripts\activate`                   |
-| Install deps      | `pip install -r requirements.txt`         |
+| Install deps      | `pip install -r requirements.txt` then optional: `-r requirements-optional.txt` |
 | Install dev pkg   | `pip install -e .`                        |
 | Run ScaleBarOn    | `scalebaron`                              |
 
