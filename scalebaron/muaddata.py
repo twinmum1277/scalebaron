@@ -5,6 +5,7 @@ from tkinter import filedialog, ttk, colorchooser, simpledialog
 from . import custom_dialogs
 from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
 from .csv_matrix import is_csv_path, load_csv_matrix
+from . import hdf5_session
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -12,6 +13,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.colors import Normalize
 from matplotlib.widgets import RectangleSelector
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Polygon
@@ -145,7 +147,57 @@ class MuadDataViewer:
     def parse_matrix_filename(self, filename):
         """Parse matrix filename → (sample, analyte, unit_type). See matrix_filename.py."""
         return _parse_matrix_filename(filename)
+
+    def _colorbar_label(self):
+        """Colorbar label for the Element Viewer, derived from the loaded map's units."""
+        unit = getattr(self, "single_units", None)
+        return {"ppm": "ppm", "CPS": "CPS", "raw": "counts"}.get(unit, "")
+
+    def _elem_sort_key(self, elem):
+        m = re.search(r"(\D+)(\d+)$", elem)
+        if m:
+            return (m.group(1), int(m.group(2)))
+        return (elem, 0)
+
+    def _natural_sort_key(self, s):
+        try:
+            parts = re.split(r"(\d+)", str(s))
+        except Exception:
+            return (str(s),)
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append(int(p))
+            else:
+                key.append(p.lower())
+        return tuple(key)
+
+    def _safe_path_token(self, value):
+        return re.sub(r"[^\w.\-+]+", "_", str(value)).strip("_") or "item"
     
+    def _populate_hdf5_pixel_sizes_xy(self, meta):
+        """Build sample -> (um_x, um_y) from HDF5 session metadata."""
+        sizes = {}
+        for geom in meta.samples:
+            px = geom.pixel_size_x_um
+            py = geom.pixel_size_y_um
+            if px is not None and py is not None and px > 0 and py > 0:
+                sizes[geom.name] = (float(px), float(py))
+        return sizes
+
+    def _apply_hdf5_pixel_size(self, pixel_sizes_xy, sample, pixel_size_var):
+        """Set a pixel-size Tk variable from HDF5 geometry for the given sample."""
+        if not sample or not pixel_sizes_xy:
+            return False
+        sizes = pixel_sizes_xy.get(sample.strip())
+        if not sizes:
+            return False
+        px = float(sizes[0])
+        if px > 0:
+            pixel_size_var.set(round(px, 4))
+            return True
+        return False
+
     def parse_geopixe_csv(self, filepath):
         """
         Parse GEOPIXE CSV file format to extract numeric matrix data.
@@ -195,7 +247,17 @@ class MuadDataViewer:
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
         self.single_file_path = None   # Store full path to loaded file (for polygon persistence)
+        self.single_units = None       # Units of loaded map ('ppm', 'CPS', 'raw', or None)
         self._single_colorbar = None   # Store the colorbar object for removal
+
+        # HDF5 session state (Element Viewer)
+        self.hdf5_session_path = None
+        self.hdf5_session_meta = None
+        self.hdf5_pixel_sizes_xy = {}
+        self.hdf5_sample = tk.StringVar()
+        self.hdf5_unit = tk.StringVar(value="ppm")
+        self.hdf5_element = tk.StringVar()
+        self.hdf5_loaded_key = None
 
         # Add a variable for the user-settable max slider value
         self.max_slider_limit = tk.DoubleVar()
@@ -286,6 +348,13 @@ class MuadDataViewer:
         self.rgb_gradient_canvases = {}
         self.file_root_label = None
         self.normalize_var = tk.IntVar()
+
+        # RGB HDF5 session state (independent of Element Viewer)
+        self.rgb_hdf5_session_path = None
+        self.rgb_hdf5_session_meta = None
+        self.rgb_hdf5_pixel_sizes_xy = {}
+        self.rgb_hdf5_sample = tk.StringVar()
+        self.rgb_hdf5_unit = tk.StringVar(value="ppm")
 
         # Spatial scale bar for RGB overlay
         self.rgb_pixel_size = tk.DoubleVar(value=1.0)
@@ -1018,7 +1087,41 @@ class MuadDataViewer:
 
         # --- Load & display ---
         load_group = self._create_collapsible_group(control_frame, "Load and Display", expanded=True)
-        ttk.Button(load_group, text="Load Matrix", command=self.load_single_file, width=12).pack(pady=(0, 4))
+        _load_cmd_width = 12
+        ttk.Button(load_group, text="Load Matrix", command=self.load_single_file, width=_load_cmd_width).pack(pady=(0, 4))
+        ttk.Button(load_group, text="Import HDF5", command=self.import_hdf5_session, width=_load_cmd_width).pack(pady=(0, 2))
+        self.hdf5_session_label = ttk.Label(load_group, text="HDF5: None", style="Status.TLabel")
+        self.hdf5_session_label.pack(anchor='center', pady=(0, 4))
+        self.hdf5_selectors_frame = ttk.Frame(load_group)
+        self.hdf5_selectors_frame.pack(fill=tk.X, pady=(0, 4))
+        hdf5_center = ttk.Frame(self.hdf5_selectors_frame)
+        hdf5_center.pack(anchor=tk.CENTER)
+        ttk.Label(hdf5_center, text="Sample").pack(anchor=tk.CENTER)
+        self.hdf5_sample_combo = ttk.Combobox(
+            hdf5_center,
+            textvariable=self.hdf5_sample,
+            state="disabled",
+            width=_load_cmd_width,
+        )
+        self.hdf5_sample_combo.pack(pady=(0, 4))
+        self.hdf5_sample_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_hdf5_sample_changed())
+        ttk.Label(hdf5_center, text="Units").pack(anchor=tk.CENTER)
+        self.hdf5_unit_combo = ttk.Combobox(
+            hdf5_center,
+            textvariable=self.hdf5_unit,
+            state="disabled",
+            width=_load_cmd_width,
+        )
+        self.hdf5_unit_combo.pack(pady=(0, 4))
+        self.hdf5_unit_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_hdf5_unit_changed())
+        ttk.Label(hdf5_center, text="Element").pack(anchor=tk.CENTER)
+        self.hdf5_element_combo = ttk.Combobox(
+            hdf5_center,
+            textvariable=self.hdf5_element,
+            state="disabled",
+            width=_load_cmd_width,
+        )
+        self.hdf5_element_combo.pack(pady=(0, 4))
         ttk.Label(load_group, text="Colormap").pack(anchor='w')
         cmap_menu = ttk.Combobox(load_group, textvariable=self.single_colormap, values=plt.colormaps(), font=("TkDefaultFont", 12), width=12)
         cmap_menu.pack(fill=tk.X, pady=(0, 4))
@@ -1057,8 +1160,8 @@ class MuadDataViewer:
         self.max_slider_limit_entry.pack(side=tk.LEFT)
         self.max_slider_limit_entry.bind("<Return>", lambda e: self.set_max_slider_limit())
         self.max_slider_limit_entry.bind("<FocusOut>", lambda e: self.set_max_slider_limit())
-        ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar).pack(anchor='w')
-        ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar).pack(anchor='w')
+        ttk.Checkbutton(load_group, text="Show Color Bar", variable=self.show_colorbar, command=self.view_single_map).pack(anchor='w')
+        ttk.Checkbutton(load_group, text="Show Scale Bar", variable=self.show_scalebar, command=self.view_single_map).pack(anchor='w')
         export_fmt_row = ttk.Frame(load_group)
         export_fmt_row.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(export_fmt_row, text="Export format:").pack(side=tk.LEFT)
@@ -1070,39 +1173,54 @@ class MuadDataViewer:
             state="readonly",
         ).pack(side=tk.LEFT, padx=(5, 0))
 
-        # View Map / Save PNG as icon buttons (ScaleBarOn style)
-        elem_action_frame = ttk.Frame(load_group)
+        # --- Commands ---
+        commands_group = self._create_collapsible_group(control_frame, "Commands", expanded=True)
+        elem_action_frame = ttk.Frame(commands_group)
         elem_action_frame.pack(fill=tk.X, pady=(4, 2))
         viewmap_icon = self.button_icons.get('viewmap')
         view_cell = ttk.Frame(elem_action_frame)
-        view_cell.pack(side=tk.LEFT, padx=(0, 8))
+        view_cell.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(view_cell, text="View Map", style="Hint.TLabel").pack(pady=(0, 2))
         if viewmap_icon:
-            view_btn = tk.Button(view_cell, image=viewmap_icon, command=self.view_single_map, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            view_btn = tk.Button(
+                view_cell,
+                image=viewmap_icon,
+                command=self.view_single_map,
+                padx=4,
+                pady=12,
+                bg='#f0f0f0',
+                relief='raised',
+                activebackground='#4CAF50',
+            )
             view_btn.image = viewmap_icon
             view_btn.pack(anchor=tk.CENTER)
         else:
-            ttk.Button(view_cell, text="View", command=self.view_single_map, width=6).pack(anchor=tk.CENTER)
+            ttk.Button(
+                view_cell,
+                text="View",
+                command=self.view_single_map,
+                width=8,
+            ).pack(anchor=tk.CENTER)
         save_icon = self.button_icons.get('save')
         save_cell = ttk.Frame(elem_action_frame)
-        save_cell.pack(side=tk.LEFT, padx=(0, 8))
+        save_cell.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(save_cell, text="Save PNG", style="Hint.TLabel").pack(pady=(0, 2))
         if save_icon:
-            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_single_image, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            save_btn = tk.Button(save_cell, image=save_icon, command=self.save_single_image, padx=4, pady=12, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
             save_btn.image = save_icon
             save_btn.pack(anchor=tk.CENTER)
         else:
-            ttk.Button(save_cell, text="Save", command=self.save_single_image, width=6).pack(anchor=tk.CENTER)
+            ttk.Button(save_cell, text="Save", command=self.save_single_image, width=8).pack(anchor=tk.CENTER)
         map_math_icon = self.button_icons.get('map_math')
         map_math_cell = ttk.Frame(elem_action_frame)
-        map_math_cell.pack(side=tk.LEFT, padx=(0, 8))
+        map_math_cell.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(map_math_cell, text="Map Math", style="Hint.TLabel").pack(pady=(0, 2))
         if map_math_icon:
-            math_btn = tk.Button(map_math_cell, image=map_math_icon, command=self.open_map_math, padx=2, pady=8, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
+            math_btn = tk.Button(map_math_cell, image=map_math_icon, command=self.open_map_math, padx=4, pady=12, bg='#f0f0f0', relief='raised', activebackground='#4CAF50')
             math_btn.image = map_math_icon
             math_btn.pack(anchor=tk.CENTER)
         else:
-            ttk.Button(map_math_cell, text="Map Math", command=self.open_map_math, style="Green.TButton", width=8).pack(anchor=tk.CENTER)
+            ttk.Button(map_math_cell, text="Map Math", command=self.open_map_math, style="Green.TButton", width=10).pack(anchor=tk.CENTER)
 
         # --- Detection limit (LOD): background 3σ filtering ---
         lod_group = self._create_collapsible_group(control_frame, "Detection Limit Filter", expanded=True)
@@ -1570,7 +1688,7 @@ class MuadDataViewer:
                 "Click to place vertices for a specimen-free background region.\nDouble-click (or click the first vertex) to complete.",
             )
             self.lod_show_scan_boundary = True
-            self.view_single_map()
+            self.view_single_map(update_layout=False)
         else:
             self.deactivate_lod_background_mode()
 
@@ -1608,7 +1726,7 @@ class MuadDataViewer:
                 self.complete_lod_background_polygon()
                 return
         self.lod_bg_vertices.append((x, y))
-        self.view_single_map()
+        self.view_single_map(update_layout=False)
 
     def complete_lod_background_polygon(self):
         """Finalize LOD background ROI and build background mask."""
@@ -1648,6 +1766,19 @@ class MuadDataViewer:
         ridx = np.where(rows)[0]
         cidx = np.where(cols)[0]
         return (int(cidx[0]), int(cidx[-1]), int(ridx[0]), int(ridx[-1]))
+
+    def _lod_overlay_colors(self):
+        """High-contrast marker/line colors for the LOD background ROI overlay."""
+        try:
+            import matplotlib
+            cmap = matplotlib.colormaps.get_cmap(self.single_colormap.get())
+            bg = cmap(0.0)
+            brightness = float(np.mean(bg[:3]))
+        except Exception:
+            brightness = 0.5
+        if brightness < 0.5:
+            return "white", "black"
+        return "black", "white"
 
     def save_lod_background_roi_file(self):
         """Save background polygon vertices to JSON for reuse on other element maps (same dimensions)."""
@@ -3240,7 +3371,17 @@ class MuadDataViewer:
             custom_dialogs.showinfo(self.root, "Cleared", "All polygon regions have been cleared.")
 
     def get_polygon_file_path(self):
-        """Get the path to the polygon JSON file for the current matrix file."""
+        """Get the path to the polygon JSON file for the current matrix or HDF5 map."""
+        if self.hdf5_session_path and self.hdf5_sample.get() and self.hdf5_element.get():
+            session_dir = os.path.dirname(self.hdf5_session_path)
+            session_base = os.path.splitext(os.path.basename(self.hdf5_session_path))[0]
+            sample = self._safe_path_token(self.hdf5_sample.get())
+            element = self._safe_path_token(self.hdf5_element.get())
+            unit = self._safe_path_token(self.hdf5_unit.get())
+            return os.path.join(
+                session_dir,
+                f"{session_base}__{sample}__{element}_{unit}_polygons.json",
+            )
         if not self.single_file_path:
             return None
         # Create polygon file path: same directory, same name, with _polygons.json extension
@@ -3249,7 +3390,7 @@ class MuadDataViewer:
     
     def save_polygons_for_file(self):
         """Auto-save polygons to JSON file associated with current matrix file."""
-        if not self.single_file_path:
+        if not self.single_file_path and not self.hdf5_session_path:
             return
         
         polygon_file = self.get_polygon_file_path()
@@ -3292,7 +3433,9 @@ class MuadDataViewer:
     
     def load_polygons_for_file(self):
         """Auto-load polygons from JSON file associated with current matrix file."""
-        if not self.single_file_path or self.single_matrix is None:
+        if self.single_matrix is None:
+            return
+        if not self.single_file_path and not self.hdf5_session_path:
             return
         
         polygon_file = self.get_polygon_file_path()
@@ -3396,8 +3539,37 @@ class MuadDataViewer:
 
         dataset_group = ttk.LabelFrame(control_frame, text="Dataset", padding=10)
         dataset_group.pack(fill=tk.X, pady=(0, 5))
+        _rgb_load_width = 12
+        ttk.Button(
+            dataset_group,
+            text="Load HDF5",
+            command=self.import_rgb_hdf5_session,
+            width=_rgb_load_width,
+        ).pack(pady=(0, 4))
+        self.rgb_hdf5_session_label = ttk.Label(dataset_group, text="HDF5: None", style="Status.TLabel")
+        self.rgb_hdf5_session_label.pack(anchor='center', pady=(0, 4))
+        rgb_hdf5_center = ttk.Frame(dataset_group)
+        rgb_hdf5_center.pack(anchor=tk.CENTER)
+        ttk.Label(rgb_hdf5_center, text="Sample").pack(anchor=tk.CENTER)
+        self.rgb_hdf5_sample_combo = ttk.Combobox(
+            rgb_hdf5_center,
+            textvariable=self.rgb_hdf5_sample,
+            state="disabled",
+            width=_rgb_load_width,
+        )
+        self.rgb_hdf5_sample_combo.pack(pady=(0, 4))
+        self.rgb_hdf5_sample_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_rgb_hdf5_sample_changed())
+        ttk.Label(rgb_hdf5_center, text="Units").pack(anchor=tk.CENTER)
+        self.rgb_hdf5_unit_combo = ttk.Combobox(
+            rgb_hdf5_center,
+            textvariable=self.rgb_hdf5_unit,
+            state="disabled",
+            width=_rgb_load_width,
+        )
+        self.rgb_hdf5_unit_combo.pack(pady=(0, 4))
+        self.rgb_hdf5_unit_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_rgb_hdf5_unit_changed())
         self.file_root_label = ttk.Label(dataset_group, text="Nothing loaded yet", style="Status.TLabel")
-        self.file_root_label.pack(anchor='w')
+        self.file_root_label.pack(anchor='center', pady=(4, 0))
 
         color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
         _chan_bg = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
@@ -3431,7 +3603,7 @@ class MuadDataViewer:
             else:
                 load_btn = ttk.Button(col, text="Load", command=lambda c=ch: self.load_rgb_file(c), width=4)
                 load_btn.pack(anchor='center')
-            self._create_tooltip(load_btn, f"Load {color_names[ch]} channel")
+            self._create_tooltip(load_btn, f"Load {color_names[ch]} channel (matrix file, or HDF5 element if session loaded)")
 
         # Row 1: Element labels
         for i, ch in enumerate(['R', 'G', 'B']):
@@ -3682,20 +3854,10 @@ class MuadDataViewer:
 
     def clear_rgb_data(self):
         """Clear all RGB data and reset the interface."""
-        # Clear all data
-        for ch in ['R', 'G', 'B']:
-            self.rgb_data[ch] = None
-            # Reset element labels
-            self.rgb_labels[ch]['elem'].config(text="")
-            # Reset sliders to default (top=high, bottom=low to match gradient)
-            self.rgb_sliders[ch]['max'].config(from_=1, to=0)
-            self.rgb_slider_max_var[ch].set(1.0)
-            self.rgb_labels[ch]['slider_value'].config(text="1")
-            # Reset slider max limits
-            if ch in self.rgb_max_limits:
-                self.rgb_max_limits[ch].set(1.0)
-        # Reset dataset label
-        self.file_root_label.config(text="Nothing loaded yet")
+        self._clear_rgb_channels_only()
+        self._clear_rgb_hdf5_session()
+        if self.file_root_label is not None:
+            self.file_root_label.config(text="Nothing loaded yet")
         # Clear the overlay displays
         if hasattr(self, 'rgb_ax') and self.rgb_ax is not None:
             self.rgb_ax.clear()
@@ -3713,6 +3875,243 @@ class MuadDataViewer:
             if hasattr(self, 'rgb_colorbar_canvas'):
                 self.rgb_colorbar_canvas.draw()
         custom_dialogs.showinfo(self.root, "Cleared", "All RGB data has been cleared.")
+
+    def _clear_rgb_channels_only(self):
+        """Clear loaded RGB channel matrices and reset per-channel UI."""
+        for ch in ['R', 'G', 'B']:
+            self.rgb_data[ch] = None
+            if ch in self.rgb_labels:
+                self.rgb_labels[ch]['elem'].config(text="")
+            if ch in self.rgb_sliders:
+                self.rgb_sliders[ch]['max'].config(from_=1, to=0)
+                self.rgb_slider_max_var[ch].set(1.0)
+                self.rgb_labels[ch]['slider_value'].config(text="1")
+            if ch in self.rgb_max_limits:
+                self.rgb_max_limits[ch].set(1.0)
+        if self.file_root_label is not None:
+            if self.rgb_hdf5_session_path:
+                basename = os.path.basename(self.rgb_hdf5_session_path)
+                sample = self.rgb_hdf5_sample.get().strip()
+                if sample:
+                    self.file_root_label.config(text=f"Dataset: {sample} (HDF5: {basename})")
+                else:
+                    self.file_root_label.config(text=f"HDF5: {basename}")
+            else:
+                self.file_root_label.config(text="Nothing loaded yet")
+
+    def _set_rgb_hdf5_selectors_enabled(self, enabled):
+        state = "readonly" if enabled else "disabled"
+        for combo in (self.rgb_hdf5_sample_combo, self.rgb_hdf5_unit_combo):
+            combo.config(state=state)
+
+    def _clear_rgb_hdf5_session(self):
+        self.rgb_hdf5_session_path = None
+        self.rgb_hdf5_session_meta = None
+        self.rgb_hdf5_pixel_sizes_xy = {}
+        self.rgb_hdf5_sample.set("")
+        self.rgb_hdf5_unit.set("ppm")
+        if hasattr(self, "rgb_hdf5_session_label"):
+            self.rgb_hdf5_session_label.config(text="HDF5: None")
+        if hasattr(self, "rgb_hdf5_sample_combo"):
+            self.rgb_hdf5_sample_combo["values"] = []
+            self.rgb_hdf5_unit_combo["values"] = []
+            self._set_rgb_hdf5_selectors_enabled(False)
+
+    def _apply_rgb_hdf5_session_metadata(self, meta):
+        samples = sorted([s.name for s in meta.samples], key=self._natural_sort_key)
+        self.rgb_hdf5_sample_combo["values"] = samples
+        if samples:
+            default_sample = meta.active_group if meta.active_group in samples else samples[0]
+            self.rgb_hdf5_sample.set(default_sample)
+        else:
+            self.rgb_hdf5_sample.set("")
+
+        units = self._hdf5_units_available(meta)
+        self.rgb_hdf5_unit_combo["values"] = units
+        if units:
+            self.rgb_hdf5_unit.set(units[0])
+        else:
+            self.rgb_hdf5_unit.set("")
+
+        self.rgb_hdf5_pixel_sizes_xy = self._populate_hdf5_pixel_sizes_xy(meta)
+
+        self._set_rgb_hdf5_selectors_enabled(bool(samples and units))
+
+        default_sample = self.rgb_hdf5_sample.get().strip()
+        self._apply_hdf5_pixel_size(self.rgb_hdf5_pixel_sizes_xy, default_sample, self.rgb_pixel_size)
+
+        if self.file_root_label is not None and default_sample:
+            self.file_root_label.config(text=f"Dataset: {default_sample}")
+
+        if meta.imaging_model == hdf5_session.ImagingModel.FROM_SELECTIONS:
+            custom_dialogs.showwarning(
+                self.root,
+                "FromSelections session",
+                "This session uses the FromSelections imaging model. "
+                "Raster reconstruction is not supported yet; only CellSpace sessions can be loaded.",
+            )
+
+    def _on_rgb_hdf5_sample_changed(self):
+        sample = self.rgb_hdf5_sample.get().strip()
+        self._apply_hdf5_pixel_size(self.rgb_hdf5_pixel_sizes_xy, sample, self.rgb_pixel_size)
+        self._clear_rgb_channels_only()
+
+    def _on_rgb_hdf5_unit_changed(self):
+        self._clear_rgb_channels_only()
+
+    def import_rgb_hdf5_session(self):
+        initial = self.rgb_hdf5_session_path or "."
+        if initial and os.path.isfile(initial):
+            initial = os.path.dirname(initial)
+        path = filedialog.askopenfilename(
+            initialdir=initial,
+            title="Load HDF5 session",
+            filetypes=[
+                ("HDF5 session", "*.h5 *.hdf5 *.io4 *.vit"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            if not hdf5_session.is_hdf5_session(path):
+                custom_dialogs.showerror(
+                    self.root,
+                    "Not an HDF5 session",
+                    "The selected file does not look like a supported HDF5 imaging session.",
+                )
+                return
+            meta = hdf5_session.read_session_metadata(path)
+        except ImportError as exc:
+            custom_dialogs.showerror(self.root, "Missing dependency", str(exc))
+            return
+        except Exception as exc:
+            custom_dialogs.showerror(self.root, "HDF5 load failed", str(exc))
+            return
+
+        self._clear_rgb_channels_only()
+        self.rgb_hdf5_session_path = path
+        self.rgb_hdf5_session_meta = meta
+        basename = os.path.basename(path)
+        self.rgb_hdf5_session_label.config(text=f"HDF5: {basename}")
+        self._apply_rgb_hdf5_session_metadata(meta)
+
+        try:
+            from scipy.interpolate import griddata  # noqa: F401
+        except ImportError:
+            custom_dialogs.showwarning(
+                self.root,
+                "Optional dependency",
+                "Install scipy for gap interpolation between laser spots:\n\npip install scipy",
+            )
+
+    def _pick_rgb_hdf5_element(self, channel):
+        """Prompt for an element from the active RGB HDF5 session."""
+        meta = self.rgb_hdf5_session_meta
+        if not meta:
+            return None
+        unit = self.rgb_hdf5_unit.get().strip()
+        elements = self._hdf5_elements_for_unit(meta, unit)
+        if not elements:
+            custom_dialogs.showwarning(
+                self.root,
+                "No elements",
+                f"No {unit} channels found in this HDF5 session.",
+            )
+            return None
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"{channel} channel element")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        choice = {"value": None}
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack()
+        color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+        ttk.Label(
+            frame,
+            text=f"Choose element for {color_names.get(channel, channel)} ({unit}):",
+        ).pack(anchor='w', pady=(0, 6))
+        var = tk.StringVar(value=elements[0])
+        combo = ttk.Combobox(frame, textvariable=var, values=elements, state="readonly", width=18)
+        combo.pack(pady=(0, 10))
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack()
+
+        def accept():
+            choice["value"] = var.get().strip()
+            dialog.destroy()
+
+        def cancel():
+            dialog.destroy()
+
+        ttk.Button(btn_row, text="Load", command=accept, width=8).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_row, text="Cancel", command=cancel, width=8).pack(side=tk.LEFT)
+        dialog.bind("<Return>", lambda _e: accept())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        combo.focus_set()
+        self.root.wait_window(dialog)
+        return choice["value"] or None
+
+    def _apply_rgb_channel_loaded(self, channel, mat, sample, element, unit_type=None):
+        """Populate one RGB channel after matrix or HDF5 load."""
+        self.rgb_data[channel] = mat
+        self.rgb_labels[channel]['elem'].config(text=element)
+        if unit_type:
+            self.file_root_label.config(text=f"Dataset: {sample} ({unit_type})")
+        else:
+            self.file_root_label.config(text=f"Dataset: {sample}")
+        max_val = float(np.nanmax(mat))
+        if np.isfinite(max_val):
+            self.rgb_sliders[channel]['max'].config(from_=max_val, to=0)
+            self.rgb_slider_max_var[channel].set(max_val)
+            self.rgb_labels[channel]['slider_value'].config(text=str(int(round(max_val))))
+            if channel in self.rgb_max_limits:
+                self.rgb_max_limits[channel].set(round(max_val))
+            self.update_rgb_max_value_display(channel)
+
+    def _load_rgb_hdf5_channel(self, channel, element):
+        sample = self.rgb_hdf5_sample.get().strip()
+        unit = self.rgb_hdf5_unit.get().strip()
+        if not sample or not unit:
+            custom_dialogs.showwarning(self.root, "Incomplete selection", "Choose sample and units first.")
+            return False
+
+        meta = self.rgb_hdf5_session_meta
+        if meta.imaging_model == hdf5_session.ImagingModel.FROM_SELECTIONS:
+            custom_dialogs.showerror(
+                self.root,
+                "Not supported yet",
+                "FromSelections raster reconstruction is not implemented yet.",
+            )
+            return False
+
+        try:
+            mat = hdf5_session.reconstruct_raster(
+                self.rgb_hdf5_session_path,
+                sample,
+                element,
+                unit=unit,
+            )
+        except NotImplementedError as exc:
+            custom_dialogs.showerror(self.root, "Not supported yet", str(exc))
+            return False
+        except Exception as exc:
+            custom_dialogs.showerror(self.root, "HDF5 load failed", str(exc))
+            return False
+
+        self._apply_hdf5_pixel_size(self.rgb_hdf5_pixel_sizes_xy, sample, self.rgb_pixel_size)
+
+        self._apply_rgb_channel_loaded(channel, mat, sample, element, unit_type=unit)
+        custom_dialogs.showinfo(
+            self.root,
+            "Loaded",
+            f"{channel} channel: {element} ({unit}) — shape {mat.shape}",
+        )
+        self.view_rgb_overlay()
+        return True
 
     def set_rgb_max_slider_limit(self, channel):
         try:
@@ -3775,10 +4174,240 @@ class MuadDataViewer:
                 c = {'red': f'#{ii:02x}0000', 'green': f'#00{ii:02x}00', 'blue': f'#0000{ii:02x}'}[color]
                 canvas.create_line(0, i, w, i, fill=c)
 
+    def _set_hdf5_selectors_enabled(self, enabled):
+        state = "readonly" if enabled else "disabled"
+        for combo in (self.hdf5_sample_combo, self.hdf5_unit_combo, self.hdf5_element_combo):
+            combo.config(state=state)
+
+    def _hdf5_selection_key(self):
+        if not self.hdf5_session_path:
+            return None
+        sample = self.hdf5_sample.get().strip()
+        element = self.hdf5_element.get().strip()
+        unit = self.hdf5_unit.get().strip()
+        if not sample or not element or not unit:
+            return None
+        return (sample, unit, element)
+
+    def _hdf5_needs_load(self):
+        if not self.hdf5_session_path:
+            return False
+        key = self._hdf5_selection_key()
+        if not key:
+            return False
+        return key != self.hdf5_loaded_key
+
+    def _clear_hdf5_session(self):
+        self.hdf5_session_path = None
+        self.hdf5_session_meta = None
+        self.hdf5_pixel_sizes_xy = {}
+        self.hdf5_loaded_key = None
+        self.hdf5_sample.set("")
+        self.hdf5_unit.set("ppm")
+        self.hdf5_element.set("")
+        if hasattr(self, "hdf5_session_label"):
+            self.hdf5_session_label.config(text="HDF5: None")
+        if hasattr(self, "hdf5_sample_combo"):
+            self.hdf5_sample_combo["values"] = []
+            self.hdf5_unit_combo["values"] = []
+            self.hdf5_element_combo["values"] = []
+            self._set_hdf5_selectors_enabled(False)
+
+    def _hdf5_units_available(self, meta):
+        units = []
+        if meta.ppm_channels:
+            units.append("ppm")
+        if meta.cps_channels:
+            units.append("CPS")
+        return units
+
+    def _hdf5_elements_for_unit(self, meta, unit):
+        if unit == "ppm":
+            channels = meta.ppm_channels
+        elif unit == "CPS":
+            channels = meta.cps_channels
+        else:
+            channels = []
+        return sorted(channels, key=self._elem_sort_key)
+
+    def _update_hdf5_element_dropdown(self):
+        meta = self.hdf5_session_meta
+        if not meta:
+            self.hdf5_element_combo["values"] = []
+            self.hdf5_element.set("")
+            return
+        elements = self._hdf5_elements_for_unit(meta, self.hdf5_unit.get())
+        self.hdf5_element_combo["values"] = elements
+        if elements:
+            current = self.hdf5_element.get()
+            if current not in elements:
+                self.hdf5_element.set(elements[0])
+        else:
+            self.hdf5_element.set("")
+
+    def _on_hdf5_unit_changed(self):
+        self._update_hdf5_element_dropdown()
+
+    def _on_hdf5_sample_changed(self):
+        sample = self.hdf5_sample.get().strip()
+        self._apply_hdf5_pixel_size(self.hdf5_pixel_sizes_xy, sample, self.pixel_size)
+
+    def _apply_hdf5_session_metadata(self, meta):
+        samples = sorted([s.name for s in meta.samples], key=self._natural_sort_key)
+        self.hdf5_sample_combo["values"] = samples
+        if samples:
+            default_sample = meta.active_group if meta.active_group in samples else samples[0]
+            self.hdf5_sample.set(default_sample)
+        else:
+            self.hdf5_sample.set("")
+
+        units = self._hdf5_units_available(meta)
+        self.hdf5_unit_combo["values"] = units
+        if units:
+            self.hdf5_unit.set(units[0])
+        else:
+            self.hdf5_unit.set("")
+
+        self.hdf5_pixel_sizes_xy = self._populate_hdf5_pixel_sizes_xy(meta)
+
+        self._update_hdf5_element_dropdown()
+        self._set_hdf5_selectors_enabled(bool(samples and units))
+        self.hdf5_loaded_key = None
+
+        default_sample = self.hdf5_sample.get().strip()
+        self._apply_hdf5_pixel_size(self.hdf5_pixel_sizes_xy, default_sample, self.pixel_size)
+
+        if meta.imaging_model == hdf5_session.ImagingModel.FROM_SELECTIONS:
+            custom_dialogs.showwarning(
+                self.root,
+                "FromSelections session",
+                "This session uses the FromSelections imaging model. "
+                "Raster reconstruction is not supported yet; only CellSpace sessions can be loaded.",
+            )
+
+    def import_hdf5_session(self):
+        initial = self.hdf5_session_path or "."
+        if initial and os.path.isfile(initial):
+            initial = os.path.dirname(initial)
+        path = filedialog.askopenfilename(
+            initialdir=initial,
+            title="Import HDF5 session",
+            filetypes=[
+                ("HDF5 session", "*.h5 *.hdf5 *.io4 *.vit"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            if not hdf5_session.is_hdf5_session(path):
+                custom_dialogs.showerror(
+                    self.root,
+                    "Not an HDF5 session",
+                    "The selected file does not look like a supported HDF5 imaging session.",
+                )
+                return
+            meta = hdf5_session.read_session_metadata(path)
+        except ImportError as exc:
+            custom_dialogs.showerror(self.root, "Missing dependency", str(exc))
+            return
+        except Exception as exc:
+            custom_dialogs.showerror(self.root, "HDF5 import failed", str(exc))
+            return
+
+        self.single_matrix = None
+        self.single_file_name = None
+        self.single_file_path = None
+        self.single_units = None
+        self._reset_lod_state()
+
+        self.hdf5_session_path = path
+        self.hdf5_session_meta = meta
+        basename = os.path.basename(path)
+        self.hdf5_session_label.config(text=f"HDF5: {basename}")
+        self._apply_hdf5_session_metadata(meta)
+
+        try:
+            from scipy.interpolate import griddata  # noqa: F401
+        except ImportError:
+            custom_dialogs.showwarning(
+                self.root,
+                "Optional dependency",
+                "Install scipy for gap interpolation between laser spots:\n\npip install scipy",
+            )
+
+        if hasattr(self, "single_file_label") and self.single_file_label is not None:
+            self.single_file_label.config(text="Loaded file: None (HDF5 session imported)")
+
+    def _load_hdf5_map(self):
+        """Reconstruct the HDF5 raster for the current sample/element selection."""
+        if not self.hdf5_session_path or not self.hdf5_session_meta:
+            custom_dialogs.showwarning(self.root, "No session", "Import an HDF5 session first.")
+            return False
+
+        sample = self.hdf5_sample.get().strip()
+        element = self.hdf5_element.get().strip()
+        unit = self.hdf5_unit.get().strip()
+        if not sample or not element or not unit:
+            custom_dialogs.showwarning(self.root, "Incomplete selection", "Choose sample, units, and element.")
+            return False
+
+        meta = self.hdf5_session_meta
+        if meta.imaging_model == hdf5_session.ImagingModel.FROM_SELECTIONS:
+            custom_dialogs.showerror(
+                self.root,
+                "Not supported yet",
+                "FromSelections raster reconstruction is not implemented yet.",
+            )
+            return False
+
+        try:
+            mat = hdf5_session.reconstruct_raster(
+                self.hdf5_session_path,
+                sample,
+                element,
+                unit=unit,
+            )
+        except NotImplementedError as exc:
+            custom_dialogs.showerror(self.root, "Not supported yet", str(exc))
+            return False
+        except Exception as exc:
+            custom_dialogs.showerror(self.root, "HDF5 load failed", str(exc))
+            return False
+
+        self.single_matrix = mat
+        self.single_units = unit
+        self.single_file_path = None
+        self.single_file_name = f"{sample} {element}_{unit}"
+        self.hdf5_loaded_key = self._hdf5_selection_key()
+
+        min_val = float(np.nanmin(mat))
+        max_val = float(np.nanmax(mat))
+        self.single_min.set(min_val)
+        self.single_max.set(max_val)
+        self.min_slider.config(from_=min_val, to=max_val)
+        self.max_slider.config(from_=min_val, to=max_val)
+        self.min_slider.set(min_val)
+        self.max_slider.set(max_val)
+        self.min_val_label.config(text=f"{min_val:.2f}")
+        self.max_val_label.config(text=f"{max_val:.2f}")
+        self.max_slider_limit.set(round(max_val))
+
+        self._apply_hdf5_pixel_size(self.hdf5_pixel_sizes_xy, sample, self.pixel_size)
+
+        self._reset_lod_state()
+        if hasattr(self, "single_file_label") and self.single_file_label is not None:
+            self.single_file_label.config(
+                text=f"Loaded: {sample} · {element} ({unit}) from HDF5"
+            )
+        self.load_polygons_for_file()
+        return True
+
     def load_single_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
         if not path:
             return
+        self._clear_hdf5_session()
         try:
             mat = self._load_matrix_file(path)
             self.single_matrix = mat
@@ -3798,6 +4427,8 @@ class MuadDataViewer:
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
             self.single_file_path = path  # Store full path for polygon persistence
+            parsed = self.parse_matrix_filename(path)
+            self.single_units = parsed[2] if parsed else None
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
             self._reset_lod_state()
             
@@ -3810,17 +4441,29 @@ class MuadDataViewer:
             self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
             self.single_file_path = None
+            self.single_units = None
             self._reset_lod_state()
 
     def view_single_map(self, update_layout=True):
+        just_loaded_hdf5 = False
+        if self.hdf5_session_path and self._hdf5_needs_load():
+            if not self._load_hdf5_map():
+                return
+            just_loaded_hdf5 = True
         if self.single_matrix is None:
             return
         source_mat = self.single_matrix
         if self.lod_apply_preview.get() and self.lod_filtered_matrix is not None:
             source_mat = self.lod_filtered_matrix
         mat = np.array(source_mat, dtype=float)
-        mat[np.isnan(mat)] = 0
-        H, W = mat.shape[0], mat.shape[1]
+        from_hdf5 = bool(self.hdf5_session_path)
+        has_nan = np.any(np.isnan(mat))
+        if from_hdf5 and has_nan:
+            display_mat = np.ma.masked_where(np.isnan(mat), mat)
+        else:
+            mat[np.isnan(mat)] = 0
+            display_mat = mat
+        H, W = display_mat.shape[0], display_mat.shape[1]
         # Update min/max values from sliders in case they changed
         vmin = self.single_min.get()
         vmax = self.single_max.get()
@@ -3830,13 +4473,20 @@ class MuadDataViewer:
             pixel_size_um = float(self.pixel_size.get())
         except (TypeError, ValueError):
             pixel_size_um = 0.0
+        cmap = plt.get_cmap(self.single_colormap.get())
+        if isinstance(display_mat, np.ma.MaskedArray):
+            cmap = cmap.copy()
+            norm = Normalize(vmin=vmin, vmax=vmax)
+            bg_color = cmap(norm(vmin))
+            cmap.set_bad(color=bg_color)
+            self.single_ax.set_facecolor(bg_color)
         if pixel_size_um > 0:
             extent = [0, W * pixel_size_um, 0, H * pixel_size_um]
-            im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax,
+            im = self.single_ax.imshow(display_mat, cmap=cmap, vmin=vmin, vmax=vmax,
                                        aspect='equal', extent=extent)
             self._single_extent_um = (pixel_size_um, H, W)
         else:
-            im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax, aspect='auto')
+            im = self.single_ax.imshow(display_mat, cmap=cmap, vmin=vmin, vmax=vmax, aspect='auto')
             self._single_extent_um = None
         self.single_ax.set_aspect('equal' if pixel_size_um > 0 else 'auto')
         self.single_ax.axis('off')
@@ -3856,8 +4506,9 @@ class MuadDataViewer:
             update_layout = True
         elif not colorbar_exists and colorbar_needed:
             # Create colorbar if it doesn't exist but should
-            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, shrink=0.4, label="PPM")
-            self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=14)
+            cbar_label = self._colorbar_label()
+            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, shrink=0.4, label=cbar_label)
+            self._single_colorbar.set_label(cbar_label, fontfamily='Arial', fontsize=14)
             # Set tick labels to use Arial font
             self._single_colorbar.ax.tick_params(labelsize=12)
             for label in self._single_colorbar.ax.get_yticklabels():
@@ -3869,7 +4520,7 @@ class MuadDataViewer:
             self._single_colorbar.update_normal(im)
             # Ensure fonts are updated
             try:
-                self._single_colorbar.set_label("PPM", fontfamily='Arial', fontsize=14)
+                self._single_colorbar.set_label(self._colorbar_label(), fontfamily='Arial', fontsize=14)
                 self._single_colorbar.ax.tick_params(labelsize=12)
                 for label in self._single_colorbar.ax.get_yticklabels():
                     label.set_fontfamily('Arial')
@@ -3900,7 +4551,7 @@ class MuadDataViewer:
         # Draw polygon overlays
         self.draw_polygon_overlays()
         
-        if update_layout:
+        if update_layout and not just_loaded_hdf5:
             self.single_figure.tight_layout()
         self.single_canvas.draw()
     
@@ -4022,27 +4673,48 @@ class MuadDataViewer:
                         self.single_ax.add_patch(hp)
                         self.polygon_patches.append(hp)
 
-        # Draw LOD background ROI overlay — hide when LOD preview is active
-        # so the user sees the filtered result cleanly.
+        # Draw LOD background ROI overlay — hide completed ROI when LOD preview is
+        # active, but always show while the user is actively placing vertices.
         lod_preview_on = self.lod_apply_preview.get()
-        if not lod_preview_on and self.lod_bg_vertices and len(self.lod_bg_vertices) >= 2:
+        show_lod_roi = bool(self.lod_bg_vertices) and (
+            self.lod_bg_active or not lod_preview_on
+        )
+        if show_lod_roi:
+            line_color, marker_edge = self._lod_overlay_colors()
             pts = [to_axes(v[0], v[1]) for v in self.lod_bg_vertices]
             x_coords = [p[0] for p in pts]
             y_coords = [p[1] for p in pts]
-            self.single_ax.plot(x_coords, y_coords, color="#ffd54f", linewidth=1.5, linestyle="--")
-            if len(self.lod_bg_vertices) >= 3:
+            if len(pts) >= 1:
+                self.single_ax.plot(
+                    x_coords,
+                    y_coords,
+                    "o",
+                    color=line_color,
+                    markersize=8,
+                    markeredgecolor=marker_edge,
+                    markeredgewidth=1,
+                    linestyle="None",
+                    zorder=6,
+                )
+            if len(pts) >= 2:
+                self.single_ax.plot(
+                    x_coords,
+                    y_coords,
+                    color=line_color,
+                    linewidth=2,
+                    alpha=0.75,
+                    zorder=6,
+                )
+            if len(pts) >= 3:
                 self.single_ax.plot(
                     [pts[-1][0], pts[0][0]],
                     [pts[-1][1], pts[0][1]],
-                    color="#ffd54f",
-                    linewidth=1.5,
-                    linestyle=":",
+                    color=line_color,
+                    linewidth=2,
+                    linestyle="--",
+                    alpha=0.75,
+                    zorder=6,
                 )
-        elif not lod_preview_on and self.lod_bg_mask is not None and self.lod_bg_vertices and len(self.lod_bg_vertices) >= 3:
-            pts = [to_axes(v[0], v[1]) for v in self.lod_bg_vertices] + [to_axes(self.lod_bg_vertices[0][0], self.lod_bg_vertices[0][1])]
-            x_coords = [p[0] for p in pts]
-            y_coords = [p[1] for p in pts]
-            self.single_ax.plot(x_coords, y_coords, color="#ffd54f", linewidth=1.5, linestyle="--")
         
         # Draw current polygon being drawn (if active)
         if self.polygon_active and len(self.polygon_vertices) > 0:
@@ -4090,39 +4762,32 @@ class MuadDataViewer:
             self._save_figure_export(self.single_figure, out_path, bbox_inches="tight")
 
     def load_rgb_file(self, channel):
+        if self.rgb_hdf5_session_path and self.rgb_hdf5_session_meta:
+            element = self._pick_rgb_hdf5_element(channel)
+            if not element:
+                return
+            self._load_rgb_hdf5_channel(channel, element)
+            return
+
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
         if not path:
             return
         try:
             mat = self._load_matrix_file(path)
-            self.rgb_data[channel] = mat
             file_name = os.path.basename(path)
-            
+
             # Parse filename to extract sample and element
             parsed = self.parse_matrix_filename(path)
             if parsed:
                 sample, element, unit_type = parsed
                 root_name = sample
-                elem_display = element
             else:
                 # Fallback to simple parsing if filename doesn't match expected format
                 root_name = file_name.split()[0]
                 elem = next((part for part in file_name.split() if any(e in part for e in ['ppm', 'CPS'])), 'Unknown')
-                elem_display = elem.split('_')[0] if '_' in elem else elem
-            
-            self.rgb_labels[channel]['elem'].config(text=elem_display)
-            # Always update dataset label when a new file is loaded
-            self.file_root_label.config(text=f"Dataset: {root_name}")
-            max_val = float(np.nanmax(mat))
-            if np.isfinite(max_val):
-                self.rgb_sliders[channel]['max'].config(from_=max_val, to=0)
-                self.rgb_slider_max_var[channel].set(max_val)
-                self.rgb_labels[channel]['slider_value'].config(text=str(int(round(max_val))))
-                # initialize per-channel slider cap
-                if channel in self.rgb_max_limits:
-                    self.rgb_max_limits[channel].set(round(max_val))
-                # Update max value display
-                self.update_rgb_max_value_display(channel)
+                element = elem.split('_')[0] if '_' in elem else elem
+
+            self._apply_rgb_channel_loaded(channel, mat, root_name, element)
             custom_dialogs.showinfo(self.root, "Loaded", f"{channel} channel loaded with shape {mat.shape}")
         except Exception as e:
             custom_dialogs.showerror(self.root, "Error", f"Failed to load {channel} channel:\n{e}")

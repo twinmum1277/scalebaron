@@ -26,11 +26,31 @@ import shutil
 import pandas as pd
 from .matrix_filename import parse_matrix_filename as _parse_matrix_filename
 from .csv_matrix import load_csv_matrix_or_raise
+from . import hdf5_session
 import base64
 import io
 
 BNEIR_URL = "https://sites.dartmouth.edu/bneir/"
 SCALEBARON_ISSUES_URL = "https://github.com/twinmum1277/scalebaron/issues"
+
+# Curated colormaps for elemental maps, grouped for the reference guide.
+PERCEPTUALLY_UNIFORM_COLORMAPS = (
+    "turbo",
+    "viridis",
+    "plasma",
+    "inferno",
+    "magma",
+    "cividis",
+)
+CLASSIC_COLORMAPS = (
+    "jet",
+    "hot",
+    "gray",
+    "bone",
+    "coolwarm",
+    "RdYlBu_r",
+)
+RECOMMENDED_COLOR_SCHEMES = PERCEPTUALLY_UNIFORM_COLORMAPS + CLASSIC_COLORMAPS
 
 class CompositeApp:
 
@@ -85,13 +105,375 @@ class CompositeApp:
         self.add_element_label()
 
     def _on_font_change_refresh_preview(self):
-        """When any font dropdown changes and a preview exists, regenerate the composite so the new font sizes apply."""
+        """When display settings change and a preview exists, regenerate the composite."""
         if not getattr(self, "matrices", None) or not self.matrices:
             return
         if not getattr(self, "preview_image", None):
             return
-        # Regenerate preview with current font settings (sample names, scale bar, color bar, element label)
         self.generate_composite(preview=True)
+
+    def _resolve_export_background(self, cmap):
+        """Return (bg_color, text_color) for composite and subplot export."""
+        choice = (self.export_background.get() or "Colormap low").strip().lower()
+        if choice == "black":
+            bg_color = (0.0, 0.0, 0.0, 1.0)
+        elif choice == "white":
+            bg_color = (1.0, 1.0, 1.0, 1.0)
+        else:
+            bg_color = cmap(0)
+        text_color = "white" if np.mean(bg_color[:3]) < 0.5 else "black"
+        return bg_color, text_color
+
+    def _colormap_dropdown_values(self):
+        """Recommended schemes, keeping the current value if it is non-standard."""
+        current = (self.color_scheme.get() or "").strip()
+        values = list(RECOMMENDED_COLOR_SCHEMES)
+        if current and current not in values:
+            values = [current] + values
+        return values
+
+    def _colormap_guide_sections(self):
+        """(section_title, scheme_names) pairs for the reference guide."""
+        current = (self.color_scheme.get() or "").strip()
+        sections = [
+            ("Perceptually uniform", list(PERCEPTUALLY_UNIFORM_COLORMAPS)),
+            ("Classic & diverging", list(CLASSIC_COLORMAPS)),
+        ]
+        if current and current not in RECOMMENDED_COLOR_SCHEMES:
+            sections.insert(0, ("Current (non-standard)", [current]))
+        return sections
+
+    def _colormap_gradient_photo(self, name, photos_out):
+        """Build a small gradient swatch PhotoImage; append to photos_out to retain reference."""
+        cmap = matplotlib.colormaps.get_cmap(name)
+        gradient = np.linspace(0, 1, 200)
+        rgba = cmap(gradient)
+        rgb = (rgba[:, :3] * 255).astype(np.uint8)
+        img = Image.fromarray(rgb.reshape(1, -1, 3), mode="RGB")
+        img = img.resize((200, 20), Image.NEAREST)
+        photo = ImageTk.PhotoImage(img)
+        photos_out.append(photo)
+        return photo
+
+    def _populate_colormap_guide_body(self, parent, photos_out, on_use):
+        """Fill a frame with grouped colormap swatches and Use buttons."""
+        for section_title, names in self._colormap_guide_sections():
+            ttk.Label(
+                parent,
+                text=section_title,
+                font=("TkDefaultFont", 10, "bold"),
+            ).pack(anchor="w", padx=4, pady=(8, 2))
+            ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=4, pady=(0, 4))
+            for name in names:
+                row = ttk.Frame(parent)
+                row.pack(fill=tk.X, pady=3, padx=4)
+                ttk.Label(row, text=name, width=11).pack(side=tk.LEFT, anchor="n")
+                try:
+                    photo = self._colormap_gradient_photo(name, photos_out)
+                    tk.Label(row, image=photo, bd=1, relief=tk.SUNKEN).pack(
+                        side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6)
+                    )
+                except Exception:
+                    ttk.Label(row, text="(unavailable)", style="Hint.TLabel").pack(side=tk.LEFT, padx=6)
+                ttk.Button(
+                    row,
+                    text="Use",
+                    width=5,
+                    command=lambda n=name: on_use(n),
+                ).pack(side=tk.RIGHT)
+
+    def _attach_colormap_hover_guide(self, widget):
+        """Show grouped colormap reference on hover; pointer can move into the panel."""
+        state = {"popup": None, "show_timer": None, "hide_timer": None, "photos": []}
+
+        def cancel_timer(key):
+            if state[key]:
+                try:
+                    self.master.after_cancel(state[key])
+                except Exception:
+                    pass
+                state[key] = None
+
+        def cancel_all_timers():
+            cancel_timer("show_timer")
+            cancel_timer("hide_timer")
+
+        def destroy_popup():
+            cancel_all_timers()
+            if state["popup"]:
+                try:
+                    state["popup"].destroy()
+                except Exception:
+                    pass
+                state["popup"] = None
+            state["photos"] = []
+
+        def on_use(name):
+            self.color_scheme.set(name)
+            destroy_popup()
+
+        def bind_hover_persistence(win):
+            def enter(_event):
+                cancel_timer("hide_timer")
+
+            def leave(_event):
+                cancel_timer("hide_timer")
+                state["hide_timer"] = self.master.after(300, destroy_popup)
+
+            win.bind("<Enter>", enter)
+            win.bind("<Leave>", leave)
+
+        def show_popup():
+            cancel_timer("show_timer")
+            if state["popup"]:
+                return
+            tw = tk.Toplevel(self.master)
+            tw.wm_overrideredirect(True)
+            try:
+                tw.attributes("-topmost", True)
+            except Exception:
+                pass
+
+            popup_w, popup_h = 380, 400
+            x = widget.winfo_rootx() + widget.winfo_width() + 6
+            y = widget.winfo_rooty() - 40
+            sw = tw.winfo_screenwidth()
+            sh = tw.winfo_screenheight()
+            if x + popup_w > sw - 8:
+                x = max(8, widget.winfo_rootx() - popup_w - 6)
+            y = max(8, min(y, sh - popup_h - 8))
+            tw.geometry(f"{popup_w}x{popup_h}+{x}+{y}")
+
+            shell = tk.Frame(tw, bg="#f0f0f0", relief=tk.SOLID, borderwidth=1)
+            shell.pack(fill=tk.BOTH, expand=True)
+            tk.Label(
+                shell,
+                text="Colormap reference — click Use to apply",
+                bg="#f0f0f0",
+                fg="#333333",
+                font=("TkDefaultFont", 10, "italic"),
+                anchor="w",
+                padx=8,
+                pady=6,
+            ).pack(fill=tk.X)
+
+            outer = tk.Frame(shell, bg="#f0f0f0")
+            outer.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+            canvas = tk.Canvas(outer, highlightthickness=0, bg="#f0f0f0")
+            scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+            inner = ttk.Frame(canvas)
+            inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+            def on_canvas_configure(event):
+                canvas.itemconfig(win_id, width=event.width)
+
+            canvas.bind("<Configure>", on_canvas_configure)
+            canvas.configure(yscrollcommand=scrollbar.set)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            def on_mousewheel(event):
+                if getattr(event, "num", None) == 5:
+                    canvas.yview_scroll(1, "units")
+                elif getattr(event, "num", None) == 4:
+                    canvas.yview_scroll(-1, "units")
+                else:
+                    delta = getattr(event, "delta", 0)
+                    step = int(-1 * (delta / 120)) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                    canvas.yview_scroll(step, "units")
+
+            for w in (tw, shell, outer, canvas, inner):
+                w.bind("<MouseWheel>", on_mousewheel)
+                w.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+                w.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+
+            self._populate_colormap_guide_body(inner, state["photos"], on_use)
+            bind_hover_persistence(tw)
+            bind_hover_persistence(shell)
+            state["popup"] = tw
+
+        def widget_enter(_event):
+            cancel_timer("hide_timer")
+            if state["popup"]:
+                return
+            cancel_timer("show_timer")
+            state["show_timer"] = self.master.after(350, show_popup)
+
+        def widget_leave(_event):
+            cancel_timer("show_timer")
+            cancel_timer("hide_timer")
+            state["hide_timer"] = self.master.after(300, destroy_popup)
+
+        widget.bind("<Enter>", widget_enter)
+        widget.bind("<Leave>", widget_leave)
+
+    def _get_inline_icon(self, icon_key, filename, size=22):
+        """Small toolbar icon for tight control-panel rows (avoids sidebar clipping)."""
+        if not hasattr(self, "_inline_icons"):
+            self._inline_icons = {}
+        if icon_key in self._inline_icons:
+            return self._inline_icons[icon_key]
+        path = os.path.join(os.path.dirname(__file__), "icons", filename)
+        if not os.path.exists(path):
+            return self.button_icons.get(icon_key)
+        try:
+            img = Image.open(path)
+            if img.size[0] != size or img.size[1] != size:
+                img = img.resize((size, size), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._inline_icons[icon_key] = photo
+            return photo
+        except Exception:
+            return self.button_icons.get(icon_key)
+
+    def _add_colormap_guide_trigger(self, parent):
+        """Color-wheel icon beside colormap dropdown; hover opens the reference guide."""
+        picker_icon = self._get_inline_icon("color_picker", "color_picker.png", size=22)
+        if picker_icon:
+            btn = tk.Button(
+                parent,
+                image=picker_icon,
+                padx=1,
+                pady=1,
+                bg=getattr(self, "_gui_bg", "#f0f0f0"),
+                relief="flat",
+                highlightthickness=0,
+                bd=0,
+                cursor="hand2",
+            )
+            btn.image = picker_icon
+        else:
+            btn = tk.Label(
+                parent,
+                text="🎨",
+                bg=getattr(self, "_gui_bg", "#f0f0f0"),
+                font=("TkDefaultFont", 12),
+                cursor="hand2",
+            )
+        btn.pack(side=tk.LEFT, padx=(0, 2))
+        self._attach_colormap_hover_guide(btn)
+        try:
+            self._create_tooltip(btn, "Click for swatches")
+        except Exception:
+            pass
+        return btn
+
+    def _apply_colormap_from_guide(self, name, dialog=None):
+        self.color_scheme.set(name)
+        if dialog is not None:
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+
+    SUBPLOT_CELL_INCHES = 4
+    SUBPLOT_DPI = 300
+
+    def _save_canonical_subplot(
+        self,
+        path,
+        matrix,
+        label,
+        cmap,
+        norm,
+        bg_color,
+        text_color,
+        pixel_size,
+        font_size,
+        show_subplot_label,
+    ):
+        """Save one subplot PNG at a fixed cell size matching the composite grid."""
+        subplot_fig, subplot_ax = plt.subplots(
+            figsize=(self.SUBPLOT_CELL_INCHES, self.SUBPLOT_CELL_INCHES)
+        )
+        subplot_fig.patch.set_facecolor(bg_color)
+        subplot_ax.set_facecolor(bg_color)
+        masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
+        H, W = matrix.shape[0], matrix.shape[1]
+        if pixel_size and float(pixel_size) > 0:
+            dx = float(pixel_size)
+            extent = [0, W * dx, 0, H * dx]
+            subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect="equal", extent=extent)
+            subplot_ax.set_aspect("equal")
+        else:
+            subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect="auto")
+            subplot_ax.set_aspect("auto")
+        if show_subplot_label:
+            subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
+        else:
+            subplot_ax.set_title("", color=text_color)
+        subplot_ax.axis("off")
+        top = 0.92 if show_subplot_label else 1.0
+        subplot_fig.subplots_adjust(left=0, right=1, top=top, bottom=0)
+        subplot_fig.savefig(
+            path,
+            dpi=self.SUBPLOT_DPI,
+            facecolor=subplot_fig.get_facecolor(),
+        )
+        plt.close(subplot_fig)
+
+    def _make_scrollable_control_panel(self, parent):
+        """Returns (container, inner_frame). Logo stays sticky; controls scroll on small screens."""
+        container = tk.Frame(parent, width=280, bg=getattr(self, "_gui_bg", "#f0f0f0"))
+        container.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        container.pack_propagate(False)
+
+        header = tk.Frame(container, bg=getattr(self, "_gui_bg", "#f0f0f0"))
+        header.pack(side=tk.TOP, fill=tk.X)
+        self._add_bneir_logo(header)
+
+        canvas = tk.Canvas(
+            container,
+            highlightthickness=0,
+            bg=getattr(self, "_gui_bg", "#f0f0f0"),
+        )
+        scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        content = ttk.Frame(inner, padding=10)
+        content.pack(fill=tk.BOTH, expand=True)
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(win_id, width=event.width)
+
+        canvas.bind("<Configure>", on_canvas_configure)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def on_mousewheel(event):
+            if getattr(event, "num", None) == 5:
+                canvas.yview_scroll(1, "units")
+            elif getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-1, "units")
+            else:
+                delta = getattr(event, "delta", 0)
+                step = int(-1 * (delta / 120)) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                canvas.yview_scroll(step, "units")
+
+        for widget in (canvas, inner, content, container):
+            widget.bind("<MouseWheel>", on_mousewheel)
+            widget.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+            widget.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+
+        return container, content
+
+    def _configure_form_grid(self, frame, label_minsize=96):
+        """Two-column form: fixed-width label column, inputs on the right (narrow sidebar safe)."""
+        frame.columnconfigure(0, minsize=label_minsize, weight=0)
+        frame.columnconfigure(1, weight=1)
+
+    def _grid_unit_entry(self, parent, row, label, textvariable, entry_width=4, unit="µm"):
+        """Label + compact numeric entry with unit suffix (e.g. 6 µm)."""
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="e", padx=5, pady=2)
+        unit_row = ttk.Frame(parent)
+        unit_row.grid(row=row, column=1, sticky="w", padx=5, pady=2)
+        ttk.Entry(unit_row, textvariable=textvariable, width=entry_width).pack(side=tk.LEFT)
+        if unit:
+            ttk.Label(unit_row, text=unit).pack(side=tk.LEFT, padx=(2, 0))
+        return unit_row
 
     def _font_candidates(self, family, bold=False):
         """Return ordered PIL font candidates for selected family/style."""
@@ -202,6 +584,7 @@ class CompositeApp:
         # Optional credit text overlay on exported images (opt-in)
         self.add_credit_to_exports = tk.BooleanVar(value=False)
         self.export_image_format = tk.StringVar(value="PNG")
+        self.export_background = tk.StringVar(value="Colormap low")
         self.credit_text = tk.StringVar(
             value=(
                 "Collected at the Biomedical National Elemental Imaging Resource (BNEIR): "
@@ -210,6 +593,9 @@ class CompositeApp:
         )
 
         self.input_dir = None
+        self.hdf5_session_path = None
+        self.hdf5_session_meta = None
+        self.hdf5_pixel_sizes_xy = {}  # sample -> (um_x, um_y) from session metadata
         self.output_dir = "./OUTPUT"
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -290,16 +676,8 @@ class CompositeApp:
     
     def build_setup_tab(self):
         """Build the Setup & Statistics tab."""
-        # Left side: Controls (fixed width to match Preview tab)
-        left_frame = ttk.Frame(self.setup_tab, width=280)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
-        left_frame.pack_propagate(False)  # Maintain fixed width
-        # Sticky logo header at top of control panel.
-        left_header = tk.Frame(left_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
-        left_header.pack(side=tk.TOP, fill=tk.X)
-        self._add_bneir_logo(left_header)
-        self._add_report_issue_button(left_frame)
-        
+        control_container, left_frame = self._make_scrollable_control_panel(self.setup_tab)
+
         # Right side: Two-panel layout (Statistics Table, Progress Table)
         right_frame = ttk.Frame(self.setup_tab)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -317,12 +695,23 @@ class CompositeApp:
         ttk.Button(folders_group, text="Output", command=self.select_output_folder).pack(pady=(0, 2))
         self.output_folder_label = ttk.Label(folders_group, text=f"Output: {self.output_dir}", font=("TkDefaultFont", 9), foreground="gray")
         self.output_folder_label.pack(pady=(0, 0))
+
+        import_group = ttk.LabelFrame(left_frame, text="Import session", padding=10)
+        import_group.pack(fill=tk.X, pady=5)
+        ttk.Button(import_group, text="HDF5", command=self.import_hdf5_session).pack(pady=(0, 2))
+        self.hdf5_session_label = ttk.Label(
+            import_group,
+            text="HDF5: None",
+            font=("TkDefaultFont", 9),
+            foreground="gray",
+            wraplength=260,
+        )
+        self.hdf5_session_label.pack(pady=(0, 0))
         
         # Element and Pixel Size controls
         element_pixel_frame = ttk.LabelFrame(left_frame, text="Element & Pixel Size", padding=10)
         element_pixel_frame.pack(fill=tk.X, pady=5)
-        element_pixel_frame.columnconfigure(0, weight=1)
-        element_pixel_frame.columnconfigure(1, weight=0, minsize=80)
+        self._configure_form_grid(element_pixel_frame)
         
         # Element dropdown
         ttk.Label(element_pixel_frame, text="Element:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
@@ -336,16 +725,16 @@ class CompositeApp:
         self.element.trace('w', lambda *args: (self.update_unit_dropdown(), self.update_statistics_table()))
         self.unit.trace('w', lambda *args: self.update_statistics_table())
         
-        # Pixel Size input
-        ttk.Label(element_pixel_frame, text="Pixel Size (µm):").grid(row=2, column=0, sticky="e", padx=5, pady=2)
-        pixel_entry_frame = ttk.Frame(element_pixel_frame)
-        pixel_entry_frame.grid(row=2, column=1, sticky="w", padx=5, pady=2)
-        ttk.Entry(pixel_entry_frame, textvariable=self.pixel_size, width=10).pack(side="top", anchor="w")
-        ttk.Label(pixel_entry_frame, text="Hint: In your metadata", style="Hint.TLabel").pack(side="top", anchor="w", pady=(2, 0))
-        
+        self._grid_unit_entry(element_pixel_frame, 2, "Pixel size:", self.pixel_size, entry_width=4)
+        ttk.Label(
+            element_pixel_frame,
+            text="Hint: See metadata",
+            style="Hint.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=(0, 4))
+
         # Multiple sizes checkbox
         multi_size_frame = ttk.Frame(element_pixel_frame)
-        multi_size_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
+        multi_size_frame.grid(row=4, column=0, columnspan=2, sticky="w", padx=5, pady=(0, 0))
         ttk.Checkbutton(multi_size_frame, text="Multiple sizes?", variable=self.use_custom_pixel_sizes).pack(side="top", anchor="w")
         ttk.Button(multi_size_frame, text="Pixel Sizes", command=self.handle_pixel_sizes).pack(side="top", anchor="w", pady=(5, 0))
         
@@ -388,21 +777,23 @@ class CompositeApp:
         self.batch_progress_label = ttk.Label(self.batch_progress_frame, text="", style="Hint.TLabel")
         self.batch_progress_label.pack(anchor="w")
         
-        # Progress Log at bottom of control panel
+        # Status Log (inside scrollable control panel)
         log_group = ttk.LabelFrame(left_frame, text="Status Log", padding=5)
-        log_group.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
-        
+        log_group.pack(fill=tk.X, pady=5)
+
         log_frame = ttk.Frame(log_group)
         log_frame.pack(fill=tk.BOTH, expand=True)
-        
+
         custom_font = font.Font(family="Arial", size=14, slant="roman")
         self.log = tk.Text(log_frame, height=12, width=30, wrap="word", font=custom_font)
         log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scrollbar.set)
-        
+
         self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
+        self._add_report_issue_button(left_frame)
+
         # Use PanedWindow to create resizable sections
         paned = ttk.PanedWindow(right_frame, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -590,16 +981,8 @@ class CompositeApp:
     
     def build_preview_tab(self):
         """Build the Preview & Export tab."""
-        # Left side: Controls (fixed width to match Setup tab)
-        control_frame = ttk.Frame(self.preview_tab, width=280)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
-        control_frame.pack_propagate(False)  # Maintain fixed width
-        # Sticky logo header at top of control panel.
-        control_header = tk.Frame(control_frame, bg=getattr(self, "_gui_bg", "#f0f0f0"))
-        control_header.pack(side=tk.TOP, fill=tk.X)
-        self._add_bneir_logo(control_header)
-        self._add_report_issue_button(control_frame)
-        
+        control_container, control_frame = self._make_scrollable_control_panel(self.preview_tab)
+
         # Right side: Preview pane
         preview_frame = ttk.Frame(self.preview_tab)
         preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -626,17 +1009,13 @@ class CompositeApp:
         # Layout controls
         layout_frame = ttk.LabelFrame(control_frame, text="Layout", padding=10)
         layout_frame.pack(fill=tk.X, pady=5)
-        layout_frame.columnconfigure(0, weight=1)
-        layout_frame.columnconfigure(1, weight=0, minsize=80)
+        self._configure_form_grid(layout_frame)
         
-        # Scale bar length
-        ttk.Label(layout_frame, text="Scale bar length (µm):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        scale_bar_entry = ttk.Entry(layout_frame, textvariable=self.scale_bar_length_um, width=8)
-        scale_bar_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        self._grid_unit_entry(layout_frame, 0, "Scale bar:", self.scale_bar_length_um, entry_width=4)
         
         # Rows
         ttk.Label(layout_frame, text="Rows:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=8)
+        rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=4)
         rows_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         
         # Use best layout (auto rows to minimize blank cells; same as batch)
@@ -645,38 +1024,56 @@ class CompositeApp:
         # Display controls
         display_frame = ttk.LabelFrame(control_frame, text="Display", padding=10)
         display_frame.pack(fill=tk.X, pady=5)
-        display_frame.columnconfigure(0, weight=1)
-        display_frame.columnconfigure(1, weight=0, minsize=80)
+        self._configure_form_grid(display_frame, label_minsize=88)
         
-        # Color scheme
-        ttk.Label(display_frame, text="Color Scheme:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.color_scheme_dropdown = ttk.Combobox(display_frame, textvariable=self.color_scheme, values=plt.colormaps(), width=8)
-        self.color_scheme_dropdown.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        # Color scheme — wheel icon on the left so it is not clipped by the narrow sidebar
+        ttk.Label(display_frame, text="Colormap:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        scheme_row = ttk.Frame(display_frame)
+        scheme_row.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+        self._add_colormap_guide_trigger(scheme_row)
+        self.color_scheme_dropdown = ttk.Combobox(
+            scheme_row,
+            textvariable=self.color_scheme,
+            values=self._colormap_dropdown_values(),
+            width=8,
+            state="readonly",
+        )
+        self.color_scheme_dropdown.pack(side=tk.LEFT)
         
         # Scale max
-        ttk.Label(display_frame, text="Scale Max:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        scale_max_entry = ttk.Entry(display_frame, textvariable=self.scale_max, width=8)
+        ttk.Label(display_frame, text="Scale max:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        scale_max_entry = ttk.Entry(display_frame, textvariable=self.scale_max, width=6)
         scale_max_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         
         # Log Scale
-        ttk.Checkbutton(display_frame, text="Log Scale", variable=self.use_log).grid(row=2, column=0, columnspan=2, pady=2)
+        ttk.Checkbutton(display_frame, text="Log scale", variable=self.use_log).grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2
+        )
 
-        # Export image format (composite output)
-        ttk.Label(display_frame, text="Export format:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(display_frame, text="Background:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        self.export_background_dropdown = ttk.Combobox(
+            display_frame,
+            textvariable=self.export_background,
+            values=["Colormap low", "Black", "White"],
+            width=10,
+            state="readonly",
+        )
+        self.export_background_dropdown.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+
+        ttk.Label(display_frame, text="Export:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
         self.export_format_dropdown = ttk.Combobox(
             display_frame,
             textvariable=self.export_image_format,
             values=["PNG", "TIFF"],
-            width=8,
+            width=6,
             state="readonly",
         )
-        self.export_format_dropdown.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        self.export_format_dropdown.grid(row=4, column=1, padx=5, pady=2, sticky="w")
         
         # Label font size: same style for each — (None) = off/default, then point sizes
         font_frame = ttk.LabelFrame(control_frame, text="Label font size", padding=10)
         font_frame.pack(fill=tk.X, pady=5)
-        font_frame.columnconfigure(0, weight=1)
-        font_frame.columnconfigure(1, weight=0, minsize=80)
+        self._configure_form_grid(font_frame)
         ttk.Label(font_frame, text="Font family:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.overlay_font_family_dropdown = ttk.Combobox(
             font_frame,
@@ -706,6 +1103,10 @@ class CompositeApp:
         self.color_bar_font.trace_add("write", _refresh_preview_on_font_change)
         self.add_credit_to_exports.trace_add("write", _refresh_preview_on_font_change)
         self.overlay_font_family.trace_add("write", _refresh_preview_on_font_change)
+        self.export_background.trace_add("write", _refresh_preview_on_font_change)
+        self.color_scheme.trace_add("write", _refresh_preview_on_font_change)
+        self.scale_max.trace_add("write", _refresh_preview_on_font_change)
+        self.use_log.trace_add("write", _refresh_preview_on_font_change)
 
         # Action buttons
         action_frame = ttk.Frame(control_frame)
@@ -748,21 +1149,23 @@ class CompositeApp:
         self.save_matrix_btn.pack(pady=(0, 5))
         self._update_save_matrix_button_state()
         
-        # Progress Log at bottom of control panel
+        # Status Log (inside scrollable control panel)
         log_group_preview = ttk.LabelFrame(control_frame, text="Status Log", padding=5)
-        log_group_preview.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False, padx=5, pady=5)
-        
+        log_group_preview.pack(fill=tk.X, pady=5)
+
         log_frame_preview = ttk.Frame(log_group_preview)
         log_frame_preview.pack(fill=tk.BOTH, expand=True)
-        
+
         custom_font_preview = font.Font(family="Arial", size=14, slant="roman")
         self.log_preview = tk.Text(log_frame_preview, height=12, width=30, wrap="word", font=custom_font_preview)
         log_scrollbar_preview = ttk.Scrollbar(log_frame_preview, orient=tk.VERTICAL, command=self.log_preview.yview)
         self.log_preview.configure(yscrollcommand=log_scrollbar_preview.set)
-        
+
         self.log_preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scrollbar_preview.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
+        self._add_report_issue_button(control_frame)
+
         # Preview pane
         self.preview_container = ttk.Frame(preview_frame)
         self.preview_container.pack(fill=tk.BOTH, expand=True)
@@ -839,9 +1242,9 @@ class CompositeApp:
             pass
 
     def _add_report_issue_button(self, parent):
-        """Add a bottom utility button to open the GitHub issue page."""
+        """Add a utility button to open the GitHub issue page."""
         row = ttk.Frame(parent)
-        row.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 2))
+        row.pack(fill=tk.X, pady=(6, 2))
         issue_icon = self.button_icons.get('report_issue')
         if issue_icon:
             btn = tk.Button(
@@ -934,6 +1337,7 @@ class CompositeApp:
             'batch': 'batch.png',
             'progress': 'progress.png',
             'report_issue': 'report_issue_button.png',
+            'color_picker': 'color_picker.png',
         }
         
         # Try to load embedded icons as fallback
@@ -1036,12 +1440,141 @@ class CompositeApp:
         folder_selected = filedialog.askdirectory(initialdir=self.input_dir or ".", title="Select Input Directory")
         if folder_selected:
             self.input_dir = folder_selected
+            self.hdf5_session_path = None
+            self.hdf5_session_meta = None
+            self.hdf5_pixel_sizes_xy = {}
+            if hasattr(self, "hdf5_session_label"):
+                self.hdf5_session_label.config(text="HDF5: None")
             self.log_print(f"Input folder updated to: {self.input_dir}")
             self.update_element_dropdown()
             if hasattr(self, 'input_folder_label'):
                 self.input_folder_label.config(text=f"Input: {self.input_dir}")
             # Scan and populate progress table
             self.scan_progress_table()
+
+    def import_hdf5_session(self):
+        """Import a single HDF5 imaging session (file-level, not folder scan)."""
+        initial = self.hdf5_session_path or self.input_dir or "."
+        if initial and os.path.isfile(initial):
+            initial = os.path.dirname(initial)
+        path = filedialog.askopenfilename(
+            initialdir=initial,
+            title="Import HDF5 session",
+            filetypes=[
+                ("HDF5 session", "*.h5 *.hdf5 *.io4 *.vit"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            if not hdf5_session.is_hdf5_session(path):
+                custom_dialogs.showerror(
+                    self.master,
+                    "Not an HDF5 session",
+                    "The selected file does not look like a supported HDF5 imaging session.",
+                )
+                return
+            meta = hdf5_session.read_session_metadata(path)
+        except ImportError as exc:
+            custom_dialogs.showerror(self.master, "Missing dependency", str(exc))
+            return
+        except Exception as exc:
+            custom_dialogs.showerror(self.master, "HDF5 import failed", str(exc))
+            return
+
+        self.hdf5_session_path = path
+        self.hdf5_session_meta = meta
+        self.input_dir = None
+        self.matrices = []
+        self.labels = []
+        if hasattr(self, "input_folder_label"):
+            self.input_folder_label.config(text="Input: None (HDF5 session)")
+        self.apply_hdf5_session_metadata(meta)
+        basename = os.path.basename(path)
+        if hasattr(self, "hdf5_session_label"):
+            self.hdf5_session_label.config(text=f"HDF5: {basename}")
+        self.log_print(f"HDF5 session imported: {path}")
+        self.log_print(f"  Imaging model: {meta.imaging_model.value}")
+        if meta.active_group:
+            self.log_print(f"  Active image group: {meta.active_group}")
+        self.log_print(f"  Samples: {len(meta.samples)}; ppm channels: {len(meta.ppm_channels)}")
+
+    def apply_hdf5_session_metadata(self, meta):
+        """Populate progress table and element dropdown from HDF5 session metadata."""
+        def elem_sort_key(elem):
+            m = re.search(r"(\D+)(\d+)$", elem)
+            if m:
+                return (m.group(1), int(m.group(2)))
+            return (elem, 0)
+
+        self.progress_samples = sorted([s.name for s in meta.samples], key=self._natural_sort_key)
+        self.progress_columns = [(elem, "ppm") for elem in sorted(meta.ppm_channels, key=elem_sort_key)]
+        self.progress_elements = sorted(meta.ppm_channels, key=elem_sort_key)
+        self.progress_data = {}
+        self.hdf5_pixel_sizes_xy = {}
+        self.custom_pixel_sizes = {}
+
+        for sample in self.progress_samples:
+            if sample not in self.sample_include:
+                self.sample_include[sample] = True
+
+        sample_geom = {s.name: s for s in meta.samples}
+        for sample in self.progress_samples:
+            geom = sample_geom.get(sample)
+            if geom and geom.pixel_size_x_um and geom.pixel_size_y_um:
+                self.hdf5_pixel_sizes_xy[sample] = (geom.pixel_size_x_um, geom.pixel_size_y_um)
+                self.custom_pixel_sizes[sample] = geom.pixel_size_x_um
+
+        for sample in self.progress_samples:
+            for element in self.progress_elements:
+                unit_type = "ppm"
+                # All ppm outputs in the session are loadable; groupChannelNames only
+                # reflects which channels were active in the imaging UI when saved.
+                self.progress_data[(sample, element, unit_type)] = None
+
+        if meta.samples:
+            active = meta.active_group or meta.samples[0].name
+            geom = sample_geom.get(active) or meta.samples[0]
+            if geom.pixel_size_x_um:
+                self.pixel_size.set(round(geom.pixel_size_x_um, 4))
+            if geom.pixel_size_x_um and geom.pixel_size_y_um:
+                if abs(geom.pixel_size_x_um - geom.pixel_size_y_um) > 0.01:
+                    self.log_print(
+                        f"  Pixel size (µm): X={geom.pixel_size_x_um:.4g}, "
+                        f"Y={geom.pixel_size_y_um:.4g} (anisotropic; X used for scale bar)"
+                    )
+                else:
+                    self.log_print(f"  Pixel size (µm): {geom.pixel_size_x_um:.4g}")
+        try:
+            from scipy.interpolate import griddata  # noqa: F401
+        except ImportError:
+            self.log_print(
+                "  Note: install scipy for gap interpolation between laser spots "
+                "(pip install scipy)"
+            )
+
+        if hasattr(self, "element_dropdown"):
+            self.element_dropdown["values"] = self.progress_elements
+            self.element_dropdown["state"] = "readonly"
+        if hasattr(self, "element_dropdown_preview"):
+            self.element_dropdown_preview["values"] = self.progress_elements
+            self.element_dropdown_preview["state"] = "readonly"
+        if self.progress_elements and (
+            not self.element.get() or self.element.get() not in self.progress_elements
+        ):
+            self.element.set(self.progress_elements[0])
+        self.unit.set("ppm")
+        self.update_unit_dropdown()
+        self._check_existing_progress()
+        if hasattr(self, "progress_table") and self.progress_table is not None:
+            self.update_progress_table()
+
+    def _has_data_source(self):
+        return bool(
+            (self.input_dir and os.path.isdir(self.input_dir))
+            or self.hdf5_session_path
+        )
 
     def select_output_folder(self):
         folder_selected = filedialog.askdirectory(initialdir=self.output_dir, title="Select Output Directory")
@@ -1345,7 +1878,11 @@ class CompositeApp:
             else:
                 return
         
-        # Populate table
+        # Populate table (optionally limit to current session samples)
+        if stats_df is not None and self.progress_samples:
+            stats_df = stats_df[stats_df["Sample"].isin(self.progress_samples)]
+        if stats_df is None or stats_df.empty:
+            return
         for _, row in stats_df.iterrows():
             values = (
                 str(row.get('Sample', '')),
@@ -1651,8 +2188,12 @@ class CompositeApp:
 
     def batch_process_all_elements(self):
         """Process all elements found in the input folder automatically."""
-        if not self.input_dir:
-            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
+        if not self._has_data_source():
+            custom_dialogs.showerror(
+                self.master,
+                "Error",
+                "Select an input folder or import an HDF5 session first.",
+            )
             return
         
         # Only prompt for output folder if not already selected
@@ -1990,16 +2531,23 @@ class CompositeApp:
             self.generate_pixel_size_template()
 
     def generate_pixel_size_template(self):
-        if not self.input_dir:
-            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
+        if not self._has_data_source():
+            custom_dialogs.showerror(
+                self.master,
+                "Error",
+                "Select an input folder or import an HDF5 session first.",
+            )
             return
 
         samples = set()
-        for file in self._iter_matrix_files(self.input_dir):
-            parsed = self.parse_matrix_filename(file)
-            if parsed:
-                sample, _, _ = parsed
-                samples.add(sample)
+        if self.hdf5_session_path and self.progress_samples:
+            samples = set(self.progress_samples)
+        elif self.input_dir:
+            for file in self._iter_matrix_files(self.input_dir):
+                parsed = self.parse_matrix_filename(file)
+                if parsed:
+                    sample, _, _ = parsed
+                    samples.add(sample)
 
         if not samples:
             custom_dialogs.showerror(self.master, "Error", "No valid sample files found in the input directory.")
@@ -2017,15 +2565,23 @@ class CompositeApp:
             self.log_print(f"✅ Saved pixel size template to {save_path}")
 
     def handle_pixel_sizes(self):
-        if not self.input_dir:
-            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
+        if not self._has_data_source():
+            custom_dialogs.showerror(
+                self.master,
+                "Error",
+                "Select an input folder or import an HDF5 session first.",
+            )
             return
 
         self.import_custom_pixel_sizes()
 
     def load_data(self):
-        if not self.input_dir:
-            custom_dialogs.showerror(self.master, "Error", "Please select an input folder first.")
+        if not self._has_data_source():
+            custom_dialogs.showerror(
+                self.master,
+                "Error",
+                "Select an input folder or import an HDF5 session first.",
+            )
             return
         # Only prompt for output folder if not already selected
         if not self.output_dir or not os.path.isdir(self.output_dir):
@@ -2034,41 +2590,77 @@ class CompositeApp:
         self.set_status("Busy")
         element = self.element.get()
         unit = self.unit.get()
-        # Search for files with old format (ppm/CPS) and new format (raw, no unit)
-        # Filter by selected unit so ppm and CPS are never mixed
-        if unit == 'ppm':
-            files = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
-        elif unit == 'CPS':
-            files = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
-        elif unit == 'raw':
-            files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
-        else:
-            # No unit selected - check if both ppm and CPS exist (would mix units)
-            files_ppm = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
-            files_CPS = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
-            has_ppm = bool(files_ppm)
-            has_CPS = bool(files_CPS)
-            if has_ppm and has_CPS:
-                custom_dialogs.showerror(self.master, "Unit Required",
-                    f"Element {element} has both ppm and CPS files. Please select a unit from the Unit dropdown.")
-                return
-            # Single unit or raw only - use appropriate pattern
-            if has_ppm:
-                files = files_ppm
-            elif has_CPS:
-                files = files_CPS
-            else:
-                files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
-        # Restrict to selected samples (Progress table Include column)
-        selected = set(self.get_selected_samples())
-        files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected and (not unit or parsed[2] == unit)]
+        load_tasks = []
 
-        if not files:
-            custom_dialogs.showerror(self.master, "Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
-            return
+        if self.hdf5_session_path:
+            meta = self.hdf5_session_meta or hdf5_session.read_session_metadata(
+                self.hdf5_session_path
+            )
+            self.hdf5_session_meta = meta
+            if unit == "ppm" and element not in meta.ppm_channels:
+                custom_dialogs.showerror(
+                    self.master,
+                    "Error",
+                    f"Element {element} is not available as ppm in this HDF5 session.",
+                )
+                return
+            selected = set(self.get_selected_samples())
+            for sample_geom in meta.samples:
+                if sample_geom.name not in selected:
+                    continue
+                load_tasks.append(
+                    {"sample": sample_geom.name, "path": None, "unit_type": unit or "ppm"}
+                )
+            if not load_tasks:
+                custom_dialogs.showerror(
+                    self.master,
+                    "Error",
+                    f"No selected samples for element {element}. "
+                    "Use the Progress table checkboxes to include at least one sample.",
+                )
+                return
+        else:
+            # Search for files with old format (ppm/CPS) and new format (raw, no unit)
+            # Filter by selected unit so ppm and CPS are never mixed
+            if unit == 'ppm':
+                files = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
+            elif unit == 'CPS':
+                files = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
+            elif unit == 'raw':
+                files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
+            else:
+                # No unit selected - check if both ppm and CPS exist (would mix units)
+                files_ppm = self._iter_matrix_files(self.input_dir, f"* {element}_ppm matrix")
+                files_CPS = self._iter_matrix_files(self.input_dir, f"* {element}_CPS matrix")
+                has_ppm = bool(files_ppm)
+                has_CPS = bool(files_CPS)
+                if has_ppm and has_CPS:
+                    custom_dialogs.showerror(self.master, "Unit Required",
+                        f"Element {element} has both ppm and CPS files. Please select a unit from the Unit dropdown.")
+                    return
+                # Single unit or raw only - use appropriate pattern
+                if has_ppm:
+                    files = files_ppm
+                elif has_CPS:
+                    files = files_CPS
+                else:
+                    files = [f for f in self._iter_matrix_files(self.input_dir, f"* {element} matrix") if (p := self.parse_matrix_filename(f)) and p[2] == 'raw']
+            # Restrict to selected samples (Progress table Include column)
+            selected = set(self.get_selected_samples())
+            files = [f for f in files if (parsed := self.parse_matrix_filename(f)) and parsed[0] in selected and (not unit or parsed[2] == unit)]
+
+            if not files:
+                custom_dialogs.showerror(self.master, "Error", f"No files for element {element} among selected samples. Use the Progress table checkboxes to include at least one sample with data for this element.")
+                return
+
+            for f in files:
+                parsed = self.parse_matrix_filename(f)
+                if parsed:
+                    sample, _, unit_type = parsed
+                    load_tasks.append({"sample": sample, "path": f, "unit_type": unit_type})
 
         # Share progress bar with Batch so user sees live progress (same as batch processing)
-        num_files = len(files)
+        num_files = len(load_tasks)
         self._stats_calculating = True
         if hasattr(self, 'summarize_btn'):
             self.summarize_btn.config(state=tk.DISABLED)
@@ -2086,7 +2678,7 @@ class CompositeApp:
             existing_stats_df = None
             existing_samples = set()
 
-            if os.path.exists(stats_path):
+            if not self.hdf5_session_path and os.path.exists(stats_path):
                 try:
                     existing_stats_df = pd.read_csv(stats_path)
                     if 'Sample' in existing_stats_df.columns:
@@ -2096,14 +2688,8 @@ class CompositeApp:
                     self.log_print(f"⚠️ Could not read existing statistics: {e}")
 
             # Determine if we need to calculate statistics
-            # Get list of samples from files
-            samples_from_files = set()
-            for f in files:
-                parsed = self.parse_matrix_filename(f)
-                if parsed:
-                    sample, parsed_element, _ = parsed
-                    if parsed_element == element:
-                        samples_from_files.add(sample)
+            # Get list of samples from load tasks
+            samples_from_files = {task["sample"] for task in load_tasks}
 
             # Check if all samples already have statistics
             all_samples_exist = existing_samples and samples_from_files.issubset(existing_samples)
@@ -2125,77 +2711,88 @@ class CompositeApp:
             # If using custom pixel sizes, only load data for samples present in the custom file
             samples_to_load = set(self.custom_pixel_sizes.keys()) if self.use_custom_pixel_sizes.get() else None
 
-            for idx, f in enumerate(files, 1):
-                display_name = os.path.basename(f)
-                parsed = self.parse_matrix_filename(f)
-                if parsed:
-                    sample, parsed_element, unit_type = parsed
-                    display_name = sample
-                    # Verify the element matches (safety check)
-                    if parsed_element != element:
-                        continue
-                    if samples_to_load is None or sample in samples_to_load:
-                        if self.current_element_unit is None:
-                            self.current_element_unit = unit_type
-                        # Check if this sample is new
-                        is_new = sample not in existing_samples
+            for idx, task in enumerate(load_tasks, 1):
+                sample = task["sample"]
+                unit_type = task["unit_type"]
+                f = task["path"]
+                display_name = sample if f is None else os.path.basename(f)
 
-                        try:
-                            matrix = self.load_matrix_2d(f)
-                            self.labels.append(sample)
-                            self.matrices.append(matrix)
-                        except (FileNotFoundError, Exception) as e:
-                            # Handle Dropbox sync issues or other file loading errors
-                            error_msg = str(e)
-                            self.log_print(f"❌ Failed to load {sample}: {error_msg}")
-                            # Continue processing other files instead of stopping
-                            continue
+                if samples_to_load is None or sample in samples_to_load:
+                    if self.current_element_unit is None:
+                        self.current_element_unit = unit_type
+                    is_new = sample not in existing_samples
 
-                        # Get the pixel size for this sample
-                        if self.use_custom_pixel_sizes.get() and sample in self.custom_pixel_sizes:
-                            pixel_size = self.custom_pixel_sizes[sample]
+                    try:
+                        if f is None:
+                            matrix = hdf5_session.reconstruct_raster(
+                                self.hdf5_session_path,
+                                sample,
+                                element,
+                                unit=unit_type or "ppm",
+                            )
                         else:
-                            pixel_size = self.pixel_size.get()
+                            matrix = self.load_matrix_2d(f)
+                        self.labels.append(sample)
+                        self.matrices.append(matrix)
+                    except NotImplementedError as e:
+                        custom_dialogs.showerror(self.master, "Not supported yet", str(e))
+                        self.set_status("Idle")
+                        return
+                    except (FileNotFoundError, Exception) as e:
+                        error_msg = str(e)
+                        self.log_print(f"❌ Failed to load {sample}: {error_msg}")
+                        continue
 
-                        self.pixel_sizes_by_sample[sample] = pixel_size
+                    if sample in self.hdf5_pixel_sizes_xy:
+                        pixel_size = self.hdf5_pixel_sizes_xy[sample][0]
+                    elif self.use_custom_pixel_sizes.get() and sample in self.custom_pixel_sizes:
+                        pixel_size = self.custom_pixel_sizes[sample]
+                    else:
+                        pixel_size = self.pixel_size.get()
 
-                        # Only process statistics and histograms for new samples
-                        if is_new:
-                            new_samples.append(sample)
+                    self.pixel_sizes_by_sample[sample] = pixel_size
 
-                            # Calculate percentiles, IQR, and mean
-                            p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
-                            iqr = p75 - p25
-                            mean = np.nanmean(matrix)
-                            percentiles.append((sample, p25, p50, p75, p99))
-                            iqrs.append((sample, iqr))
-                            means.append((sample, mean))
+                    if is_new:
+                        new_samples.append(sample)
 
-                            # Generate and save histogram
-                            plt.figure(figsize=(10, 6))
-                            plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
-                            plt.title(f"Histogram for {sample}")
-                            plt.xlabel("Value")
-                            plt.ylabel("Frequency")
-                            hist_path = os.path.join(self.output_dir, elem_out, 'Histograms', f"{sample}_histogram.png")
-                            os.makedirs(os.path.dirname(hist_path), exist_ok=True)
-                            plt.savefig(hist_path)
-                            plt.close()
+                        p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
+                        iqr = p75 - p25
+                        mean = np.nanmean(matrix)
+                        percentiles.append((sample, p25, p50, p75, p99))
+                        iqrs.append((sample, iqr))
+                        means.append((sample, mean))
 
-                            # Update progress table for this sample
-                            if hasattr(self, 'progress_table') and self.progress_table:
-                                self.update_sample_element_progress(sample, element, 'partial')
-                                self.update_progress_table()
+                        plt.figure(figsize=(10, 6))
+                        plt.hist(matrix.flatten(), bins=50, range=(0, np.nanpercentile(matrix, 99)))
+                        plt.title(f"Histogram for {sample}")
+                        plt.xlabel("Value")
+                        plt.ylabel("Frequency")
+                        hist_path = os.path.join(self.output_dir, elem_out, 'Histograms', f"{sample}_histogram.png")
+                        os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+                        plt.savefig(hist_path)
+                        plt.close()
 
-                # Update shared progress bar every file so user sees live progress (same as batch)
+                        if hasattr(self, 'progress_table') and self.progress_table:
+                            self.update_sample_element_progress(sample, element, 'partial')
+                            self.update_progress_table()
+
                 if hasattr(self, 'batch_progress_bar'):
                     self.batch_progress_bar['value'] = (idx / num_files) * 100
                 if hasattr(self, 'batch_progress_label'):
                     self.batch_progress_label.config(text=f"Sample {idx} of {num_files}: {display_name}")
                 self.master.update()
 
-            # Merge new statistics with existing ones
-            if existing_stats_df is not None and new_samples:
+            # Merge new statistics with existing ones (folder workflow only)
+            if self.hdf5_session_path:
+                percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
+                iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
+                mean_df = pd.DataFrame(means, columns=['Sample', 'Mean'])
+                stats_df = percentiles_df.merge(iqr_df, on='Sample').merge(mean_df, on='Sample')
+                stats_df['Alias'] = stats_df['Sample'].map(lambda s: self.sample_aliases.get(s, s))
+                stats_df = stats_df.map(lambda x: float(f"{x:.5g}") if isinstance(x, (int, float)) else x)
+                os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+                stats_df.to_csv(stats_path, index=False)
+            elif existing_stats_df is not None and new_samples:
                 # Create new statistics DataFrame
                 new_percentiles_df = pd.DataFrame(percentiles, columns=['Sample', '25th Percentile', '50th Percentile', '75th Percentile', '99th Percentile'])
                 new_iqr_df = pd.DataFrame(iqrs, columns=['Sample', 'IQR'])
@@ -2822,7 +3419,7 @@ class CompositeApp:
         color_bar_ax = fig.add_subplot(inner_gs[0, 0])
         scale_bar_ax = fig.add_subplot(inner_gs[1, 0])
         axs[rows - 1, cols] = color_bar_ax
-        cmap = matplotlib.colormaps.get_cmap(self.color_scheme.get())
+        cmap = matplotlib.colormaps.get_cmap(self.color_scheme.get()).copy()
 
         scale_max = self.scale_max.get()
 
@@ -2831,9 +3428,9 @@ class CompositeApp:
         else:
             norm = Normalize(vmin=0, vmax=scale_max)
 
-        bg_color = cmap(0)
+        bg_color, text_color = self._resolve_export_background(cmap)
         fig.patch.set_facecolor(bg_color)
-        text_color = 'white' if np.mean(bg_color[:3]) < 0.5 else 'black'
+        cmap.set_bad(color=bg_color)
 
         percentiles = []
         iqrs = []
@@ -2852,13 +3449,14 @@ class CompositeApp:
             # Get the pixel size for this sample
             pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
             H, W = matrix.shape[0], matrix.shape[1]
+            masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
             if pixel_size and float(pixel_size) > 0:
                 dx = float(pixel_size)
                 extent = [0, W * dx, 0, H * dx]
-                im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
+                im = ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
                 ax.set_aspect('equal')
             else:
-                im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
+                im = ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
                 ax.set_aspect('auto')
             if show_subplot_label:
                 # Sample names go on overlay layer (for future editing); keep title empty in base
@@ -2886,36 +3484,18 @@ class CompositeApp:
             elem_out = self.get_element_output_subdir()
             subplot_path = os.path.join(self.output_dir, elem_out, 'subplots', f"{label}.png")
             os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
-            
-            if not os.path.exists(subplot_path) or os.path.getsize(subplot_path) == 0:
-                # Create a new figure for the individual subplot
-                subplot_fig, subplot_ax = plt.subplots()
-                subplot_fig.patch.set_facecolor(bg_color)
-                subplot_ax.set_facecolor(bg_color)
-                
-                # Create a masked array for NaN values
-                masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
-                if pixel_size and float(pixel_size) > 0:
-                    dx = float(pixel_size)
-                    extent = [0, W * dx, 0, H * dx]
-                    subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
-                    subplot_ax.set_aspect('equal')
-                else:
-                    subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
-                    subplot_ax.set_aspect('auto')
-                if show_subplot_label:
-                    subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
-                else:
-                    subplot_ax.set_title("", color=text_color)
-                subplot_ax.axis('off')
-                subplot_fig.savefig(subplot_path, dpi=300, bbox_inches='tight', transparent=True)
-                plt.close(subplot_fig)
-                if preview:
-                    # Subplot generated - progress table will show status
-                    pass
-            else:
-                # Skipping - progress table will show status
-                pass
+            self._save_canonical_subplot(
+                subplot_path,
+                matrix,
+                label,
+                cmap,
+                norm,
+                bg_color,
+                text_color,
+                pixel_size,
+                font_size,
+                show_subplot_label,
+            )
 
             # Calculate percentiles, IQR, and mean
             p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
