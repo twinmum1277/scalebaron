@@ -18,7 +18,7 @@ ScaleBarOn is aimed at researchers working with laser ablation / elemental imagi
 **ScaleBarOn**
 
 - Folder-based loading of matrix files (`.xlsx` / `.csv`) with a fixed filename convention
-- Optional import of **HDF5 imaging sessions** (CellSpace model; see [limitations](docs/troubleshooting.md#known-limitations))
+- Optional import of **HDF5 imaging sessions** (CellSpace model; see [limitations](docs_src/troubleshooting.md#known-limitations))
 - Shared **scale maximum** (suggested from the overall 99th percentile) with linear or pseudo-log display
 - Statistics table, progress tracking, and **batch processing** across elements/units
 - Composite export as **PNG** or **TIFF**, plus optional composite matrix for Muad'Data
@@ -51,7 +51,7 @@ pip install "scalebaron[optional]"
 
 Requires **Python 3.8+** and a working **Tkinter** GUI (usually included with Python).
 
-Full install details, virtual environments, and development (editable) installs: **[docs/installation.md](docs/installation.md)**.
+Full install details, virtual environments, and development (editable) installs: **[docs_src/installation.md](docs_src/installation.md)**.
 
 Platform-specific development notes:
 
@@ -75,7 +75,7 @@ Minimal ScaleBarOn workflow:
 3. On **Setup & Statistics**, click **Calculate statistics** (or run **Batch Processing**).
 4. On **Preview & Export**, adjust scale max / colormap if needed, then **Preview** and **Save Composite**.
 
-Step-by-step guide: **[docs/quick-start.md](docs/quick-start.md)**.
+Step-by-step guide: **[docs_src/quick-start.md](docs_src/quick-start.md)**.
 
 Example matrices for testing are under [`test/testdata/`](test/testdata/) (including [`test/testdata/csv/`](test/testdata/csv/)). Additional JAAS-related examples live in [`JAAS submission/`](JAAS%20submission/).
 
@@ -85,21 +85,21 @@ Example matrices for testing are under [`test/testdata/`](test/testdata/) (inclu
 
 | Guide | Contents |
 |-------|----------|
-| [Installation](docs/installation.md) | PyPI, GitHub, optional deps, editable installs |
-| [Quick start](docs/quick-start.md) | First session in ScaleBarOn and Muad'Data |
-| [Input files](docs/input-files.md) | Filename rules, CSV/XLSX, HDF5, pixel-size CSV |
-| [Scaling methods](docs/scaling-methods.md) | Scale max, linear vs log, layout, colormaps |
-| [Outputs](docs/outputs.md) | Folders and file formats produced by the apps |
-| [Troubleshooting](docs/troubleshooting.md) | Common problems and known limitations |
+| [Installation](docs_src/installation.md) | PyPI, GitHub, optional deps, editable installs |
+| [Quick start](docs_src/quick-start.md) | First session in ScaleBarOn and Muad'Data |
+| [Input files](docs_src/input-files.md) | Filename rules, CSV/XLSX, HDF5, pixel-size CSV |
+| [Scaling methods](docs_src/scaling-methods.md) | Scale max, linear vs log, layout, colormaps |
+| [Outputs](docs_src/outputs.md) | Folders and file formats produced by the apps |
+| [Troubleshooting](docs_src/troubleshooting.md) | Common problems and known limitations |
 
 ### Building the docs site
 
-Source Markdown lives in [`docs/`](docs/). The Sphinx project in [`sphinx_docs/`](sphinx_docs/) syncs those guides and builds HTML into [`_site/`](_site/) for GitHub Pages (`Settings → Pages → Deploy from branch → main → /_site`).
+Source Markdown lives in [`docs_src/`](docs_src/). The Sphinx project in [`sphinx_docs/`](sphinx_docs/) syncs those guides and builds HTML into [`docs/`](docs/) for GitHub Pages (`Settings → Pages → Deploy from branch → main → /docs`).
 
 ```bash
 pip install -r requirements-docs.txt
 cd sphinx_docs && make html
-# commit _site/ when publishing
+# commit docs/ when publishing
 ```
 
 ## Links

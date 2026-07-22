@@ -20,7 +20,7 @@ myst_heading_anchors = 3
 templates_path = ["_templates"]
 exclude_patterns = ["_synced/.gitkeep", "Thumbs.db", ".DS_Store", "Makefile", "conf.py"]
 
-# Keep doctrees out of the published _site/ tree.
+# Keep doctrees out of the published docs/ tree.
 doctreedir = "_build/doctrees"
 
 source_suffix = {

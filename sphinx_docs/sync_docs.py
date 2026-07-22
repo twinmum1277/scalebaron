@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy docs/ into sphinx_docs/_synced/ and rewrite out-of-tree links for GitHub Pages."""
+"""Copy docs_src/ into sphinx_docs/_synced/ and rewrite out-of-tree links for GitHub Pages."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DOCS_SRC = REPO_ROOT / "docs"
+DOCS_SRC = REPO_ROOT / "docs_src"
 SYNCED = Path(__file__).resolve().parent / "_synced"
 GITHUB = "https://github.com/twinmum1277/scalebaron/blob/main"
 GITHUB_TREE = "https://github.com/twinmum1277/scalebaron/tree/main"
