@@ -1,0 +1,101 @@
+# Quick start
+
+This walkthrough assumes ScaleBarOn is already installed. If not, see [installation.md](installation.md).
+
+## Launch the apps
+
+```bash
+scalebaron    # multi-map scaler / compositor
+muaddata      # single-map viewer and related tools
+```
+
+Both open as desktop GUIs. There are no CLI options beyond starting the program.
+
+## Example data
+
+You can try the bundled matrices without downloading anything:
+
+| Location | Contents |
+|----------|----------|
+| [`test/testdata/`](../test/testdata/) | Excel (`.xlsx`) matrices and related folders |
+| [`test/testdata/csv/`](../test/testdata/csv/) | Dense CSV matrices (JAAS-style S0–S4 grid); see that folder’s [README](../test/testdata/csv/README.md) |
+| [`JAAS submission/`](../JAAS%20submission/) | Additional matrices, example outputs, RGB test data, and a local demo movie |
+
+Optional helper:
+
+```bash
+download_test_elemental_images
+```
+
+This opens a folder chooser and attempts to download a fixed list of example `.xlsx` files from GitHub. If downloads fail, use the bundled `test/testdata/` files instead (see [troubleshooting.md](troubleshooting.md)).
+
+---
+
+## ScaleBarOn: first composite
+
+### 1. Start ScaleBarOn
+
+Run `scalebaron`. You will see two tabs:
+
+- **Setup & Statistics** — folders, element/unit selection, statistics, batch
+- **Preview & Export** — layout, colormap, scale max, preview, save
+
+### 2. Choose folders
+
+On **Setup & Statistics**:
+
+1. Click **Input** and select a folder that contains matrix files named correctly (see [input-files.md](input-files.md)).  
+   Example: `test/testdata/csv/` or a folder of `* matrix.xlsx` files.
+2. Click **Output** and choose where results should be written (default is a local `OUTPUT` folder if you do not change it).
+
+Alternatively, use **HDF5** under **Import session** for a supported imaging session file (CellSpace). Folder input and HDF5 are separate data sources.
+
+### 3. Calculate statistics
+
+1. Select an **Element** and **Unit** (`ppm`, `CPS`, or raw counts) from the dropdowns.
+2. Set **Pixel size** (µm) if you know it (hint: check your instrument metadata). For multiple sizes, see [input-files.md](input-files.md#custom-pixel-sizes).
+3. Click **Calculate statistics** (summarize control).
+
+ScaleBarOn loads matching matrices, writes histograms and a statistics CSV, and suggests a **Scale max** from the overall **99th percentile** of the loaded data.
+
+Use the **Progress Table** to include or exclude samples (checkboxes) and to see which sample–element pairs are complete, partial, or missing.
+
+### 4. Preview and save
+
+Switch to **Preview & Export**:
+
+1. Confirm **Element** / **Unit**.
+2. Optionally adjust **Scale max**, **Colormap**, **Log scale**, layout (**Rows** or **Use best layout**), fonts, and export format (**PNG** or **TIFF**).
+3. Click **Preview composite**.
+4. Click **Save Composite** when satisfied.
+
+Optional: **Save Composite Matrix (for Muad'Data)** writes a grid matrix you can open later in Muad'Data (disabled when “Multiple sizes?” is on, because per-panel pixel size is not stored in that matrix file).
+
+### 5. Batch (optional)
+
+On **Setup & Statistics**, **Batch Processing** walks through each detected element–unit combination: load statistics, set scale max from the 99th percentile, and save composites. Confirm the dialog before it starts; it can take a while for large folders.
+
+---
+
+## Muad'Data: view one map
+
+1. Run `muaddata`.
+2. Open the **Element Viewer** tab.
+3. Click **Load Matrix** and choose a `.xlsx` or `.csv` matrix (same naming convention as ScaleBarOn).
+4. Adjust colormap and min/max sliders; optionally show a scale bar.
+5. Use other tabs as needed:
+   - **RGB Overlay** — three channels as red/green/blue
+   - **Z-Stack / Sum** — align and sum multiple slices
+
+Save images or matrices from the controls in each tab when you need exports. Details on common outputs: [outputs.md](outputs.md).
+
+---
+
+## Suggested next reading
+
+- [Input files](input-files.md) — naming rules and HDF5 notes
+- [Scaling methods](scaling-methods.md) — how scale max and log mode work
+- [Outputs](outputs.md) — what appears in your output folder
+- [Troubleshooting](troubleshooting.md)
+
+Back to [README](../README.md).
