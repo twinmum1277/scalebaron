@@ -1,0 +1,103 @@
+# Installation
+
+This guide covers installing ScaleBarOn for everyday use and for development from a git clone.
+
+## Requirements
+
+- **Python 3.8 or newer**
+- **pip**
+- **Tkinter** (Python’s built-in GUI toolkit). Most official Python installers include it. If the apps fail to start with a Tk-related error, install or repair Tk for your platform.
+- A display (these tools are GUIs; they are not designed as headless command-line processors)
+
+## Install from PyPI (recommended)
+
+```bash
+pip install scalebaron
+```
+
+This installs the core dependencies listed in `requirements.txt`:
+
+| Package | Role |
+|---------|------|
+| NumPy | Array math |
+| Pandas | Tables and CSV/Excel helpers |
+| Matplotlib | Plots, composites, color maps |
+| openpyxl | Reading/writing `.xlsx` matrices |
+| Pillow | Image export and GUI images |
+| requests | Used by the test-data downloader |
+| h5py | HDF5 session import |
+
+## Optional packages
+
+Optional extras improve some Muad'Data features and icon rendering. They are **not** required for core ScaleBarOn compositing.
+
+```bash
+pip install "scalebaron[optional]"
+```
+
+From a clone you can instead run:
+
+```bash
+pip install -r requirements-optional.txt
+```
+
+| Package | Used for |
+|---------|----------|
+| SciPy | Mask morphology (specimen tool), mode statistic fallback, Pearson *p*-value in RGB ratio |
+| scikit-image | Contour finding in the beta specimen mask (Matplotlib fallback if absent) |
+| cairosvg | SVG logo/icon rendering (PNG icons are used if absent) |
+
+## Install from GitHub
+
+```bash
+pip install git+https://github.com/twinmum1277/scalebaron
+```
+
+## Confirm the install
+
+After installation, these commands should be available:
+
+```bash
+scalebaron
+muaddata
+download_test_elemental_images
+```
+
+You can also start ScaleBarOn as a module:
+
+```bash
+python -m scalebaron.scalebaron
+```
+
+There are **no command-line flags** for `scalebaron` or `muaddata`; options are set in the GUI.
+
+## Development (editable) install
+
+If you cloned the repository and want code changes to apply without reinstalling:
+
+1. Create and activate a virtual environment (recommended).
+2. From the repository root:
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install -r requirements-optional.txt   # optional
+pip install -e .
+```
+
+Or in one step after the venv is active:
+
+```bash
+pip install -e ".[optional]"
+```
+
+Detailed platform walkthroughs:
+
+- [INSTALL_WINDOWS_DEV.md](https://github.com/twinmum1277/scalebaron/blob/main/INSTALL_WINDOWS_DEV.md)
+- [INSTALL_MAC_DEV.md](https://github.com/twinmum1277/scalebaron/blob/main/INSTALL_MAC_DEV.md)
+
+## Related links
+
+- [Quick start](quick-start.md)
+- [Troubleshooting](troubleshooting.md)
+- Back to [README](https://github.com/twinmum1277/scalebaron/blob/main/README.md)

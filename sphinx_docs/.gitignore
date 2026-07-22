@@ -1,0 +1,3 @@
+_synced/*
+!_synced/.gitkeep
+_build/

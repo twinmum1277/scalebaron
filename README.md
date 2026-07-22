@@ -81,6 +81,8 @@ Example matrices for testing are under [`test/testdata/`](test/testdata/) (inclu
 
 ## Documentation
 
+**Hosted docs (GitHub Pages):** [https://twinmum1277.github.io/scalebaron/](https://twinmum1277.github.io/scalebaron/)
+
 | Guide | Contents |
 |-------|----------|
 | [Installation](docs/installation.md) | PyPI, GitHub, optional deps, editable installs |
@@ -89,6 +91,16 @@ Example matrices for testing are under [`test/testdata/`](test/testdata/) (inclu
 | [Scaling methods](docs/scaling-methods.md) | Scale max, linear vs log, layout, colormaps |
 | [Outputs](docs/outputs.md) | Folders and file formats produced by the apps |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and known limitations |
+
+### Building the docs site
+
+Source Markdown lives in [`docs/`](docs/). The Sphinx project in [`sphinx_docs/`](sphinx_docs/) syncs those guides and builds HTML into [`_site/`](_site/) for GitHub Pages (`Settings → Pages → Deploy from branch → main → /_site`).
+
+```bash
+pip install -r requirements-docs.txt
+cd sphinx_docs && make html
+# commit _site/ when publishing
+```
 
 ## Links
 

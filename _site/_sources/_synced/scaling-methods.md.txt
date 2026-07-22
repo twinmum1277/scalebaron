@@ -1,0 +1,67 @@
+# Scaling methods
+
+ScaleBarOn’s main purpose is to show **many samples of the same element** with a **shared intensity scale**, so bright and dark areas are comparable across the composite.
+
+## Shared scale maximum
+
+The **Scale max** control (Preview & Export tab) sets the upper end of the color scale for every panel of the current element/unit.
+
+### How the suggested value is chosen
+
+When you run **Calculate statistics** (or **Batch Processing**), ScaleBarOn:
+
+1. Loads all included samples for the selected element and unit.
+2. Computes percentiles (25th, 50th, 75th, 99th), IQR, and mean per sample.
+3. Sets **Scale max** to the **overall 99th percentile** of all loaded pixel values (rounded), and logs that choice.
+
+You can edit **Scale max** manually before previewing or saving. Batch mode uses the automatic 99th-percentile value for each element–unit pair.
+
+### Linear scaling (default)
+
+With **Log scale** unchecked:
+
+- Intensities are mapped with a linear normalize from **0** to **Scale max**.
+- Values above Scale max saturate at the high end of the colormap.
+
+### Pseudo-log scaling
+
+With **Log scale** checked, ScaleBarOn uses a **pseudo-log** normalization based on `log1p` (log of value + 1):
+
+- Designed so low values near zero remain displayable.
+- Internally uses a small positive lower bound (`vmin=1` in the pseudo-log helper) up to **Scale max**.
+
+This is not a pure `LogNorm` of the raw data; it is the package’s own pseudo-log mapping.
+
+## Colormaps
+
+- Default colormap in ScaleBarOn: **`jet`**.
+- The dropdown lists recommended schemes, including perceptually uniform maps (`turbo`, `viridis`, `plasma`, `inferno`, `magma`, `cividis`) and classic/diverging maps (`jet`, `hot`, `gray`, `bone`, `coolwarm`, `RdYlBu_r`).
+- A small colormap guide (swatches) is available from the Preview & Export controls.
+
+Muad'Data Element Viewer / Z-Stack use Matplotlib’s full colormap list (defaults such as `viridis` depending on the tab).
+
+## Layout of the composite
+
+| Control | Behavior |
+|---------|----------|
+| **Rows** | Manual number of rows in the grid |
+| **Use best layout (auto rows)** | Chooses a row count that reduces empty cells (same idea used in batch) |
+| **Scale bar** | Length in µm drawn beside the color bar (based on the last panel’s spatial scale) |
+| Sample / scale-bar / color-bar fonts | Point sizes, or `(None)` to hide some overlays |
+
+When more than **10** samples are loaded, matrices may be **downsampled** for faster composite rendering (long edge toward ~512 pixels). Individual subplot PNGs are still written from the data used in that pass.
+
+## Sample inclusion and aliases
+
+- Progress Table **Include** checkboxes control which samples enter statistics and composites.
+- Optional **aliases** can replace sample IDs in labels (stored under the output folder as `sample_aliases.csv` when used).
+
+## Muad'Data display scaling (separate from ScaleBarOn)
+
+Muad'Data does **not** use ScaleBarOn’s shared Scale max. In Element Viewer you set **min** and **max** with sliders for the current map. RGB Overlay has per-channel ranges. Detection-limit filtering uses background ROI statistics (`mean + 3σ`) and is independent of ScaleBarOn’s composite scale.
+
+## Related links
+
+- [Quick start](quick-start.md)
+- [Outputs](outputs.md)
+- Back to [README](https://github.com/twinmum1277/scalebaron/blob/main/README.md)
