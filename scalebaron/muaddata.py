@@ -49,15 +49,22 @@ def _path_token(value, fallback):
     return token or fallback
 
 
-def crop_export_basename(sample, analyte, crop_name, bounds):
-    """Filename stem for one cropped matrix: sample, element, crop name, and pixel bounds."""
-    x1, x2, y1, y2 = (int(v) for v in bounds)
-    return "_".join([
-        _path_token(sample, "sample"),
-        _path_token(analyte, "element"),
-        _path_token(crop_name, "crop"),
-        f"{x1}-{x2}_{y1}-{y2}",
-    ])
+def crop_piece_label(crop_name):
+    """Turn a saved crop name such as 'Crop 2' into the sample suffix 'C2'."""
+    match = re.search(r"(\d+)", str(crop_name or ""))
+    if match:
+        return f"C{int(match.group(1))}"
+    return "C1"
+
+
+def crop_export_filename(sample, analyte, unit, crop_name):
+    """Matrix filename for one cropped piece. Always .xlsx, and parseable by parse_matrix_filename."""
+    sample_name = f"{str(sample or 'sample').strip()} {crop_piece_label(crop_name)}".strip()
+    analyte_name = str(analyte or "element").strip()
+    if unit and str(unit).lower() != "raw":
+        unit_token = "CPS" if str(unit).upper() == "CPS" else "ppm"
+        return f"{sample_name} {analyte_name}_{unit_token} matrix.xlsx"
+    return f"{sample_name} {analyte_name} matrix.xlsx"
 
 
 def matching_sample_matrix_paths(directory, sample, unit):
@@ -2900,32 +2907,24 @@ class MuadDataViewer:
             custom_dialogs.showwarning(self.root, "No Cropped Data", "Please select and zoom to a region first.")
             return
         
-        # Generate default filename
-        if self.single_file_name is not None:
-            name_without_ext = os.path.splitext(self.single_file_name)[0]
-            x1, x2, y1, y2 = self.crop_bounds
-            default_name = f"{name_without_ext}_cropped_{x1}-{x2}_{y1}-{y2}.xlsx"
-        else:
-            default_name = "cropped_matrix.xlsx"
-        
+        # Generate default filename in the matrix convention, always .xlsx
+        _directory, sample, unit, analyte = self._current_sample_identity()
+        crop_name = self._crop_name_for_bounds(self.crop_bounds)
+        default_name = crop_export_filename(sample, analyte, unit, crop_name)
+
         # Ask user for save location
         save_path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
-            filetypes=[
-                ("Excel files", "*.xlsx"),
-                ("CSV files", "*.csv")
-            ],
+            filetypes=[("Excel files", "*.xlsx")],
             initialfile=default_name
         )
         
         if save_path:
             try:
-                if save_path.endswith('.xlsx'):
-                    df = pd.DataFrame(self.cropped_matrix)
-                    df.to_excel(save_path, header=False, index=False)
-                elif save_path.endswith('.csv'):
-                    df = pd.DataFrame(self.cropped_matrix)
-                    df.to_csv(save_path, header=False, index=False)
+                if not save_path.lower().endswith(".xlsx"):
+                    save_path += ".xlsx"
+                df = pd.DataFrame(self.cropped_matrix)
+                df.to_excel(save_path, header=False, index=False)
                 
                 x1, x2, y1, y2 = self.crop_bounds
                 custom_dialogs.showinfo(self.root, "Saved", 
@@ -3232,8 +3231,8 @@ class MuadDataViewer:
         crops = [self.saved_crops[i] for i in crop_indices if 0 <= i < len(self.saved_crops)]
         written = 0
         skipped = []
-        for label, matrix, extension in self._iter_crop_sources(scope):
-            sample, analyte = label
+        for label, matrix in self._iter_crop_sources(scope):
+            sample, analyte, unit = label
             if matrix is None:
                 skipped.append(f"{analyte}: could not load")
                 continue
@@ -3248,29 +3247,37 @@ class MuadDataViewer:
                     skipped.append(f"{analyte} {crop['name']}: rectangle is outside the map")
                     continue
                 piece = matrix[y1:y2, x1:x2]
-                stem = crop_export_basename(sample, analyte, crop["name"], bounds)
-                out_path = os.path.join(folder, stem + extension)
+                out_path = os.path.join(folder, crop_export_filename(sample, analyte, unit, crop["name"]))
                 try:
-                    frame = pd.DataFrame(piece)
-                    if extension == ".csv":
-                        frame.to_csv(out_path, header=False, index=False)
-                    else:
-                        frame.to_excel(out_path, header=False, index=False)
+                    pd.DataFrame(piece).to_excel(out_path, header=False, index=False)
                     written += 1
                 except Exception as exc:
                     skipped.append(f"{os.path.basename(out_path)}: {exc}")
         return written, skipped
 
+    def _crop_name_for_bounds(self, bounds):
+        """Name of the saved crop matching these full-matrix bounds, if any."""
+        if bounds is None:
+            return "Crop 1"
+        target = tuple(int(v) for v in bounds)
+        for crop in self.saved_crops:
+            if tuple(int(v) for v in crop["bounds"]) == target:
+                return crop["name"]
+        if self.saved_crops:
+            return self.saved_crops[-1]["name"]
+        return "Crop 1"
+
     def _iter_crop_sources(self, scope):
-        """Yield (sample, analyte), full matrix, and file extension for each map to crop."""
+        """Yield (sample, analyte, unit) and the full matrix for each map to crop."""
         directory, sample, unit, analyte = self._current_sample_identity()
-        extension = ".xlsx"
-        if self.single_file_path and self.single_file_path.lower().endswith(".csv"):
-            extension = ".csv"
+
+        def current_matrix():
+            if self.is_zoomed and hasattr(self, "full_matrix_backup"):
+                return self.full_matrix_backup
+            return self.single_matrix
 
         if scope != "sample" or not sample:
-            matrix = self.full_matrix_backup if self.is_zoomed and hasattr(self, "full_matrix_backup") else self.single_matrix
-            yield (sample or "sample", analyte or "element"), matrix, extension
+            yield (sample or "sample", analyte or "element", unit), current_matrix()
             return
 
         if self.hdf5_session_path:
@@ -3288,23 +3295,21 @@ class MuadDataViewer:
                     )
                 except Exception:
                     matrix = None
-                yield (sample, element), matrix, ".xlsx"
+                yield (sample, element, unit), matrix
             return
 
         paths = matching_sample_matrix_paths(directory, sample, unit) if directory and unit else []
         if not paths:
-            matrix = self.full_matrix_backup if self.is_zoomed and hasattr(self, "full_matrix_backup") else self.single_matrix
-            yield (sample, analyte or "element"), matrix, extension
+            yield (sample, analyte or "element", unit), current_matrix()
             return
         for path in paths:
             parsed = self.parse_matrix_filename(path)
-            file_sample, file_analyte, _file_unit = parsed
-            file_ext = ".csv" if path.lower().endswith(".csv") else ".xlsx"
+            file_sample, file_analyte, file_unit = parsed
             try:
                 matrix = self._load_matrix_file(path)
             except Exception:
                 matrix = None
-            yield (file_sample, file_analyte), matrix, file_ext
+            yield (file_sample, file_analyte, file_unit), matrix
 
     # --- End Zoom/Crop Functionality ---
 

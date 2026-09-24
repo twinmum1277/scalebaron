@@ -1,11 +1,19 @@
 import os
 
-from scalebaron.muaddata import crop_export_basename, matching_sample_matrix_paths
+from scalebaron.matrix_filename import parse_matrix_filename
+from scalebaron.muaddata import crop_export_filename, matching_sample_matrix_paths
 
 
-def test_crop_export_basename_includes_bounds():
-    name = crop_export_basename("liver 1", "Ca44", "Crop 2", (10, 40, 5, 25))
-    assert name == "liver_1_Ca44_Crop_2_10-40_5-25"
+def test_crop_export_filename_follows_matrix_convention():
+    name = crop_export_filename("liver 1", "Ca44", "ppm", "Crop 2")
+    assert name == "liver 1 C2 Ca44_ppm matrix.xlsx"
+    assert parse_matrix_filename(name) == ("liver 1 C2", "Ca44", "ppm")
+
+
+def test_crop_export_filename_raw_omits_unit():
+    name = crop_export_filename("S1", "Fe56", "raw", "Crop 1")
+    assert name == "S1 C1 Fe56 matrix.xlsx"
+    assert parse_matrix_filename(name) == ("S1 C1", "Fe56", "raw")
 
 
 def test_matching_sample_matrix_paths_filters_sample_and_unit(tmp_path):
