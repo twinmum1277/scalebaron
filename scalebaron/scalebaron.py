@@ -106,11 +106,41 @@ class CompositeApp:
 
     def _on_font_change_refresh_preview(self):
         """When display settings change and a preview exists, regenerate the composite."""
+        # Do not auto-preview while Calculate Statistics or Batch is running —
+        # those paths set scale_max and would otherwise trigger an unintended composite.
+        if getattr(self, "_stats_calculating", False) or getattr(self, "_batch_running", False):
+            return
         if not getattr(self, "matrices", None) or not self.matrices:
             return
         if not getattr(self, "preview_image", None):
             return
         self.generate_composite(preview=True)
+
+    def _clear_preview_state(self):
+        """Clear any cached preview so Save Composite cannot export a stale image."""
+        preview_file = getattr(self, "preview_file", None)
+        if preview_file and os.path.exists(preview_file):
+            try:
+                os.remove(preview_file)
+            except Exception:
+                pass
+        self.preview_file = None
+        self.preview_image = None
+        self.original_preview_image = None
+        self._base_preview_image = None
+        self._last_previewed_element_unit = None
+        if hasattr(self, "preview_label") and self.preview_label is not None:
+            try:
+                self.preview_label.config(
+                    image="",
+                    text=(
+                        "\n\nCalculate statistics in the 'Setup & Statistics' tab first,\n"
+                        "then click 'Preview composite' to generate preview here.\n\n"
+                    ),
+                )
+                self.preview_label.image = None
+            except Exception:
+                pass
 
     def _resolve_export_background(self, cmap):
         """Return (bg_color, text_color) for composite and subplot export."""
@@ -2841,6 +2871,10 @@ class CompositeApp:
             self.set_status("Idle")
             self.log_print("Status: Idle - Statistics calculation complete.")
 
+            # Drop any previous preview so scale_max updates cannot auto-render a composite,
+            # and so Save cannot export an image from a different element.
+            self._clear_preview_state()
+
             # Set scale_max based on 99th percentile of ALL data (existing + new)
             overall_99th = np.nanpercentile(np.hstack([m.flatten() for m in self.matrices]), 99)
             self.scale_max.set(round(overall_99th,3))
@@ -3655,6 +3689,8 @@ class CompositeApp:
             self.original_preview_image = self.preview_image.copy()
             self.preview_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
             self.preview_image.save(self.preview_file)
+            # Mark preview as matching the currently selected element/unit (Save safety check)
+            self._last_previewed_element_unit = self.get_element_output_subdir()
 
             # Update preview in the Preview tab
             self.update_preview_image()

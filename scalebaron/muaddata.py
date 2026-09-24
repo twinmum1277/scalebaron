@@ -43,6 +43,40 @@ SPECIMEN_SELECTOR_ENABLED = True
 BNEIR_URL = "https://sites.dartmouth.edu/bneir/"
 SCALEBARON_ISSUES_URL = "https://github.com/twinmum1277/scalebaron/issues"
 
+
+def _path_token(value, fallback):
+    token = re.sub(r"[^\w.\-+]+", "_", str(value or "")).strip("_")
+    return token or fallback
+
+
+def crop_export_basename(sample, analyte, crop_name, bounds):
+    """Filename stem for one cropped matrix: sample, element, crop name, and pixel bounds."""
+    x1, x2, y1, y2 = (int(v) for v in bounds)
+    return "_".join([
+        _path_token(sample, "sample"),
+        _path_token(analyte, "element"),
+        _path_token(crop_name, "crop"),
+        f"{x1}-{x2}_{y1}-{y2}",
+    ])
+
+
+def matching_sample_matrix_paths(directory, sample, unit):
+    """Matrix files in directory that belong to the same sample and unit."""
+    if not directory or not os.path.isdir(directory):
+        return []
+    paths = []
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        if not os.path.isfile(path):
+            continue
+        parsed = _parse_matrix_filename(name)
+        if not parsed:
+            continue
+        file_sample, _analyte, file_unit = parsed
+        if file_sample == sample and file_unit == unit:
+            paths.append(path)
+    return sorted(paths, key=lambda p: _parse_matrix_filename(os.path.basename(p))[1].lower())
+
 # --- Math Expression Dialog (lifted from prior version) ---
 class MathExpressionDialog:
     def __init__(self, parent, title="Enter Mathematical Expression"):
@@ -272,8 +306,10 @@ class MuadDataViewer:
         self.zoom_active = False  # Whether zoom selection mode is active
         self.rectangle_selector = None  # RectangleSelector widget
         self.cropped_matrix = None  # Store the cropped matrix
-        self.crop_bounds = None  # Store crop bounds (x1, x2, y1, y2)
+        self.crop_bounds = None  # Current view window in full-matrix pixels (x1, x2, y1, y2)
         self.is_zoomed = False  # Whether we're currently viewing a zoomed region
+        self.saved_crops = []  # Named rectangles for this sample, full-matrix pixels
+        self.saved_crop_shape = None  # (rows, cols) the saved rectangles were drawn on
         
         # Polygon selection state
         self.polygon_active = False  # Whether polygon selection mode is active
@@ -1342,7 +1378,24 @@ class MuadDataViewer:
         self.save_crop_button = ttk.Button(zoom_group, text="Save cropped", command=self.save_cropped_matrix, state=tk.DISABLED, width=10)
         self.save_crop_button.pack(anchor=tk.CENTER, pady=(0, 2))
         self.reset_zoom_button = ttk.Button(zoom_group, text="Reset view", command=self.reset_zoom, state=tk.DISABLED, width=10)
-        self.reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 0))
+        self.reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.crop_listbox = tk.Listbox(zoom_group, height=4, exportselection=False)
+        self.crop_listbox.pack(fill=tk.X, pady=(2, 2))
+        self.crop_listbox.bind("<Double-Button-1>", self._preview_saved_crop)
+        ttk.Label(
+            zoom_group,
+            text="Reset view before the next region.",
+            style="Hint.TLabel",
+        ).pack(anchor=tk.W, pady=(0, 2))
+        self._create_tooltip(self.crop_listbox, "Saved crop rectangles for this sample. Double-click to view one.")
+        self.remove_crop_button = ttk.Button(zoom_group, text="Remove crop", command=self.remove_selected_crop, width=12)
+        self.remove_crop_button.pack(anchor=tk.CENTER, pady=(0, 2))
+        self.batch_export_button = ttk.Button(zoom_group, text="Batch export", command=self.batch_export_crops, width=12)
+        self.batch_export_button.pack(anchor=tk.CENTER, pady=(0, 0))
+        self._create_tooltip(
+            self.batch_export_button,
+            "Write the saved rectangles for this element, or for every element of this sample.",
+        )
 
         # --- Region statistics ---
         region_group = self._create_collapsible_group(control_frame, "Region Statistics", expanded=False)
@@ -2780,12 +2833,14 @@ class MuadDataViewer:
             custom_dialogs.showwarning(self.root, "Selection Too Small", "Please select a larger region.")
             return
         
-        # Store the crop bounds
+        # Store the crop in full-matrix coordinates and keep it for later exports
+        x1, x2, y1, y2 = self._selection_to_full_bounds(x1, x2, y1, y2)
         self.crop_bounds = (x1, x2, y1, y2)
-        
+        self._remember_crop(self.crop_bounds)
+
         # Deactivate zoom mode
         self.deactivate_zoom_mode()
-        
+
         # Automatically zoom to the selected region
         self.crop_to_selection()
     
@@ -2793,16 +2848,25 @@ class MuadDataViewer:
         """Crop the matrix to the selected region and update display."""
         if self.crop_bounds is None or self.single_matrix is None:
             return
-        
-        x1, x2, y1, y2 = self.crop_bounds
-        
-        # Crop the matrix (note: matrix is [rows, cols] = [y, x])
-        self.cropped_matrix = self.single_matrix[y1:y2, x1:x2].copy()
-        
-        # Temporarily store the full matrix if not already stored
+
+        # Keep the original map so later rectangles stay in the same coordinates
         if not self.is_zoomed:
             self.full_matrix_backup = self.single_matrix.copy()
-        
+
+        x1, x2, y1, y2 = self.crop_bounds
+        full = self.full_matrix_backup
+        height, width = full.shape
+        x1 = max(0, min(int(x1), width - 1))
+        x2 = max(0, min(int(x2), width))
+        y1 = max(0, min(int(y1), height - 1))
+        y2 = max(0, min(int(y2), height))
+        if x1 >= x2 or y1 >= y2:
+            return
+        self.crop_bounds = (x1, x2, y1, y2)
+
+        # Crop the matrix (note: matrix is [rows, cols] = [y, x])
+        self.cropped_matrix = full[y1:y2, x1:x2].copy()
+
         # Replace the current matrix with the cropped version
         self.single_matrix = self.cropped_matrix
         
@@ -2909,7 +2973,339 @@ class MuadDataViewer:
         # Update display
         self.view_single_map()
         self.update_file_label()
-    
+
+    def _full_matrix_shape(self):
+        """Shape of the uncropped map, as (rows, cols)."""
+        if self.is_zoomed and hasattr(self, "full_matrix_backup"):
+            return tuple(int(v) for v in self.full_matrix_backup.shape)
+        if self.single_matrix is None:
+            return None
+        return tuple(int(v) for v in self.single_matrix.shape)
+
+    def _selection_to_full_bounds(self, x1, x2, y1, y2):
+        """Shift a selection made on a zoomed view back into full-matrix pixels."""
+        if self.is_zoomed and self.crop_bounds is not None:
+            origin_x, _origin_x2, origin_y, _origin_y2 = self.crop_bounds
+            x1 += origin_x
+            x2 += origin_x
+            y1 += origin_y
+            y2 += origin_y
+        return int(x1), int(x2), int(y1), int(y2)
+
+    def _current_sample_identity(self):
+        """Return (directory, sample, unit, analyte) for the loaded map, or Nones."""
+        if self.hdf5_session_path and self.hdf5_sample.get().strip():
+            return (
+                os.path.dirname(self.hdf5_session_path),
+                self.hdf5_sample.get().strip(),
+                (self.hdf5_unit.get() or "ppm").strip(),
+                (self.hdf5_element.get() or "").strip(),
+            )
+        if not self.single_file_path:
+            return None, None, None, None
+        parsed = self.parse_matrix_filename(self.single_file_path)
+        if parsed:
+            sample, analyte, unit = parsed
+            return os.path.dirname(self.single_file_path), sample, unit, analyte
+        stem = os.path.splitext(os.path.basename(self.single_file_path))[0]
+        return os.path.dirname(self.single_file_path), stem, self.single_units, stem
+
+    def _crops_json_path(self):
+        directory, sample, _unit, _analyte = self._current_sample_identity()
+        if not directory or not sample:
+            return None
+        return os.path.join(directory, f"{_path_token(sample, 'sample')}_crops.json")
+
+    def _next_crop_name(self):
+        existing = {crop.get("name") for crop in self.saved_crops}
+        number = 1
+        while f"Crop {number}" in existing:
+            number += 1
+        return f"Crop {number}"
+
+    def _refresh_crop_listbox(self):
+        if not hasattr(self, "crop_listbox"):
+            return
+        self.crop_listbox.delete(0, tk.END)
+        for crop in self.saved_crops:
+            x1, x2, y1, y2 = crop["bounds"]
+            self.crop_listbox.insert(tk.END, f"{crop['name']}  ({x1},{y1})–({x2},{y2})")
+
+    def _remember_crop(self, bounds):
+        """Append a rectangle for this sample and write the crop JSON."""
+        shape = self._full_matrix_shape()
+        if shape is None:
+            return False
+        if self.saved_crop_shape is not None and tuple(self.saved_crop_shape) != shape:
+            custom_dialogs.showwarning(
+                self.root,
+                "Different map size",
+                "Saved crops belong to a map of a different size. Remove them before saving a new rectangle.",
+            )
+            return False
+        x1, x2, y1, y2 = (int(v) for v in bounds)
+        self.saved_crop_shape = shape
+        self.saved_crops.append({
+            "name": self._next_crop_name(),
+            "bounds": [x1, x2, y1, y2],
+        })
+        self._save_crops_json()
+        self._refresh_crop_listbox()
+        return True
+
+    def _save_crops_json(self):
+        path = self._crops_json_path()
+        if not path:
+            return
+        try:
+            if not self.saved_crops:
+                self.saved_crop_shape = None
+                if os.path.exists(path):
+                    os.remove(path)
+                return
+            directory, sample, _unit, _analyte = self._current_sample_identity()
+            payload = {
+                "version": 1,
+                "sample": sample,
+                "shape": [int(self.saved_crop_shape[0]), int(self.saved_crop_shape[1])],
+                "crops": self.saved_crops,
+            }
+            os.makedirs(directory, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+        except Exception as exc:
+            self.log_print(f"Could not save crop rectangles: {exc}") if hasattr(self, "log_print") else None
+
+    def _load_saved_crops(self):
+        """Load this sample's crop rectangles. Does not change the current view."""
+        self.saved_crops = []
+        self.saved_crop_shape = None
+        path = self._crops_json_path()
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                shape = payload.get("shape")
+                crops = payload.get("crops") or []
+                if shape and len(shape) == 2:
+                    self.saved_crop_shape = (int(shape[0]), int(shape[1]))
+                loaded = []
+                for crop in crops:
+                    bounds = crop.get("bounds")
+                    if not bounds or len(bounds) != 4:
+                        continue
+                    loaded.append({
+                        "name": str(crop.get("name") or self._next_crop_name()),
+                        "bounds": [int(v) for v in bounds],
+                    })
+                self.saved_crops = loaded
+            except Exception:
+                self.saved_crops = []
+                self.saved_crop_shape = None
+        self._refresh_crop_listbox()
+
+    def _discard_zoom_view(self):
+        """Drop the current zoom without deleting saved crop rectangles."""
+        self.is_zoomed = False
+        self.cropped_matrix = None
+        self.crop_bounds = None
+        if hasattr(self, "full_matrix_backup"):
+            del self.full_matrix_backup
+        if hasattr(self, "save_crop_button"):
+            self.save_crop_button.config(state=tk.DISABLED)
+            self.reset_zoom_button.config(state=tk.DISABLED)
+
+    def _preview_saved_crop(self, _event=None):
+        if self.single_matrix is None or not self.saved_crops:
+            return
+        selection = self.crop_listbox.curselection()
+        if not selection:
+            return
+        crop = self.saved_crops[selection[0]]
+        shape = self._full_matrix_shape()
+        if self.saved_crop_shape is not None and shape != tuple(self.saved_crop_shape):
+            custom_dialogs.showwarning(
+                self.root,
+                "Different map size",
+                "This crop was drawn on a map of a different size.",
+            )
+            return
+        self.crop_bounds = tuple(int(v) for v in crop["bounds"])
+        self.crop_to_selection()
+
+    def remove_selected_crop(self):
+        if not hasattr(self, "crop_listbox"):
+            return
+        selection = list(self.crop_listbox.curselection())
+        if not selection:
+            custom_dialogs.showwarning(self.root, "No crop selected", "Select a saved crop to remove.")
+            return
+        for index in reversed(selection):
+            if 0 <= index < len(self.saved_crops):
+                del self.saved_crops[index]
+        self._save_crops_json()
+        self._refresh_crop_listbox()
+
+    def batch_export_crops(self):
+        """Ask which rectangles and which elements to write, then save the cropped matrices."""
+        if not self.saved_crops:
+            custom_dialogs.showwarning(
+                self.root,
+                "No crops",
+                "Select one or more regions first. Each selection is kept in the list.",
+            )
+            return
+        if self.single_matrix is None:
+            custom_dialogs.showwarning(self.root, "No Data", "Please load a matrix file first.")
+            return
+
+        choice = self._ask_batch_export_options()
+        if choice is None:
+            return
+        crop_indices, scope = choice
+        folder = filedialog.askdirectory(title="Folder for cropped matrices")
+        if not folder:
+            return
+        written, skipped = self._export_crops_to_folder(crop_indices, scope, folder)
+        if written:
+            detail = f"Saved {written} cropped matrix file(s) to:\n{folder}"
+            if skipped:
+                detail += "\n\nSkipped:\n" + "\n".join(skipped)
+            custom_dialogs.showinfo(self.root, "Batch export", detail)
+        else:
+            message = "No files were written."
+            if skipped:
+                message += "\n\n" + "\n".join(skipped)
+            custom_dialogs.showwarning(self.root, "Batch export", message)
+
+    def _ask_batch_export_options(self):
+        """Modal chooser for crop rectangles and export scope. Returns (indices, scope) or None."""
+        result = {"value": None}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Batch export")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="Crops to export").pack(anchor=tk.W)
+        crop_list = tk.Listbox(frame, height=min(6, len(self.saved_crops)), selectmode=tk.EXTENDED, exportselection=False)
+        crop_list.pack(fill=tk.X, pady=(2, 8))
+        for crop in self.saved_crops:
+            x1, x2, y1, y2 = crop["bounds"]
+            crop_list.insert(tk.END, f"{crop['name']}  ({x1},{y1})–({x2},{y2})")
+        crop_list.select_set(0, tk.END)
+
+        scope = tk.StringVar(value="current")
+        ttk.Radiobutton(frame, text="This element only", variable=scope, value="current").pack(anchor=tk.W)
+        ttk.Radiobutton(
+            frame,
+            text="Every element of this sample (same unit)",
+            variable=scope,
+            value="sample",
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(anchor=tk.CENTER)
+
+        def accept():
+            indices = list(crop_list.curselection())
+            if not indices:
+                custom_dialogs.showwarning(dialog, "No crops", "Select at least one crop.")
+                return
+            result["value"] = (indices, scope.get())
+            dialog.destroy()
+
+        def cancel():
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Export", command=accept, width=10).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Cancel", command=cancel, width=10).pack(side=tk.LEFT, padx=4)
+        dialog.bind("<Escape>", lambda _e: cancel())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        dialog.geometry(f"+{self.root.winfo_rootx() + 40}+{self.root.winfo_rooty() + 60}")
+        dialog.wait_window()
+        return result["value"]
+
+    def _export_crops_to_folder(self, crop_indices, scope, folder):
+        crops = [self.saved_crops[i] for i in crop_indices if 0 <= i < len(self.saved_crops)]
+        written = 0
+        skipped = []
+        for label, matrix, extension in self._iter_crop_sources(scope):
+            sample, analyte = label
+            if matrix is None:
+                skipped.append(f"{analyte}: could not load")
+                continue
+            shape = (int(matrix.shape[0]), int(matrix.shape[1]))
+            if self.saved_crop_shape is not None and shape != tuple(self.saved_crop_shape):
+                skipped.append(f"{analyte}: size {shape[0]}×{shape[1]} does not match the saved crops")
+                continue
+            for crop in crops:
+                bounds = crop["bounds"]
+                x1, x2, y1, y2 = (int(v) for v in bounds)
+                if x1 < 0 or y1 < 0 or x2 > shape[1] or y2 > shape[0] or x1 >= x2 or y1 >= y2:
+                    skipped.append(f"{analyte} {crop['name']}: rectangle is outside the map")
+                    continue
+                piece = matrix[y1:y2, x1:x2]
+                stem = crop_export_basename(sample, analyte, crop["name"], bounds)
+                out_path = os.path.join(folder, stem + extension)
+                try:
+                    frame = pd.DataFrame(piece)
+                    if extension == ".csv":
+                        frame.to_csv(out_path, header=False, index=False)
+                    else:
+                        frame.to_excel(out_path, header=False, index=False)
+                    written += 1
+                except Exception as exc:
+                    skipped.append(f"{os.path.basename(out_path)}: {exc}")
+        return written, skipped
+
+    def _iter_crop_sources(self, scope):
+        """Yield (sample, analyte), full matrix, and file extension for each map to crop."""
+        directory, sample, unit, analyte = self._current_sample_identity()
+        extension = ".xlsx"
+        if self.single_file_path and self.single_file_path.lower().endswith(".csv"):
+            extension = ".csv"
+
+        if scope != "sample" or not sample:
+            matrix = self.full_matrix_backup if self.is_zoomed and hasattr(self, "full_matrix_backup") else self.single_matrix
+            yield (sample or "sample", analyte or "element"), matrix, extension
+            return
+
+        if self.hdf5_session_path:
+            meta = self.hdf5_session_meta
+            elements = self._hdf5_elements_for_unit(meta, unit) if meta else []
+            if not elements and analyte:
+                elements = [analyte]
+            for element in elements:
+                try:
+                    matrix = hdf5_session.reconstruct_raster(
+                        self.hdf5_session_path,
+                        sample,
+                        element,
+                        unit=unit or "ppm",
+                    )
+                except Exception:
+                    matrix = None
+                yield (sample, element), matrix, ".xlsx"
+            return
+
+        paths = matching_sample_matrix_paths(directory, sample, unit) if directory and unit else []
+        if not paths:
+            matrix = self.full_matrix_backup if self.is_zoomed and hasattr(self, "full_matrix_backup") else self.single_matrix
+            yield (sample, analyte or "element"), matrix, extension
+            return
+        for path in paths:
+            parsed = self.parse_matrix_filename(path)
+            file_sample, file_analyte, _file_unit = parsed
+            file_ext = ".csv" if path.lower().endswith(".csv") else ".xlsx"
+            try:
+                matrix = self._load_matrix_file(path)
+            except Exception:
+                matrix = None
+            yield (file_sample, file_analyte), matrix, file_ext
+
     # --- End Zoom/Crop Functionality ---
 
     # --- Polygon Selection for Statistics ---
@@ -4375,6 +4771,7 @@ class MuadDataViewer:
             custom_dialogs.showerror(self.root, "HDF5 load failed", str(exc))
             return False
 
+        self._discard_zoom_view()
         self.single_matrix = mat
         self.single_units = unit
         self.single_file_path = None
@@ -4400,6 +4797,7 @@ class MuadDataViewer:
             self.single_file_label.config(
                 text=f"Loaded: {sample} · {element} ({unit}) from HDF5"
             )
+        self._load_saved_crops()
         self.load_polygons_for_file()
         return True
 
@@ -4410,6 +4808,7 @@ class MuadDataViewer:
         self._clear_hdf5_session()
         try:
             mat = self._load_matrix_file(path)
+            self._discard_zoom_view()
             self.single_matrix = mat
             # Update min/max values and sliders
             min_val = np.nanmin(mat)
@@ -4431,8 +4830,9 @@ class MuadDataViewer:
             self.single_units = parsed[2] if parsed else None
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
             self._reset_lod_state()
-            
-            # Load polygons associated with this file
+
+            # Load polygons and shared crop rectangles for this sample
+            self._load_saved_crops()
             self.load_polygons_for_file()
             
             self.view_single_map()
