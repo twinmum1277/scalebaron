@@ -16,7 +16,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import Normalize
 from matplotlib.widgets import RectangleSelector
 from matplotlib.gridspec import GridSpec
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Rectangle
 try:
     from scipy import stats
     SCIPY_AVAILABLE = True
@@ -317,6 +317,7 @@ class MuadDataViewer:
         self.is_zoomed = False  # Whether we're currently viewing a zoomed region
         self.saved_crops = []  # Named rectangles for this sample, full-matrix pixels
         self.saved_crop_shape = None  # (rows, cols) the saved rectangles were drawn on
+        self._crop_highlight_artists = []
         
         # Polygon selection state
         self.polygon_active = False  # Whether polygon selection mode is active
@@ -1388,13 +1389,14 @@ class MuadDataViewer:
         self.reset_zoom_button.pack(anchor=tk.CENTER, pady=(0, 2))
         self.crop_listbox = tk.Listbox(zoom_group, height=4, exportselection=False)
         self.crop_listbox.pack(fill=tk.X, pady=(2, 2))
+        self.crop_listbox.bind("<<ListboxSelect>>", self._on_crop_list_select)
         self.crop_listbox.bind("<Double-Button-1>", self._preview_saved_crop)
         ttk.Label(
             zoom_group,
             text="Reset view before the next region.",
             style="Hint.TLabel",
         ).pack(anchor=tk.W, pady=(0, 2))
-        self._create_tooltip(self.crop_listbox, "Saved crop rectangles for this sample. Double-click to view one.")
+        self._create_tooltip(self.crop_listbox, "Click a saved crop to outline it on the map. Double-click to view it.")
         self.remove_crop_button = ttk.Button(zoom_group, text="Remove crop", command=self.remove_selected_crop, width=12)
         self.remove_crop_button.pack(anchor=tk.CENTER, pady=(0, 2))
         self.batch_export_button = ttk.Button(zoom_group, text="Batch export", command=self.batch_export_crops, width=12)
@@ -3113,6 +3115,82 @@ class MuadDataViewer:
         if hasattr(self, "save_crop_button"):
             self.save_crop_button.config(state=tk.DISABLED)
             self.reset_zoom_button.config(state=tk.DISABLED)
+
+    def _selected_crop(self):
+        if not hasattr(self, "crop_listbox"):
+            return None
+        selection = self.crop_listbox.curselection()
+        if not selection:
+            return None
+        index = selection[0]
+        if index < 0 or index >= len(self.saved_crops):
+            return None
+        return self.saved_crops[index]
+
+    def _clear_crop_highlight(self):
+        for artist in self._crop_highlight_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self._crop_highlight_artists = []
+
+    def _crop_rectangle(self, bounds):
+        """Rectangle covering crop pixel bounds on the current full-map axes."""
+        x1, x2, y1, y2 = (int(v) for v in bounds)
+        ext = getattr(self, "_single_extent_um", None)
+        if ext:
+            dx, height, _width = ext
+            origin = (x1 * dx, (height - y2) * dx)
+            width = (x2 - x1) * dx
+            rect_height = (y2 - y1) * dx
+        else:
+            origin = (x1 - 0.5, y1 - 0.5)
+            width = x2 - x1
+            rect_height = y2 - y1
+        return origin, width, rect_height
+
+    def _draw_crop_highlight(self):
+        """Outline the crop selected in the list. Only the full map shows that outline."""
+        self._clear_crop_highlight()
+        if self.is_zoomed or self.single_matrix is None or not hasattr(self, "single_ax"):
+            return
+        crop = self._selected_crop()
+        if crop is None:
+            return
+        shape = self._full_matrix_shape()
+        if self.saved_crop_shape is not None and shape != tuple(self.saved_crop_shape):
+            return
+        origin, width, height = self._crop_rectangle(crop["bounds"])
+        if width <= 0 or height <= 0:
+            return
+        underlay = Rectangle(
+            origin, width, height,
+            fill=False, edgecolor="black", linewidth=3, linestyle="-", zorder=6,
+        )
+        outline = Rectangle(
+            origin, width, height,
+            fill=False, edgecolor="white", linewidth=1.5, linestyle="--", zorder=7,
+        )
+        self._crop_highlight_artists = [
+            self.single_ax.add_patch(underlay),
+            self.single_ax.add_patch(outline),
+        ]
+
+    def _on_crop_list_select(self, _event=None):
+        """Outline the selected crop on the full map."""
+        if self.single_matrix is None:
+            return
+        crop = self._selected_crop()
+        if self.is_zoomed and crop is not None:
+            current = tuple(int(v) for v in self.crop_bounds) if self.crop_bounds else None
+            selected = tuple(int(v) for v in crop["bounds"])
+            if selected != current:
+                self.reset_zoom()
+                return
+        self._draw_crop_highlight()
+        if hasattr(self, "single_canvas") and self.single_canvas is not None:
+            self.single_canvas.draw_idle()
 
     def _preview_saved_crop(self, _event=None):
         if self.single_matrix is None or not self.saved_crops:
@@ -4955,6 +5033,7 @@ class MuadDataViewer:
         
         # Draw polygon overlays
         self.draw_polygon_overlays()
+        self._draw_crop_highlight()
         
         if update_layout and not just_loaded_hdf5:
             self.single_figure.tight_layout()

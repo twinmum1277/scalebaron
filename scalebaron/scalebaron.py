@@ -70,6 +70,17 @@ class CompositeApp:
             else:
                 key.append(p.lower())
         return tuple(key)
+
+    def _order_panels_by_alias(self):
+        """Reorder loaded panels by alias, using natural/numeric order. Fall back to the sample ID."""
+        if not self.labels or len(self.labels) != len(self.matrices):
+            return
+        order = sorted(
+            range(len(self.labels)),
+            key=lambda i: self._natural_sort_key(self.sample_aliases.get(self.labels[i], self.labels[i])),
+        )
+        self.labels = [self.labels[i] for i in order]
+        self.matrices = [self.matrices[i] for i in order]
     
     def _pt_from_font(self, var, default=16):
         """Return point size from a font StringVar: (None) -> default, else int in 6–72."""
@@ -1048,8 +1059,13 @@ class CompositeApp:
         rows_entry = ttk.Entry(layout_frame, textvariable=self.num_rows, width=4)
         rows_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         
-        # Use best layout (auto rows to minimize blank cells; same as batch)
+        # Preview, save, and batch all read this setting
         ttk.Checkbutton(layout_frame, text="Use best layout (auto rows)", variable=self.use_best_layout).grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+        ttk.Label(
+            layout_frame,
+            text="Used by preview, save, and batch.",
+            style="Hint.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=(0, 2))
         
         # Display controls
         display_frame = ttk.LabelFrame(control_frame, text="Display", padding=10)
@@ -2239,9 +2255,19 @@ class CompositeApp:
             custom_dialogs.showwarning(self.master, "No Elements", "No element files found in the input folder.")
             return
         
-        # Ask for confirmation
+        # Ask for confirmation. Layout is already set on Preview & Export, so
+        # state it here instead of opening a second prompt.
         num_pairs = len(pairs)
         pair_labels = [f"{e} ({u})" for e, u in pairs]
+        try:
+            layout_text = self._layout_setting_text()
+        except (tk.TclError, ValueError):
+            custom_dialogs.showerror(
+                self.master,
+                "Layout",
+                "Enter a whole number of rows (at least 1) on Preview & Export, or turn on Use best layout.",
+            )
+            return
         result = custom_dialogs.askyesno(
             self.master, "Batch Process Confirmation",
             f"This will process {num_pairs} element-unit combination(s):\n\n" +
@@ -2250,6 +2276,8 @@ class CompositeApp:
             "1. Load data and generate histograms/statistics\n" +
             "2. Use the suggested 99th percentile as scale max\n" +
             "3. Generate and save the composite\n\n" +
+            f"Layout: {layout_text}.\n"
+            "Set this under Layout on the Preview & Export tab.\n\n"
             "This may take a while. Continue?"
         )
         
@@ -2270,6 +2298,7 @@ class CompositeApp:
         try:
             # Process each (element, unit) pair
             self.log_print(f"\n🚀 Starting batch processing of {num_pairs} element-unit combination(s)...")
+            self.log_print(f"Layout: {layout_text}")
             successful = 0
             failed = []
             
@@ -2299,10 +2328,9 @@ class CompositeApp:
                         failed.append((pair_label, "No data found"))
                         continue
                     
-                    # Generate and save composite directly (no preview); use best layout (no extra blank rows)
+                    # Same layout as preview and save (Rows, or best layout when checked)
                     self.log_print(f"  Generating composite for {pair_label}...")
-                    best_rows = self._best_composite_rows(len(self.matrices))
-                    self.generate_composite(preview=False, override_rows=best_rows)
+                    self.generate_composite(preview=False)
                     
                     successful += 1
                     self.log_print(f"✅ Completed {pair_label} ({idx}/{num_pairs})")
@@ -3153,16 +3181,15 @@ class CompositeApp:
         if not self.matrices:
             custom_dialogs.showerror(self.master, "Error", "No data loaded. Please load data first.")
             return
+
+        self._order_panels_by_alias()
         
         self.set_status("Busy")
         self.log_print("Status: Busy - Creating composite matrix...")
         
         element = self.element.get()
         n = len(self.matrices)
-        if getattr(self, 'use_best_layout', None) and self.use_best_layout.get():
-            rows = self._best_composite_rows(n)
-        else:
-            rows = min(self.num_rows.get(), n)
+        rows = self._composite_row_count(n)
         cols = math.ceil(n / rows)
         
         # Find maximum dimensions
@@ -3294,6 +3321,28 @@ class CompositeApp:
         else:
             self.generate_composite(preview=False)
 
+    def _layout_setting_text(self):
+        """Describe the Layout panel setting used by preview, save, and batch."""
+        if getattr(self, "use_best_layout", None) and self.use_best_layout.get():
+            return "best layout (auto rows)"
+        rows = int(self.num_rows.get())
+        if rows < 1:
+            raise ValueError("Rows must be at least 1")
+        return f"{rows} rows"
+
+    def _composite_row_count(self, n, override_rows=None):
+        """Rows for a composite: an explicit override, best layout, or the Rows field."""
+        if n <= 0:
+            return 1
+        if override_rows is not None:
+            return max(1, min(int(override_rows), n))
+        if getattr(self, "use_best_layout", None) and self.use_best_layout.get():
+            return self._best_composite_rows(n)
+        rows = int(self.num_rows.get())
+        if rows < 1:
+            raise ValueError("Rows must be at least 1")
+        return min(rows, n)
+
     def _best_composite_rows(self, n):
         """Return the number of rows that minimizes empty cells, then favors a square-ish grid."""
         if n <= 0:
@@ -3417,6 +3466,8 @@ class CompositeApp:
             self.log_print("⚠️ No data loaded.")
             return
 
+        self._order_panels_by_alias()
+
         # Ensure font dropdowns have committed their value to the variables (readonly Combobox updates on focus out)
         self.master.update_idletasks()
         self.set_status("Busy")
@@ -3434,13 +3485,9 @@ class CompositeApp:
             matrices_to_use = self.matrices
 
         n = len(self.matrices)
-        if override_rows is not None:
-            rows = max(1, min(override_rows, n))
-        elif getattr(self, 'use_best_layout', None) and self.use_best_layout.get():
-            rows = self._best_composite_rows(n)
-        else:
-            rows = min(self.num_rows.get(), n)
+        rows = self._composite_row_count(n, override_rows)
         cols = math.ceil(n / rows)
+        self.log_print(f"Composite layout: {rows} rows × {cols} columns")
         fig = plt.figure(figsize=(4 * cols + 1, 4 * rows))
         gs = fig.add_gridspec(rows, cols + 1, width_ratios=[1] * cols + [0.2])
         axs = np.empty((rows, cols + 1), dtype=object)
