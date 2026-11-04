@@ -420,26 +420,22 @@ class CompositeApp:
         norm,
         bg_color,
         text_color,
-        pixel_size,
+        dx,
+        dy,
+        frame_w,
+        frame_h,
         font_size,
         show_subplot_label,
     ):
-        """Save one subplot PNG at a fixed cell size matching the composite grid."""
+        """Save one subplot PNG on the composite's shared micron frame."""
         subplot_fig, subplot_ax = plt.subplots(
             figsize=(self.SUBPLOT_CELL_INCHES, self.SUBPLOT_CELL_INCHES)
         )
         subplot_fig.patch.set_facecolor(bg_color)
         subplot_ax.set_facecolor(bg_color)
-        masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
-        H, W = matrix.shape[0], matrix.shape[1]
-        if pixel_size and float(pixel_size) > 0:
-            dx = float(pixel_size)
-            extent = [0, W * dx, 0, H * dx]
-            subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect="equal", extent=extent)
-            subplot_ax.set_aspect("equal")
-        else:
-            subplot_ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect="auto")
-            subplot_ax.set_aspect("auto")
+        self._draw_matrix_on_frame(
+            subplot_ax, matrix, dx, dy, frame_w, frame_h, cmap, norm
+        )
         if show_subplot_label:
             subplot_ax.set_title(f"{label}", color=text_color, fontsize=font_size)
         else:
@@ -2549,29 +2545,123 @@ class CompositeApp:
             # Re-raise with more context
             raise Exception(f"Error loading file {os.path.basename(path)}: {str(e)}")
 
+    def _pixel_size_xy_um(self, label):
+        """Return (dx, dy) in µm for one sample. Both must be positive."""
+        xy = getattr(self, "hdf5_pixel_sizes_xy", None) or {}
+        pair = xy.get(label) if isinstance(xy, dict) else None
+        if pair and len(pair) >= 2 and pair[0] and pair[1]:
+            dx, dy = float(pair[0]), float(pair[1])
+            if dx > 0 and dy > 0:
+                return dx, dy
+        raw = None
+        by_sample = getattr(self, "pixel_sizes_by_sample", None) or {}
+        if label in by_sample:
+            raw = by_sample[label]
+        elif getattr(self, "pixel_size", None) is not None:
+            raw = self.pixel_size.get()
+        try:
+            dx = float(raw)
+        except (TypeError, ValueError):
+            dx = 0.0
+        if not dx > 0:
+            raise ValueError(
+                f"{label} has no positive pixel size, so it cannot be drawn on the shared spatial scale."
+            )
+        return dx, dx
+
     def downsample_matrix(self, matrix, target_max=512):
-        """Downsample matrix for faster preview rendering."""
-        h, w = matrix.shape
+        """Block-average a matrix for faster rendering.
+
+        Returns (matrix, factor). Multiply both pixel sizes by factor so the
+        pixels that remain still cover their original physical distance.
+        A leftover strip narrower than one block is omitted.
+        """
+        h, w = matrix.shape[:2]
         scale = max(h, w) / target_max
         if scale <= 1:
-            return matrix
-        
-        # Calculate downsampling factors
-        sh = max(1, int(scale))
-        sw = max(1, int(scale))
-        
-        # Ensure dimensions are divisible by downsampling factors
-        new_h = (h // sh) * sh
-        new_w = (w // sw) * sw
-        
-        # Crop to divisible dimensions
+            return matrix, 1
+
+        step = max(1, int(scale))
+        new_h = (h // step) * step
+        new_w = (w // step) * step
         cropped = matrix[:new_h, :new_w]
-        
-        # Reshape and average
-        reshaped = cropped.reshape(new_h//sh, sh, new_w//sw, sw)
+        reshaped = cropped.reshape(new_h // step, step, new_w // step, step)
         downsampled = reshaped.mean(axis=(1, 3))
-        
-        return downsampled
+        return downsampled, step
+
+    def _matrix_for_display(self, matrix, dx, dy, downsample):
+        """Return (matrix, dx, dy, factor) at the matrix's true physical size."""
+        if not downsample:
+            return matrix, float(dx), float(dy), 1
+        displayed, factor = self.downsample_matrix(matrix)
+        return displayed, float(dx) * factor, float(dy) * factor, factor
+
+    def _prepare_shared_scale_panels(self, matrices, labels, downsample):
+        """Fit every sample into one micron frame. Layout does not choose the scale."""
+        if len(matrices) != len(labels):
+            raise ValueError("Each composite sample needs a label and a matrix.")
+        panels = []
+        for matrix, label in zip(matrices, labels):
+            dx, dy = self._pixel_size_xy_um(label)
+            display, dx_d, dy_d, factor = self._matrix_for_display(matrix, dx, dy, downsample)
+            panels.append({
+                "label": label,
+                "matrix": display,
+                "dx": dx_d,
+                "dy": dy_d,
+                "pixel_dx": dx,
+                "pixel_dy": dy,
+                "factor": factor,
+                "width_um": display.shape[1] * dx_d,
+                "height_um": display.shape[0] * dy_d,
+            })
+        frame_w = max(panel["width_um"] for panel in panels)
+        frame_h = max(panel["height_um"] for panel in panels)
+        if frame_w <= 0 or frame_h <= 0:
+            raise ValueError("Composite samples have no spatial extent.")
+        return panels, frame_w, frame_h
+
+    def _draw_matrix_on_frame(self, ax, matrix, dx, dy, frame_w, frame_h, cmap, norm):
+        """Draw one map centered in the shared micron frame."""
+        height, width = matrix.shape[:2]
+        width_um = width * float(dx)
+        height_um = height * float(dy)
+        x0 = (frame_w - width_um) / 2.0
+        y0 = (frame_h - height_um) / 2.0
+        values = matrix if np.issubdtype(np.asarray(matrix).dtype, np.floating) else np.asarray(matrix, dtype=float)
+        masked = np.ma.masked_invalid(values)
+        image = ax.imshow(
+            masked,
+            cmap=cmap,
+            norm=norm,
+            aspect="equal",
+            extent=[x0, x0 + width_um, y0, y0 + height_um],
+        )
+        ax.set_xlim(0, frame_w)
+        ax.set_ylim(0, frame_h)
+        ax.set_aspect("equal", adjustable="box", anchor="C")
+        return image
+
+    @staticmethod
+    def _scale_bar_span_px(center_px, bar_length_px, image_width):
+        """Return the scale-bar endpoints, keeping the exact pixel length on the page.
+
+        The bar is shifted inward when centering it would clip an end. Returns None
+        when the true length cannot fit in the image.
+        """
+        length = int(bar_length_px)
+        width = int(image_width)
+        if length <= 0 or width <= 0 or length > width:
+            return None
+        x1 = int(round(center_px)) - length // 2
+        x2 = x1 + length
+        if x1 < 0:
+            x1 = 0
+            x2 = length
+        elif x2 > width:
+            x2 = width
+            x1 = width - length
+        return x1, x2
 
     def import_custom_pixel_sizes(self):
         custom_dialogs.showinfo(self.master, "Load Custom Physical Pixel Size", "Select CSV file with custom pixel sizes (Cancel to generate template)")
@@ -3373,10 +3463,9 @@ class CompositeApp:
         show_labels,
         font_size_pt,
         text_color,
-        scale_bar_px,
         scale_bar_um,
         scale_bar_caption,
-        data_width,
+        frame_width_um,
         draw_scale_bar=True,
         scale_bar_font_pt=10,
         draw_element_label=False,
@@ -3418,23 +3507,38 @@ class CompositeApp:
                 cx_px, top_px = fig_to_pixel(cx_fig, top_fig)
                 draw.text((cx_px, top_px), label, fill=fill, font=font, anchor="mb")
 
-        if draw_scale_bar and data_width and data_width > 0 and last_ax_width_fig and scale_bar_px > 0:
-            bar_length_px = scale_bar_px * (last_ax_width_fig / bw) * (W / data_width) if bw else 0
+        if (
+            draw_scale_bar
+            and frame_width_um
+            and frame_width_um > 0
+            and last_ax_width_fig
+            and scale_bar_um
+            and scale_bar_um > 0
+        ):
+            # The axes width is the shared frame, so this length is the same specimen scale on every panel.
+            bar_length_px = (float(scale_bar_um) / float(frame_width_um)) * (last_ax_width_fig / bw) * W if bw else 0
             bar_length_px = max(1, int(round(bar_length_px)))
             sx0, sy0 = scale_bar_pos.x0, scale_bar_pos.y0
             sw, sh = scale_bar_pos.width, scale_bar_pos.height
             cx_fig = sx0 + sw * 0.5
             cy_fig = sy0 + sh * 0.5
             cx_px, cy_px = fig_to_pixel(cx_fig, cy_fig)
-            x1 = max(0, cx_px - bar_length_px // 2)
-            x2 = min(W, cx_px + bar_length_px // 2)
-            draw.line([(x1, cy_px), (x2, cy_px)], fill=fill, width=max(2, int(3 * dpi / 150)))
+            span = self._scale_bar_span_px(cx_px, bar_length_px, W)
             label_lines = [f"{scale_bar_um:.0f} µm"]
             if scale_bar_caption:
                 label_lines.append(scale_bar_caption)
             scale_bar_font_px = max(8, int(scale_bar_font_pt * dpi / 72))
             small_font = self._load_overlay_font(overlay_font_family, scale_bar_font_px, bold=False)
-            draw.text((cx_px, cy_px + 12), "\n".join(label_lines), fill=fill, font=small_font, anchor="mt")
+            if span is None:
+                self.log_print(
+                    f"Scale bar of {float(scale_bar_um):g} µm is wider than the figure, so it was not drawn."
+                )
+                label_x = cx_px
+            else:
+                x1, x2 = span
+                draw.line([(x1, cy_px), (x2, cy_px)], fill=fill, width=max(2, int(3 * dpi / 150)))
+                label_x = (x1 + x2) / 2.0
+            draw.text((label_x, cy_px + 12), "\n".join(label_lines), fill=fill, font=small_font, anchor="mt")
 
         # Element label: same layer, same pt→pixel scaling (so size matches other annotations)
         if draw_element_label and element_label_text:
@@ -3476,13 +3580,16 @@ class CompositeApp:
         else:
             self.log_print("Status: Busy - Generating composite...")
 
-        # Auto-downsample when many samples (both preview and save)
+        # Downsample large sets for speed. Pixel size is scaled with the block factor,
+        # so every panel still shares one micron frame no matter the row count.
         use_downsampling = len(self.matrices) > 10
-        if use_downsampling:
-            downsampled_matrices = [self.downsample_matrix(matrix) for matrix in self.matrices]
-            matrices_to_use = downsampled_matrices
-        else:
-            matrices_to_use = self.matrices
+        panels, frame_w, frame_h = self._prepare_shared_scale_panels(
+            self.matrices, self.labels, use_downsampling
+        )
+        if use_downsampling and any(panel["factor"] > 1 for panel in panels):
+            self.log_print(
+                "Large matrices were downsampled for display. Each specimen stays on the shared micron scale."
+            )
 
         n = len(self.matrices)
         rows = self._composite_row_count(n, override_rows)
@@ -3521,29 +3628,22 @@ class CompositeApp:
         show_subplot_label = str(self.sample_name_font.get()).strip() != "(None)"
         font_size = self._pt_from_font(self.sample_name_font, 12) if show_subplot_label else 12  # overlay + subtitles
 
-        for i, (matrix, label) in enumerate(zip(matrices_to_use, self.labels)):
+        for i, panel in enumerate(panels):
+            matrix = panel["matrix"]
+            label = panel["label"]
             if preview:
                 self.log_print(f"   📊 Generating subplot {i+1}/{len(self.labels)}: {label}")
             r, c = i // cols, i % cols
             ax = axs[r, c]
 
-            # Get the pixel size for this sample
-            pixel_size = self.pixel_sizes_by_sample.get(label, self.pixel_size.get())
-            H, W = matrix.shape[0], matrix.shape[1]
-            masked_matrix = np.ma.masked_where(np.isnan(matrix), matrix)
-            if pixel_size and float(pixel_size) > 0:
-                dx = float(pixel_size)
-                extent = [0, W * dx, 0, H * dx]
-                im = ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='equal', extent=extent)
-                ax.set_aspect('equal')
-            else:
-                im = ax.imshow(masked_matrix, cmap=cmap, norm=norm, aspect='auto')
-                ax.set_aspect('auto')
+            im = self._draw_matrix_on_frame(
+                ax, matrix, panel["dx"], panel["dy"], frame_w, frame_h, cmap, norm
+            )
             if show_subplot_label:
                 # Sample names go on overlay layer (for future editing); keep title empty in base
                 ax.set_title("", color=text_color, fontsize=font_size)
                 if self.use_custom_pixel_sizes.get():
-                    pixel_label = f"{int(round(pixel_size))} µm/px"
+                    pixel_label = f"{int(round(panel['pixel_dx']))} µm/px"
                     subtitle_size = (font_size - 2) if font_size else 9
                     subtitle_size = max(subtitle_size, 8)
                     ax.text(
@@ -3561,7 +3661,7 @@ class CompositeApp:
             ax.axis('off')
             ax.set_facecolor(bg_color)
 
-            # Save individual subplot (only if it doesn't exist - incremental processing)
+            # Save individual subplot on the same micron frame as the composite
             elem_out = self.get_element_output_subdir()
             subplot_path = os.path.join(self.output_dir, elem_out, 'subplots', f"{label}.png")
             os.makedirs(os.path.dirname(subplot_path), exist_ok=True)
@@ -3573,22 +3673,25 @@ class CompositeApp:
                 norm,
                 bg_color,
                 text_color,
-                pixel_size,
+                panel["dx"],
+                panel["dy"],
+                frame_w,
+                frame_h,
                 font_size,
                 show_subplot_label,
             )
 
-            # Calculate percentiles, IQR, and mean
-            p25, p50, p75, p99 = np.nanpercentile(matrix, [25, 50, 75, 99])
+            # Statistics stay on the original matrix. The display copy may be downsampled.
+            original = self.matrices[i]
+            p25, p50, p75, p99 = np.nanpercentile(original, [25, 50, 75, 99])
             iqr = p75 - p25
-            mean = np.nanmean(matrix)
+            mean = np.nanmean(original)
             percentiles.append((label, p25, p50, p75, p99))
             iqrs.append((label, iqr))
             means.append((label, mean))
 
-        # Last image axes (for transform only; scale bar is drawn in right column)
-        last_idx = len(matrices_to_use) - 1
-        last_image_ax = axs[last_idx // cols, last_idx % cols]
+        # Every image axes uses the shared frame, so any panel can calibrate the scale bar.
+        scale_ax = axs[0, 0]
 
         color_bar_ax.set_facecolor(bg_color)
         # Do not call axis('off') here so color bar tick labels (units) remain visible
@@ -3608,22 +3711,9 @@ class CompositeApp:
             units_label = 'ppm' if u == 'ppm' else ('CPS' if u == 'CPS' else 'counts')
             cbar.set_label(units_label, color=text_color, fontsize=cbar_pt)
 
-        # Scale bar in right column (below color bar): length from last image's data scale so it stays accurate
-        if self.use_custom_pixel_sizes.get() and self.labels:
-            # Only include the reference sample ID in the caption; omit per-sample pixel size text
-            reference_label = self.labels[0]
-            pixel_size_um = self.pixel_sizes_by_sample.get(reference_label, self.pixel_size.get())
-            scale_bar_caption = reference_label
-        else:
-            reference_label = None
-            pixel_size_um = self.pixel_size.get()
-            scale_bar_caption = None
-
+        # The scale bar is a length on the shared frame, so it matches every specimen.
         scale_bar_um = self.scale_bar_length_um.get()
-        if pixel_size_um <= 0:
-            scale_bar_px = 0
-        else:
-            scale_bar_px = max(1, int(round(scale_bar_um / pixel_size_um)))
+        scale_bar_caption = None
 
         # Scale bar and sample names drawn on overlay layer (same coords as base; locked together)
         scale_bar_ax.set_facecolor(bg_color)
@@ -3663,14 +3753,15 @@ class CompositeApp:
         plt.close(colorbar_fig)
 
         # Overlay layer: sample names + scale bar (same coordinate system as base; locked together)
-        # Save base without bbox_inches='tight' so figure coords (0-1) map 1:1 to pixels
+        # Draw first so equal-aspect axes have their final boxes, then map figure coords 1:1 to pixels.
+        fig.canvas.draw()
         image_positions = [
             (axs[i // cols, i % cols].get_position().x0, axs[i // cols, i % cols].get_position().y0,
              axs[i // cols, i % cols].get_position().width, axs[i // cols, i % cols].get_position().height)
             for i in range(len(self.labels))
         ]
         scale_bar_pos = scale_bar_ax.get_position()
-        last_ax_width_fig = last_image_ax.get_position().width
+        last_ax_width_fig = scale_ax.get_position().width
         dpi = 300
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=dpi, facecolor=fig.get_facecolor())
@@ -3710,10 +3801,9 @@ class CompositeApp:
             show_subplot_label,
             font_size if font_size is not None else 12,
             text_color,
-            scale_bar_px,
             scale_bar_um,
             scale_bar_caption,
-            matrices_to_use[-1].shape[1] if matrices_to_use else 0,
+            frame_w,
             draw_scale_bar=str(self.scale_bar_font.get()).strip() != "(None)",
             scale_bar_font_pt=self._pt_from_font(self.scale_bar_font, 10),
             draw_element_label=draw_element_label,

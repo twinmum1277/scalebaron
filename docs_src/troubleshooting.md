@@ -44,7 +44,7 @@ Messages about incomplete archives or missing `Content_Types` often mean a **clo
 
 - If panels look washed out or clipped, adjust **Scale max** (see [scaling-methods.md](scaling-methods.md)). Statistics use the **99th percentile** suggestion; you can override it.  
 - **Log scale** uses pseudo-log (`log1p`), not a pure logarithmic transform of the raw data.  
-- Large sample counts may use downsampled matrices for composite rendering.
+- Large sample counts may use downsampled matrices for composite rendering. The micron scale is unchanged: each remaining pixel stands for the block of original pixels it replaced.
 
 ## Save Composite Matrix disabled
 

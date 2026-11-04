@@ -46,10 +46,10 @@ Muad'Data Element Viewer / Z-Stack use Matplotlib’s full colormap list (defaul
 |---------|----------|
 | **Rows** | Manual number of rows in the grid |
 | **Use best layout (auto rows)** | Chooses a row count that reduces empty cells (same idea used in batch) |
-| **Scale bar** | Length in µm drawn beside the color bar (based on the last panel’s spatial scale) |
+| **Scale bar** | Length in µm on the shared spatial frame. Every panel uses that same micron scale, whatever the row count. |
 | Sample / scale-bar / color-bar fonts | Point sizes, or `(None)` to hide some overlays |
 
-When more than **10** samples are loaded, matrices may be **downsampled** for faster composite rendering (long edge toward ~512 pixels). Individual subplot PNGs are still written from the data used in that pass.
+When more than **10** samples are loaded, matrices may be **downsampled** for faster composite rendering (long edge toward ~512 pixels). The pixel size is multiplied by that block factor, so the downsampled image still covers the original distance. A leftover strip narrower than one block is left off the edge. Individual subplot PNGs use the same shared micron frame.
 
 ## Sample inclusion and aliases
 
