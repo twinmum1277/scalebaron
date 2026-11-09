@@ -22,7 +22,7 @@ long_description = (this_dir / "README.md").read_text(encoding="utf-8")
 
 setup(
     name='scalebaron',
-    version='1.0.2',
+    version='1.0.3',
     description='ScaleBarOn: A Python Tool for Scaling Multiple Elemental Maps',
     long_description=long_description,
     long_description_content_type='text/markdown',
